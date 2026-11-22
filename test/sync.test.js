@@ -195,13 +195,14 @@ test('a missing branch is an error that changes nothing', async (t) => {
   const marker = addMarker(f);
   const r = await sync.syncManaged({ ...f.args, branch: 'nope' });
   assert.equal(r.kind, 'error');
-  assert.equal(r.message, `branch nope not found on ${f.args.repoUrl}`);
+  assert.equal(r.reason, 'branchNotFound');
+  assert.ok(r.message.startsWith(`branch nope not found on ${f.args.repoUrl}.`), r.message);
   assert.equal(git(['rev-parse', '--abbrev-ref', 'HEAD'], clone), 'main');
   assert.ok(fs.existsSync(marker));
   assert.equal(refsOf(clone, 'refs/team-plugins'), '');
 });
 
-test('an unreachable repository is an error that changes nothing', async (t) => {
+test('a missing repository is an error that changes nothing', async (t) => {
   if (!gitAvailable()) {
     return t.skip('git is not available');
   }
@@ -210,7 +211,8 @@ test('an unreachable repository is an error that changes nothing', async (t) => 
   await sync.syncManaged(f.args);
   const r = await sync.syncManaged({ ...f.args, repoUrl: fwd(path.join(f.root, 'missing.git')) });
   assert.equal(r.kind, 'error');
-  assert.ok(r.message.startsWith('cannot read the default branch of'), r.message);
+  assert.equal(r.reason, 'notFound');
+  assert.ok(r.message.startsWith(`repository ${fwd(path.join(f.root, 'missing.git'))} not found`), r.message);
   assert.equal(git(['remote', 'get-url', 'origin'], clone), f.args.repoUrl);
   assert.ok(fs.existsSync(clone));
 });
@@ -304,7 +306,7 @@ test('a failing clone leaves nothing behind', async (t) => {
   const f = setup(t);
   const r = await sync.syncManaged({ ...f.args, repoUrl: fwd(path.join(f.root, 'missing.git')) });
   assert.equal(r.kind, 'error');
-  assert.ok(r.message.startsWith('git clone failed'));
+  assert.equal(r.reason, 'notFound');
   assert.ok(!fs.existsSync(f.args.managedRepo));
   const parent = path.dirname(f.args.managedRepo);
   assert.deepEqual(fs.readdirSync(parent).filter((n) => n.startsWith('repo.tmp-')), []);
@@ -512,23 +514,26 @@ test('leftover temporary clones are removed', async (t) => {
   assert.ok(fs.existsSync(path.join(parent, 'other', 'y.txt')));
 });
 
-test('clone and fetch get the long timeouts', async (t) => {
+test('network commands have no total limit, a stall limit and --progress', async (t) => {
   if (!gitAvailable()) {
     return t.skip('git is not available');
   }
   const f = setup(t);
   const calls = [];
   const run = (args, cwd, timeoutMs, opts) => {
-    calls.push([args, timeoutMs]);
+    calls.push([args, timeoutMs, opts]);
     return f.args.run(args, cwd, timeoutMs, opts);
   };
   assert.equal((await sync.syncManaged({ ...f.args, run })).kind, 'cloned');
   pushCommit(f.work, 'a.txt', 'a', 'team');
   assert.equal((await sync.syncManaged({ ...f.args, run })).kind, 'updated');
   const clone = calls.find(([args]) => args.includes('clone'));
-  assert.equal(clone[1], sync.CLONE_TIMEOUT_MS);
   const fetch = calls.find(([args]) => args.includes('fetch') && args.includes('origin'));
-  assert.equal(fetch[1], sync.FETCH_TIMEOUT_MS);
+  for (const [args, timeoutMs, opts] of [clone, fetch]) {
+    assert.equal(timeoutMs, 0);
+    assert.equal(opts.idleMs, sync.NETWORK_IDLE_MS);
+    assert.ok(args.includes('--progress'));
+  }
 });
 
 test('withLock', async (t) => {
@@ -653,6 +658,7 @@ test('recentlySynced', () => {
   assert.equal(sync.recentlySynced({ kind: 'conflict', at: at(-1 * min) }, every, now), true);
   assert.equal(sync.recentlySynced({ kind: 'error', at: at(-1 * min) }, every, now), false);
   assert.equal(sync.recentlySynced({ kind: 'busy', at: at(-1 * min) }, every, now), false);
+  assert.equal(sync.recentlySynced({ kind: 'offline', at: at(-1 * min) }, every, now), false);
   assert.equal(sync.recentlySynced({ kind: 'upToDate', at: at(5 * min) }, every, now), false);
   assert.equal(sync.recentlySynced({ kind: 'upToDate', at: 'x' }, every, now), false);
   assert.equal(sync.recentlySynced({ kind: 'upToDate' }, every, now), false);
@@ -735,4 +741,86 @@ test('headFileArgs serves only HEAD of the managed clone', (t) => {
   assert.equal(sync.headFileArgs(req({ path: '' }), M), null);
   assert.equal(sync.headFileArgs(req({ path: 5 }), M), null);
   assert.equal(sync.headFileArgs(null, M), null);
+});
+
+test('a missing branch at the first clone is reported', async (t) => {
+  if (!gitAvailable()) {
+    return t.skip('git is not available');
+  }
+  const f = setup(t);
+  const r = await sync.syncManaged({ ...f.args, branch: 'nope' });
+  assert.equal(r.kind, 'error');
+  assert.equal(r.reason, 'branchNotFound');
+  assert.ok(!fs.existsSync(f.args.managedRepo));
+  const parent = path.dirname(f.args.managedRepo);
+  assert.deepEqual(fs.readdirSync(parent).filter((n) => n.startsWith('repo.tmp-')), []);
+});
+
+test('a branch deleted on the server is reported and changes nothing', async (t) => {
+  if (!gitAvailable()) {
+    return t.skip('git is not available');
+  }
+  const f = setup(t);
+  const clone = f.args.managedRepo;
+  pushDev(f);
+  assert.equal((await sync.syncManaged({ ...f.args, branch: 'dev' })).kind, 'cloned');
+  const before = git(['rev-parse', 'HEAD'], clone);
+  git(['push', 'origin', ':dev'], f.work);
+  const r = await sync.syncManaged({ ...f.args, branch: 'dev' });
+  assert.equal(r.kind, 'error');
+  assert.equal(r.reason, 'branchNotFound');
+  assert.ok(r.message.startsWith('branch dev not found on'), r.message);
+  assert.equal(git(['rev-parse', '--abbrev-ref', 'HEAD'], clone), 'dev');
+  assert.equal(git(['rev-parse', 'HEAD'], clone), before);
+});
+
+test('an unreachable server is offline and changes nothing', async (t) => {
+  if (!gitAvailable()) {
+    return t.skip('git is not available');
+  }
+  const dead = 'http://127.0.0.1:1/team.git';
+  const f = setup(t);
+  let r = await sync.syncManaged({ ...f.args, repoUrl: dead });
+  assert.equal(r.kind, 'offline');
+  assert.equal(r.reason, 'unreachable');
+  assert.ok(!fs.existsSync(f.args.managedRepo));
+  const parent = path.dirname(f.args.managedRepo);
+  assert.deepEqual(fs.readdirSync(parent).filter((n) => n.startsWith('repo.tmp-')), []);
+
+  assert.equal((await sync.syncManaged(f.args)).kind, 'cloned');
+  const clone = f.args.managedRepo;
+  const before = git(['rev-parse', 'HEAD'], clone);
+  git(['remote', 'set-url', 'origin', dead], clone);
+  r = await sync.syncManaged({ ...f.args, repoUrl: dead, branch: 'main' });
+  assert.equal(r.kind, 'offline');
+  assert.equal(git(['rev-parse', 'HEAD'], clone), before);
+  assert.equal(JSON.parse(fs.readFileSync(f.args.stateFile, 'utf8')).kind, 'offline');
+});
+
+test('checkRemote', async (t) => {
+  if (!gitAvailable()) {
+    return t.skip('git is not available');
+  }
+  const f = setup(t);
+  const base = { run: f.args.run, cwd: f.root };
+  assert.deepEqual(await sync.checkRemote({ ...base, repoUrl: f.origin }), {
+    kind: 'reachable',
+    defaultBranch: 'main',
+    empty: false,
+  });
+  assert.equal((await sync.checkRemote({ ...base, repoUrl: f.origin, branch: 'main' })).kind, 'reachable');
+  let r = await sync.checkRemote({ ...base, repoUrl: f.origin, branch: 'nope' });
+  assert.equal(r.reason, 'branchNotFound');
+  r = await sync.checkRemote({ ...base, repoUrl: fwd(path.join(f.root, 'missing.git')) });
+  assert.equal(r.reason, 'notFound');
+  r = await sync.checkRemote({ ...base, repoUrl: 'http://127.0.0.1:1/team.git' });
+  assert.equal(r.kind, 'offline');
+  const empty = path.join(f.root, 'empty.git');
+  fs.mkdirSync(empty);
+  git(['init', '--bare', '-b', 'main'], empty);
+  assert.deepEqual(await sync.checkRemote({ ...base, repoUrl: fwd(empty) }), {
+    kind: 'reachable',
+    defaultBranch: '',
+    empty: true,
+  });
 });

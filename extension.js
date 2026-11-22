@@ -20,6 +20,7 @@ const UNEXPECTED = { kind: 'error', message: 'unexpected error: see the log' };
 const COPY_RETRY_MS = 2000;
 const COPY_RETRY_MAX = 30;
 const LOCKED_CODES = ['EBUSY', 'EPERM', 'EACCES'];
+const OFFLINE_RETRY_MS = 5 * 60 * 1000;
 
 let output;
 let statusItem;
@@ -33,6 +34,7 @@ let lastCheck = null;
 let lastApplyErrors = 0;
 let syncing = false;
 let timer = null;
+let offlineTimer = null;
 let watchers = [];
 let debounceTimer = null;
 let queue = Promise.resolve();
@@ -153,15 +155,16 @@ function apply() {
   return enqueue(doApply);
 }
 
-function refresh({ sync: doSync, userInitiated = false } = {}) {
-  return enqueue(() => doRefresh(doSync, userInitiated));
+function refresh({ sync: doSync, userInitiated = false, check = false } = {}) {
+  return enqueue(() => doRefresh(doSync, userInitiated, check));
 }
 
-async function doRefresh(doSync, userInitiated) {
+async function doRefresh(doSync, userInitiated, check) {
   const m = currentMode();
   if (m.mode === 'unconfigured') {
     await vscode.commands.executeCommand('setContext', 'teamPlugins.state', 'unconfigured');
     lastResult = null;
+    scheduleOfflineRetry();
     await doApply();
     return;
   }
@@ -171,42 +174,136 @@ async function doRefresh(doSync, userInitiated) {
     if (m.mode === 'managed') {
       const p = paths();
       const hadClone = fs.existsSync(path.join(p.managedRepo, '.git'));
+      let checkFailed = false;
       syncing = true;
       updateStatus();
       try {
-        lastResult = await sync.syncManaged({
-          run,
-          managedRepo: p.managedRepo,
-          repoUrl: m.repoUrl,
-          branch: m.branch,
-          lockFile: p.lockFile,
-          stateFile: p.stateFile,
-          log,
-        });
+        if (check) {
+          // a new URL or branch: say at once whether the server answers, before the (possibly long) clone or fetch
+          const c = await sync.checkRemote({
+            run,
+            cwd: storage,
+            repoUrl: m.repoUrl,
+            branch: m.branch,
+            idleMs: sync.CHECK_IDLE_MS,
+          });
+          if (c.kind !== 'reachable') {
+            lastResult = c;
+            checkFailed = true;
+          } else if (vscode.window.state.focused) {
+            vscode.window.showInformationMessage(
+              `Team plugins: ${m.repoUrl} is reachable${c.empty ? ' (empty repository)' : ''}. ${
+                hadClone ? 'Updating' : 'Cloning it'
+              } in the background.`,
+            );
+          }
+        }
+        if (!checkFailed) {
+          lastResult = await sync.syncManaged({
+            run,
+            managedRepo: p.managedRepo,
+            repoUrl: m.repoUrl,
+            branch: m.branch,
+            lockFile: p.lockFile,
+            stateFile: p.stateFile,
+            log,
+          });
+        }
       } finally {
         syncing = false;
       }
       lastCheck = new Date();
-      if (lastResult.kind === 'busy') {
-        readStateFile(); // another window is syncing: show what it recorded last; its next write re-applies here
+      if (checkFailed) {
+        // only the window the user is looking at answers a settings change
+        if (vscode.window.state.focused) {
+          notifyAfterSync(lastResult, { hadClone, userInitiated: true, run, repoDir: p.managedRepo });
+        } else {
+          log(`repository check failed: ${lastResult.message}`);
+        }
+      } else {
+        if (lastResult.kind === 'busy') {
+          readStateFile(); // another window is syncing: show what it recorded last; its next write re-applies here
+        }
+        if (lastResult.kind === 'cloned') {
+          startWatchers(); // the clone watcher was created before the folder existed
+        }
+        notifyAfterSync(lastResult, { hadClone, userInitiated, run, repoDir: p.managedRepo });
+        if (lastResult.kind === 'switched') {
+          log(`managed clone now follows ${m.repoUrl} (${lastResult.branch})`);
+        }
       }
-      if (lastResult.kind === 'cloned') {
-        startWatchers(); // the clone watcher was created before the folder existed
-      }
-      notifyAfterSync(lastResult, { hadClone, userInitiated, run, repoDir: p.managedRepo });
-      if (lastResult.kind === 'switched') {
-        log(`managed clone now follows ${m.repoUrl} (${lastResult.branch})`);
-      }
+      scheduleOfflineRetry();
     } else {
       lastResult = await sync.localStatus({ run, repoDir: m.repoDir });
       lastCheck = new Date();
+      scheduleOfflineRetry();
     }
   }
   await doApply();
 }
 
+// The buttons of a classified remote error (lib/remoteErrors.js `actions`).
+const ACTIONS = {
+  terminal: { label: 'Open terminal', run: () => openGitTerminal() },
+  retry: { label: 'Sync now', run: () => vscode.commands.executeCommand('teamPlugins.syncNow') },
+  showLog: { label: 'Show log', run: () => output.show() },
+  setUrl: { label: 'Set repository URL', run: () => vscode.commands.executeCommand('teamPlugins.setRepoUrl') },
+  branchSetting: {
+    label: 'Open settings',
+    run: () => vscode.commands.executeCommand('workbench.action.openSettings', 'teamPlugins.branch'),
+  },
+  pushToBranch: { label: 'Push to a branch', run: () => vscode.commands.executeCommand('teamPlugins.pushToBranch') },
+  retryPush: { label: 'Try again', run: () => vscode.commands.executeCommand('teamPlugins.commitAndPush') },
+};
+
+function showRemoteError(result) {
+  const ids = (result.actions || []).filter((id) => ACTIONS[id]);
+  if (!ids.includes('showLog')) {
+    ids.push('showLog');
+  }
+  vscode.window
+    .showErrorMessage(`Team plugins: ${result.message}`, ...ids.map((id) => ACTIONS[id].label))
+    .then((choice) => {
+      const id = ids.find((i) => ACTIONS[i].label === choice);
+      if (id) {
+        return ACTIONS[id].run();
+      }
+      return undefined;
+    });
+}
+
+// A terminal where git can ask what it can't ask in the background (SSH host key or passphrase, credential manager
+// sign-in). No shell: git is the terminal's process, so the URL needs no quoting.
+function openGitTerminal() {
+  const url = settings().repoUrl;
+  if (!url) {
+    return;
+  }
+  const term = vscode.window.createTerminal({
+    name: 'Team plugins: git',
+    shellPath: gitPath(),
+    shellArgs: ['ls-remote', '--', url, 'HEAD'],
+  });
+  term.show();
+}
+
+// Retries an unreachable server after OFFLINE_RETRY_MS, whatever the update interval is.
+function scheduleOfflineRetry() {
+  if (offlineTimer) {
+    clearTimeout(offlineTimer);
+    offlineTimer = null;
+  }
+  const m = currentMode();
+  if (m.mode === 'managed' && m.intervalMinutes > 0 && lastResult && lastResult.kind === 'offline') {
+    offlineTimer = setTimeout(() => {
+      offlineTimer = null;
+      timedSync(Math.max(5, m.intervalMinutes) * 60000);
+    }, OFFLINE_RETRY_MS);
+  }
+}
+
 function notifyAfterSync(result, { hadClone, userInitiated, run, repoDir }) {
-  if (result.kind !== 'error' && result.kind !== 'busy') {
+  if (!['error', 'busy', 'offline'].includes(result.kind)) {
     errorShown = false; // a recovery re-arms the error notice
   }
   const ask = (kind, message, ...buttons) => vscode.window[kind](message, ...buttons);
@@ -264,14 +361,19 @@ function notifyAfterSync(result, { hadClone, userInitiated, run, repoDir }) {
       });
       break;
     }
+    case 'offline':
+      // a server that doesn't answer is quiet when a clone exists: the plugins keep working and the next update retries
+      if (userInitiated || (!hadClone && !errorShown)) {
+        errorShown = true;
+        showRemoteError(result);
+      } else {
+        log(`update skipped: ${result.message}`);
+      }
+      break;
     case 'error':
       if (userInitiated || !errorShown) {
         errorShown = true;
-        ask('showErrorMessage', `Team plugins: ${result.message}`, 'Show log').then((choice) => {
-          if (choice === 'Show log') {
-            output.show();
-          }
-        });
+        showRemoteError(result);
       }
       break;
     default:
@@ -669,6 +771,8 @@ function updateStatus() {
     (changes && changes.error)
   ) {
     text = `$(warning) Team ${count}`;
+  } else if (lastResult && lastResult.kind === 'offline') {
+    text = `$(debug-disconnect) Team ${count}`; // after the warnings: being offline is the least of them
   } else {
     text = `$(plug) Team ${count}`;
   }
@@ -742,7 +846,7 @@ class PluginTree {
     if (m.mode === 'unconfigured') {
       return [];
     }
-    if (catalog.plugins.length === 0 && lastResult && lastResult.kind === 'error') {
+    if (catalog.plugins.length === 0 && lastResult && ['error', 'offline'].includes(lastResult.kind)) {
       return [
         {
           id: 'sync-error',
@@ -1269,11 +1373,7 @@ function reportContribution(result, nothingText) {
         });
       break;
     default:
-      vscode.window.showErrorMessage(`Team plugins: ${result.message}`, 'Show log').then((choice) => {
-        if (choice === 'Show log') {
-          output.show();
-        }
-      });
+      showRemoteError(result);
       break;
   }
 }
@@ -1321,6 +1421,7 @@ async function commitAndPushCommand() {
             message,
             lockFile: p.lockFile,
             stateFile: p.stateFile,
+            repoUrl: currentMode().repoUrl,
             log,
           }),
       ),
@@ -1375,6 +1476,7 @@ async function pushToBranchCommand() {
             branch: branch.trim(),
             lockFile: p.lockFile,
             stateFile: p.stateFile,
+            repoUrl: currentMode().repoUrl,
             log,
           });
           if (r.kind === 'pushedBranch') {
@@ -1439,12 +1541,11 @@ function activate(context) {
 
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
-      if (
-        e.affectsConfiguration('teamPlugins.repoUrl') ||
-        e.affectsConfiguration('teamPlugins.branch') ||
-        e.affectsConfiguration('teamPlugins.localRepoPath') ||
-        e.affectsConfiguration('git.path')
-      ) {
+      if (e.affectsConfiguration('teamPlugins.repoUrl') || e.affectsConfiguration('teamPlugins.branch')) {
+        startWatchers();
+        startTimer();
+        refresh({ sync: true, check: true });
+      } else if (e.affectsConfiguration('teamPlugins.localRepoPath') || e.affectsConfiguration('git.path')) {
         startWatchers();
         startTimer();
         refresh({ sync: true });
@@ -1475,6 +1576,8 @@ function activate(context) {
 
 async function deactivate() {
   stopTimer();
+  clearTimeout(offlineTimer);
+  offlineTimer = null;
   clearInterval(keepAliveTimer);
   keepAliveTimer = null;
   stopWatchers();

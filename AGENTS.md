@@ -1,6 +1,6 @@
 # cursor-team-plugins: developer notes
 
-Cursor (VS Code) extension, version in `package.json` (0.2.4). Plain JavaScript, CommonJS, no npm dependency, no
+Cursor (VS Code) extension, version in `package.json` (0.3.0). Plain JavaScript, CommonJS, no npm dependency, no
 build step. User documentation: `README.md`.
 
 ## Layout
@@ -12,14 +12,17 @@ build step. User documentation: `README.md`.
   `copyRootOf`, `syncCopy`, `markCopySynced`, `resolveConflict`, `hashCache`: partial plugin copies kept in sync both
   ways), `git`, `sync` (managed clone: `syncManaged`, `localChanges`, `checkConflicts`, `gitVersionOf`, `parseStatusZ`,
   `discardLocalChanges`, `withLock`, `withLockSync`, `removeStaleIndexLock`, `removeLeftovers`, `recentlySynced`,
-  `headFileArgs`), `contribute` (`commitAndPush`, `pushToBranch`, `defaultBranchName`), `cursorApi`, `registrar`.
+  `headFileArgs`, `checkRemote`), `contribute` (`commitAndPush`, `pushToBranch`, `defaultBranchName`), `cursorApi`,
+  `registrar`, `remoteErrors` (`classify`, `remoteHost`, `describeRemote`, `remoteResult`: classified git failures with
+  a message and the actions to offer). `git` also has `cleanProgress`.
 - `scripts/`: `test.js` (test runner), `zip.js` + `package.js` (VSIX writer), `make-test-repo.js` (bare test team
   repository for live tests, from `test/fixtures/team-repo`), `make_icon.py` (regenerates `resources/icon.png`: three stacked package boxes on a blue rounded square, drawn from no source image: `uv run --with pillow python scripts/make_icon.py`; not packaged). Nothing under `lib/` or `scripts/`
   may require `vscode`.
 - `test/`: one test file per module (`*.test.js`, `node:test`), `helpers.js` for fixtures. Tests use only local bare
   git repositories, no network. `fixtures/team-repo/` is the test team repository (plugins `review`: skills
   `code-review`, `security-check`, rule `style.mdc`; `docs`: skill `write-readme`, with a folded description);
-  `make-test-repo.test.js` checks its catalog, so change the two together.
+  `make-test-repo.test.js` checks its catalog, so change the two together. `manual-remote-checks.md` is the hand
+  checklist for the SSH and credential cases that tests can't cover.
 
 ## Commands
 
@@ -92,6 +95,19 @@ The VSIX is written to `dist/cursor-team-plugins-<version>.vsix`. The runner pas
 - Tree ids are `plugin:<name>` and `item:<id>` (a plugin named `changes` would collide with a built-in node); the
   selection id is the node's `key`.
 - `merge-tree --write-tree` needs git 2.38: `checkConflicts` checks `git version` first.
+- git runs non-interactive: `GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=never` (GCM 2.6 then fails with "Cannot prompt
+  because user interactivity has been disabled" instead of opening a window), stdin closed.
+- SSH keys with a passphrase are not supported (checked by hand): an agent started in a terminal sets `SSH_AUTH_SOCK`
+  only there, so Cursor's git never sees it; only Windows' agent service with `core.sshCommand` set to Windows'
+  OpenSSH would work.
+- Git's bundled ssh fails fast without a console (unknown host: `Host key verification failed.`; passphrase without
+  agent: `Permission denied (publickey).`); Windows' own OpenSSH and plink wait silently: network commands have no total
+  limit but stop after 2 minutes without output (`--progress` keeps a transfer talking), and the stop kills the process
+  tree (`taskkill /T /F`: killing git alone leaves ssh running).
+- A deleted upstream branch: `fetch --prune` succeeds, then `HEAD...@{u}` fails with "no such branch": check
+  `refs/remotes/origin/<branch>`.
+- `offline` (server unreachable) is quiet when a clone exists, never counts as a sync for `recentlySynced`, retried after
+  5 minutes.
 - Timed syncs are skipped when `sync-state.json` records another window's sync younger than half the interval
   (`recentlySynced`); every window touches its registered copies every hour so another window's 7-day cleanup never
   removes them.

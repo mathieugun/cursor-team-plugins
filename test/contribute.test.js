@@ -134,13 +134,46 @@ test('commitAndPush reports a rejected push', async (t) => {
     return t.skip('git is not available');
   }
   const f = await setup(t);
-  writeFile(f.origin, 'hooks/pre-receive', '#!/bin/sh\nexit 1\n');
+  const hook = '#!/bin/sh\necho "GitLab: You are not allowed to push code to protected branches on this project." >&2\nexit 1\n';
+  writeFile(f.origin, 'hooks/pre-receive', hook);
   fs.chmodSync(path.join(f.origin, 'hooks', 'pre-receive'), 0o755);
   writeFile(f.clone, 'g.md', 'mine\n');
   const r = await commitAndPush(f.args);
   assert.equal(r.kind, 'error');
   assert.equal(r.step, 'push');
-  assert.ok(r.message.startsWith('git push failed'));
+  assert.equal(r.reason, 'pushRejected');
+  assert.ok(r.actions.includes('pushToBranch'));
+  assert.ok(r.message.includes('You are not allowed to push code to protected branches'), r.message);
+});
+
+test('a push refused on main goes through Push to a branch', async (t) => {
+  if (!gitAvailable()) {
+    return t.skip('git is not available');
+  }
+  const f = await setup(t);
+  const hook =
+    '#!/bin/sh\nwhile read old new ref; do\n  if [ "$ref" = refs/heads/main ]; then echo "protected branch" >&2; exit 1; fi\ndone\nexit 0\n';
+  writeFile(f.origin, 'hooks/pre-receive', hook);
+  fs.chmodSync(path.join(f.origin, 'hooks', 'pre-receive'), 0o755);
+  writeFile(f.clone, 'g.md', 'mine\n');
+  const r = await commitAndPush(f.args);
+  assert.equal(r.reason, 'pushRejected');
+  const b = await pushToBranch({ ...f.args, branch: 'team-plugins/x', message: 'mine' });
+  assert.equal(b.kind, 'pushedBranch');
+  assert.ok(git(['rev-parse', 'team-plugins/x'], f.origin));
+});
+
+test('commitAndPush reports an unreachable server', async (t) => {
+  if (!gitAvailable()) {
+    return t.skip('git is not available');
+  }
+  const f = await setup(t);
+  git(['remote', 'set-url', 'origin', 'http://127.0.0.1:1/x.git'], f.clone);
+  writeFile(f.clone, 'g.md', 'mine\n');
+  const r = await commitAndPush(f.args);
+  assert.equal(r.kind, 'error');
+  assert.equal(r.step, 'fetch');
+  assert.equal(r.reason, 'unreachable');
 });
 
 test('commitAndPush is busy while the lock is held', async (t) => {
@@ -248,4 +281,34 @@ test('a failing status is an error, not "nothing"', async (t) => {
   assert.equal(r.kind, 'error');
   assert.equal(r.step, 'status');
   assert.match(r.message, /git status failed/);
+});
+
+test('commitAndPush says how to set a missing git identity', async (t) => {
+  if (!gitAvailable()) {
+    return t.skip('git is not available');
+  }
+  const f = await setup(t);
+  // no global or system identity, no guessing from the machine: as on a computer where git was never set up
+  const emptyConfig = writeFile(f.root, 'empty.gitconfig', '');
+  const saved = { global: process.env.GIT_CONFIG_GLOBAL, nosystem: process.env.GIT_CONFIG_NOSYSTEM };
+  process.env.GIT_CONFIG_GLOBAL = emptyConfig;
+  process.env.GIT_CONFIG_NOSYSTEM = '1';
+  t.after(() => {
+    for (const [key, value] of [['GIT_CONFIG_GLOBAL', saved.global], ['GIT_CONFIG_NOSYSTEM', saved.nosystem]]) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  });
+  const plain = makeGit('git');
+  const run = (args, cwd, timeoutMs, opts) => plain(['-c', 'user.useConfigOnly=true', ...args], cwd, timeoutMs, opts);
+  writeFile(f.clone, 'g.md', 'mine\n');
+  const r = await commitAndPush({ ...f.args, run });
+  assert.equal(r.kind, 'error');
+  assert.equal(r.step, 'commit');
+  assert.ok(r.message.startsWith("git doesn't know your name and email"), r.message);
+  assert.ok(r.message.includes('git config --global user.email'));
+  assert.equal(git(['status', '--porcelain'], f.clone), 'M g.md');
 });

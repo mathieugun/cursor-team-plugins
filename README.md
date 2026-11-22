@@ -12,7 +12,7 @@ Cursor picks the changes up live.
 Build the VSIX (see `AGENTS.md`) or take it from the team, then:
 
 ```
-cursor --install-extension dist/cursor-team-plugins-0.2.4.vsix
+cursor --install-extension dist/cursor-team-plugins-0.3.0.vsix
 ```
 
 and reload the Cursor window. The extension has no dependency.
@@ -26,7 +26,45 @@ and reload the Cursor window. The extension has no dependency.
    conflicts with `git merge-tree --write-tree` before an update, and an older git makes every update fail with a
    message saying so.
 3. Open the **Team Plugins** view (activity bar) and choose **Set repository URL**, or set
-   `teamPlugins.repoUrl` in the settings. The repository is cloned in the background.
+   `teamPlugins.repoUrl` in the settings. The URL is checked as soon as it is set (a message says that the server
+   answers, or why it doesn't), then the repository is cloned in the background.
+
+## Remote repository setup
+
+The extension runs git in the background, where git can't ask you anything: it never opens a sign-in window and never
+waits for a typed answer. So SSH and HTTPS must work without questions once, which you set up in a terminal.
+
+**SSH** (`git@host:path` or `ssh://`):
+
+- Use the ssh that comes with Git for Windows (the default). Windows' own OpenSSH and PuTTY's plink can wait silently
+  for a question the extension can't show (see "Limits").
+- Use a key without a passphrase for the team server (keys with a passphrase are not supported yet, see "Limits"),
+  for example a key only for that server: `ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519_team`, and in
+  `~/.ssh/config` a `Host <server>` entry with `IdentityFile ~/.ssh/id_ed25519_team` and `IdentitiesOnly yes`.
+- The first connection to a server must accept its host key once: run `git ls-remote <url>` in a terminal, check the
+  fingerprint it shows against the one the server's admin gives you, and answer yes.
+
+**HTTPS**:
+
+- Git Credential Manager keeps your credentials: sign in once in a terminal with `git ls-remote <url>`. The extension
+  never opens a sign-in window, so a background sync never waits on a hidden one.
+
+When something is wrong, the message tells what to do. The **Open terminal** button runs
+`git ls-remote -- <url> HEAD` in a Cursor terminal, where SSH and the credential manager can ask their questions; then
+choose **Sync now**.
+
+| Message | What to do |
+| --- | --- |
+| SSH does not know the host key (first connection) | Open terminal, check the fingerprint, answer yes, Sync now. |
+| The SSH host key has changed | Don't accept it: ask the server's admin for the new fingerprint, then `ssh-keygen -R <host>` and connect again. Nothing is synced until then. |
+| SSH could not log in | No key, a key the server doesn't know (add the public key on the server), or a key with a passphrase (not supported yet). Open a terminal to see what SSH says, then Sync now. |
+| No stored credentials | Open terminal and sign in once, then Sync now. |
+| The server refused your credentials | Wrong password, or an expired or revoked token: open a terminal and sign in again, then Sync now. |
+| No access to, or repository not found | Check `teamPlugins.repoUrl` (**Set repository URL**) and ask for access. |
+| Branch not found | Check `teamPlugins.branch` (empty: the repository's default branch). |
+| Cannot reach the server | Offline, VPN down or DNS: nothing to do, the update is retried after 5 minutes. |
+| No answer for 2 minutes | git was stopped, often because SSH waited for a question: Open terminal, answer it, Sync now. |
+| The server refused the push | A protected branch or no write access: **Push to a branch**, then open a pull request. |
 
 ## Picking plugins
 
@@ -85,7 +123,10 @@ the changes, the group says so (see the log) instead of looking empty.
 
 **Commit and push** (the cloud icon in the view's title bar, or right-click **Local changes**) asks for a commit
 message, commits every change of the managed clone, rebases it on the team's latest commits and pushes to the
-branch the clone follows, with your own git credentials. The team gets the change at their next sync.
+branch the clone follows, with your own git credentials. The team gets the change at their next sync. When the server
+refuses the push (a protected branch, no write access), the message offers **Push to a branch**. A commit records
+your name and email from git's settings: on a computer where they were never set, the message gives the two
+`git config --global` commands to run once.
 
 Updates never throw your changes away: at each update your local changes (files and commits) are put back on top of
 the team's commits. Only a real conflict, where the team changed the same lines as you did, pauses the updates. The
@@ -102,7 +143,9 @@ the edits made in partial copies into your clone.
 ## Updates
 
 The managed clone is checked at startup, every `teamPlugins.updateIntervalMinutes` (default 60, minimum 5; 0 means
-only at startup) and with **Sync now**. The team's new commits are rebased under your local changes, which are
+only at startup) and with **Sync now**. An unreachable server (offline, VPN down) is skipped quietly while a clone
+exists: the plugins already cloned keep working, the log and the status bar icon show it, and the update is retried
+after 5 minutes. **Sync now** reports it. The team's new commits are rebased under your local changes, which are
 kept (the notification says so). With several windows open, only one fetches per interval (a timed update is skipped
 when another window synced less than half an interval ago). After an update, start a new chat to use the changes.
 **What changed** in the notification lists the new commits in the log.
@@ -141,16 +184,19 @@ picked up live, no sync is needed.
 - Several windows share one clone: a lock file serialises every operation that changes it (sync, commit and push, push
   to a branch, discard, partial-copy syncs, which take the lock in local mode too since windows with the same selection
   share a copy), and the other windows notice the new state through `sync-state.json`. An edit in the managed clone
-  (another window's partial copy, or by hand) reaches this window's partial copies and view within a second. A first
-  clone may take up to 30 minutes, a fetch 5. A `.git/index.lock` older than a minute (left by a killed git) is removed
-  before the next operation, and leftover `repo.tmp-*` folders of a failed clone at the next sync.
+  (another window's partial copy, or by hand) reaches this window's partial copies and view within a second. git runs
+  without prompts (`GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=never`); a network command is stopped (with the processes
+  it started) only after 2 minutes without output, so a long first clone works while data arrives. A
+  `.git/index.lock` older than a minute (left by a killed git) is removed before the next operation, and leftover
+  `repo.tmp-*` folders of a failed clone at the next sync.
 
 ## Troubleshooting
 
 - **Output > Team Plugins** shows every git command and every registration.
 - **Output > Cursor Plugins** is Cursor's own log: look for `Registered extension plugin: <name>`.
 - The status bar item (`Team <count>`) shows how many plugins this window registered; its tooltip lists them, the last
-  commit and the last sync state. A warning icon means a paused update, a failed sync or a failed registration.
+  commit and the last sync state. A warning icon means a paused update, a failed sync or a failed registration; a
+  plug-off icon means the last update couldn't reach the server (offline).
 - "vscode.cursor.plugins is missing": this Cursor is too old for extension plugins; update Cursor.
 - A background sync error is shown once, and again only after a sync succeeded (Sync now always shows it).
 
@@ -172,7 +218,15 @@ picked up live, no sync is needed.
 - Commit and push needs the managed clone: with `localRepoPath`, use your own git tools (the extension still copies
   partial-copy edits into the local clone).
 - The commit includes every change of the managed clone (`git add -A`); there is no per-file choice.
-- Pushing needs write access with your git credentials; a rejected push is reported as is.
+- Pushing needs write access with your git credentials; a push the server refuses (a protected branch, a server
+  rule, no write access) is reported with its reason and offers **Push to a branch**.
+- SSH keys with a passphrase are not supported yet: the background git can't unlock them, and an agent started in a
+  terminal (`ssh-agent`, `ssh-add`) is not visible to Cursor (its address, `SSH_AUTH_SOCK`, exists only in that
+  terminal). The login fails at once with a message. Use a key without a passphrase for the team server.
+- plink and Windows' own OpenSSH can't be kept from waiting on a question (host key, passphrase): git is stopped after
+  2 minutes without output and the message suggests a terminal. Git's bundled ssh doesn't wait: use it.
+- A clone of a local or network-share path that copies for more than 2 minutes without output is stopped (unrealistic
+  for a plugins repository).
 - After a change of the repository URL, the tags and git objects of the previous repository stay in the managed clone
   (harmless).
 - Switching the managed clone to an empty repository (no branch yet) is an error.

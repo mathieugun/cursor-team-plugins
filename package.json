@@ -2,7 +2,7 @@
   "name": "cursor-team-plugins",
   "displayName": "Team plugins",
   "description": "Keeps a team's Cursor plugins (rules and skills) in sync with the team git repository and registers the ones each user and project selected.",
-  "version": "0.2.4",
+  "version": "0.3.0",
   "publisher": "mg",
   "author": "Mathieu Gunther",
   "license": "MIT",
@@ -29,7 +29,7 @@
           "type": "string",
           "default": "",
           "scope": "application",
-          "description": "Git URL of the team plugins repository. Cloned with your own git credentials (credential manager or SSH agent)."
+          "description": "Git URL of the team plugins repository (HTTPS, git@host:path or ssh://). Cloned with your own git credentials (credential manager or SSH agent); the extension never asks for them: sign in once in a terminal."
         },
         "teamPlugins.branch": {
           "type": "string",
