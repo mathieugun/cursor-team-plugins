@@ -1,0 +1,200 @@
+{
+  "name": "cursor-team-plugins",
+  "displayName": "Team plugins",
+  "description": "Keeps a team's Cursor plugins (rules and skills) in sync with the team git repository and registers the ones each user and project selected.",
+  "version": "0.1.0",
+  "publisher": "mg",
+  "author": "Mathieu Gunther",
+  "license": "MIT",
+  "icon": "resources/icon.png",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "scripts": {
+    "test": "node scripts/test.js",
+    "package": "node scripts/package.js"
+  },
+  "contributes": {
+    "configuration": {
+      "title": "Team plugins",
+      "properties": {
+        "teamPlugins.repoUrl": {
+          "type": "string",
+          "default": "",
+          "scope": "application",
+          "description": "Git URL of the team plugins repository. Cloned with your own git credentials (credential manager or SSH agent)."
+        },
+        "teamPlugins.branch": {
+          "type": "string",
+          "default": "",
+          "scope": "application",
+          "description": "Branch to follow. Empty: the repository's default branch."
+        },
+        "teamPlugins.localRepoPath": {
+          "type": "string",
+          "default": "",
+          "scope": "application",
+          "description": "Use this existing clone instead of the managed one (for plugin authors): edits are picked up live and the extension never runs a git command that changes it."
+        },
+        "teamPlugins.updateIntervalMinutes": {
+          "type": "number",
+          "default": 60,
+          "minimum": 0,
+          "scope": "application",
+          "description": "How often to check the repository for updates. 0: only at startup and with \"Sync now\"."
+        },
+        "teamPlugins.enabled": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "scope": "application",
+          "description": "Plugins (`name`) and single skills or rules (`name/skills/<folder>`, `name/rules/<file>`) enabled in every project. Edited by the Team Plugins view."
+        },
+        "teamPlugins.excluded": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "scope": "application",
+          "description": "Skills and rules left out of plugins enabled in `teamPlugins.enabled`. Edited by the view."
+        },
+        "teamPlugins.projectPlugins": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "scope": "resource",
+          "description": "Plugins, skills or rules this project needs: enabled for everyone who opens it (commit `.vscode/settings.json`). Read from workspace and folder settings only."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "teamPlugins.syncNow",
+        "title": "Sync now",
+        "category": "Team Plugins",
+        "icon": "$(sync)"
+      },
+      {
+        "command": "teamPlugins.openRepo",
+        "title": "Open repository folder",
+        "category": "Team Plugins",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "teamPlugins.showLog",
+        "title": "Show log",
+        "category": "Team Plugins",
+        "icon": "$(output)"
+      },
+      {
+        "command": "teamPlugins.setRepoUrl",
+        "title": "Set repository URL",
+        "category": "Team Plugins"
+      },
+      {
+        "command": "teamPlugins.setLocalRepoPath",
+        "title": "Use a local clone",
+        "category": "Team Plugins"
+      },
+      {
+        "command": "teamPlugins.addToProject",
+        "title": "Add to this project",
+        "category": "Team Plugins"
+      },
+      {
+        "command": "teamPlugins.removeFromProject",
+        "title": "Remove from this project",
+        "category": "Team Plugins"
+      },
+      {
+        "command": "teamPlugins.openItem",
+        "title": "Open file",
+        "category": "Team Plugins"
+      },
+      {
+        "command": "teamPlugins.discardLocalChanges",
+        "title": "Discard local changes in the managed clone",
+        "category": "Team Plugins"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "teamPlugins.syncNow",
+          "when": "view == teamPlugins.plugins",
+          "group": "navigation@1"
+        },
+        {
+          "command": "teamPlugins.openRepo",
+          "when": "view == teamPlugins.plugins",
+          "group": "navigation@2"
+        },
+        {
+          "command": "teamPlugins.showLog",
+          "when": "view == teamPlugins.plugins",
+          "group": "navigation@3"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "teamPlugins.addToProject",
+          "when": "view == teamPlugins.plugins && viewItem =~ /^(plugin|child)$/ && workspaceFolderCount > 0"
+        },
+        {
+          "command": "teamPlugins.removeFromProject",
+          "when": "view == teamPlugins.plugins && viewItem =~ /\\.project$/"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "teamPlugins.addToProject",
+          "when": "false"
+        },
+        {
+          "command": "teamPlugins.removeFromProject",
+          "when": "false"
+        },
+        {
+          "command": "teamPlugins.openItem",
+          "when": "false"
+        }
+      ]
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "teamPlugins",
+          "title": "Team Plugins",
+          "icon": "resources/activity.svg"
+        }
+      ]
+    },
+    "views": {
+      "teamPlugins": [
+        {
+          "id": "teamPlugins.plugins",
+          "name": "Plugins"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "teamPlugins.plugins",
+        "when": "teamPlugins.state == unconfigured",
+        "contents": "No team plugin repository is configured.\n[Set repository URL](command:teamPlugins.setRepoUrl)\nPlugin authors can use their own clone instead:\n[Use a local clone](command:teamPlugins.setLocalRepoPath)"
+      }
+    ]
+  }
+}
