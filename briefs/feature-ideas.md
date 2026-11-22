@@ -31,7 +31,8 @@ have briefs. Each idea below becomes a brief when it's picked.
 - Pin a tag or commit, and roll back the last update if it broke something.
 - Channels: stable and beta branches, chosen per user.
 - Sync when the window gets focus again, if the last check is older than a few minutes.
-- One window runs the update timer for all windows.
+- One window runs the update timer for all windows. Mostly done in 0.2.3: a timed sync is skipped when another
+  window synced less than half an interval ago (`recentlySynced`); what's left is one timer instead of one per window.
 - **What changed** opens a real diff of the update, per plugin, instead of a list of commits in the log.
 
 ## Authoring and contribution

@@ -25,7 +25,8 @@ plugin folders with `.cursor-plugin/plugin.json`).
 - Where a repository's name comes from (proposed: the `name` of its `marketplace.json`, falling back to the URL's base
   name) and what happens when two repositories have the same name.
 - How to register two plugins whose folders have the same name, since Cursor names a plugin after its folder (check
-  in Cursor what happens today).
+  in Cursor what happens today). This can already happen inside one repository (a `marketplace.json` pointing at
+  `a/review` and `b/review`), so the answer applies to a single repository too.
 - How existing selections (`enabled`, `excluded`, `projectPlugins`) are migrated.
 - Per-repository storage, lock and state, so that repositories sync independently and a clone is never deleted to
   switch URL or branch.
@@ -37,8 +38,10 @@ plugin folders with `.cursor-plugin/plugin.json`).
 
 ## Depends on
 
-Brief 01 (data-loss bugs). Brief 02 #3 (switching URL or branch) is covered here if per-repository storage replaces
-the reclone.
+Brief 07 (bugs from the second review), which touches the lock, the URL switch and partial copies. Briefs 01–03 are
+done (`briefs/archive/`): a URL or branch change now switches the managed clone in place (`switchInPlace`), because
+Windows refuses to delete or rename the parent of a registered plugin folder. Per-repository clones must keep that:
+never delete or rename a clone that has plugins registered, in any window.
 
 ## Done when
 
