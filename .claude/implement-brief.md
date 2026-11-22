@@ -42,5 +42,11 @@ assumptions are fine when the user asked for the assumptions to be tested).
 - On Windows a folder Cursor watches (a registered plugin) cannot be deleted: EPERM, and it is left half-deleted and
   unreadable. Update registered folders in place; delete only unregistered ones.
 
+- On Windows `revealFileInOS` opens Explorer behind the Cursor window, so the user sees nothing happen: open the
+  files in an editor instead (`showTextDocument`).
+
+- A VSIX rebuilt without a version change may not replace the installed one: check
+  `%USERPROFILE%\.cursor\extensions\mg.cursor-team-plugins-<version>\extension.js` after installing (`--force`).
+
 ## Implementer lessons
 <!-- One line per project-specific mistake seen in review. -->

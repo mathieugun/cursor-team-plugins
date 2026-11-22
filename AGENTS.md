@@ -1,6 +1,6 @@
 # cursor-team-plugins: developer notes
 
-Cursor (VS Code) extension, version in `package.json` (0.2.0). Plain JavaScript, CommonJS, no npm dependency, no
+Cursor (VS Code) extension, version in `package.json` (0.2.1). Plain JavaScript, CommonJS, no npm dependency, no
 build step. User documentation: `README.md`.
 
 ## Layout
@@ -8,10 +8,10 @@ build step. User documentation: `README.md`.
 - `extension.js`: the only file that requires `vscode` (activation, tree view, status bar, commands, timers,
   watchers). Not covered by the tests: check its syntax with the command below.
 - `lib/`: pure logic, never requires `vscode`, tested with node: `catalog` (read the team repo), `selection`
-  (selection model), `treeModel` (`buildTree`, `buildChangesNode`), `materialize` (`holderName`, `syncCopy`: partial
-  plugin copies kept in sync both ways), `git`, `sync` (managed clone: `syncManaged`, `localChanges`, `checkConflicts`,
-  `parseStatusZ`, `discardLocalChanges`), `contribute` (`commitAndPush`, `pushToBranch`, `defaultBranchName`),
-  `cursorApi`, `registrar`.
+  (selection model), `treeModel` (`buildTree`, `buildChangesNode`, `buildConflictsNode`), `materialize` (`holderName`,
+  `syncCopy`, `markCopySynced`, `resolveConflict`: partial plugin copies kept in sync both ways), `git`, `sync`
+  (managed clone: `syncManaged`, `localChanges`, `checkConflicts`, `parseStatusZ`, `discardLocalChanges`), `contribute`
+  (`commitAndPush`, `pushToBranch`, `defaultBranchName`), `cursorApi`, `registrar`.
 - `scripts/`: `test.js` (test runner), `zip.js` + `package.js` (VSIX writer), `make_icon.py` (regenerates `resources/icon.png`: three stacked package boxes on a blue rounded square, drawn from no source image: `uv run --with pillow python scripts/make_icon.py`; not packaged). Nothing under `lib/` or `scripts/`
   may require `vscode`.
 - `test/`: one test file per module (`*.test.js`, `node:test`), `helpers.js` for fixtures. Tests use only local bare
@@ -51,8 +51,14 @@ The VSIX is written to `dist/cursor-team-plugins-<version>.vsix`. The runner pas
   `diff --name-only HEAD...@{u}`.
 - `git.js` trims stdout: calls that parse `status -z` or read `git show` content need `{ trim: false }` (the trim drops
   the first status column and the last newline).
-- Under Cursor's runtime on Windows `fs.copyFileSync` keeps the source file's modification time: `syncCopy` compares
-  the copy's mtime with the last sync time in `.team-plugins-sync.json`, and a copy never gets a fresh mtime to rely on.
+- `syncCopy` decides by content, not mtimes (Cursor's runtime on Windows keeps the source's mtime on copy, and mtimes
+  can't tell which side changed when both did): `.team-plugins-sync.json` v2 holds each file's sha1 at the last sync (`""` =
+  unknown, after a lost or old-format record) and the files in conflict. A file changed on both sides is a conflict and
+  neither side is touched until the user picks one (`resolveConflict`).
+- On Windows `fs.renameSync` over a file another process has open fails with EPERM: `writeManifest` retries, and a lost
+  manifest write is harmless (files already equal on both sides are settled by content).
+- `syncLocked` deletes the managed clone (URL or branch change) only after git confirmed it: a failed git command
+  (missing binary, wrong `git.path`) has empty stdout, like a clean `status`.
 - `fs.rmSync` fails with EPERM on git's read-only files with Cursor's runtime on Windows: use `sync.removeTree`.
 
 ## Rules

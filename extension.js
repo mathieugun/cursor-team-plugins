@@ -5,8 +5,8 @@ const fs = require('fs');
 const path = require('path');
 const { readCatalog } = require('./lib/catalog');
 const selection = require('./lib/selection');
-const { buildTree, buildChangesNode } = require('./lib/treeModel');
-const { holderName, syncCopy, markCopySynced, gcFiltered } = require('./lib/materialize');
+const { buildTree, buildChangesNode, buildConflictsNode } = require('./lib/treeModel');
+const { holderName, syncCopy, markCopySynced, resolveConflict, gcFiltered } = require('./lib/materialize');
 const { makeGit } = require('./lib/git');
 const sync = require('./lib/sync');
 const contribute = require('./lib/contribute');
@@ -34,12 +34,14 @@ let queue = Promise.resolve();
 let storage = '';
 let errorShown = false;
 let changes = null; // { files, ahead } of the managed clone, null outside managed mode
-let partialCopies = new Map(); // plugin name -> { plugin, ids, holder, copyRoot }
+let partialCopies = new Map(); // plugin name -> { plugin, ids, holder, copyRoot, conflicts: [{ rel, source, copy }] }
+let copyConflicts = []; // the conflicts of all partial copies, as given to buildConflictsNode
 let copyWatcher = null;
 let copyDebounce = null;
 let changesDebounce = null;
 const projectNoticeShown = new Set();
 const conflictShown = new Set();
+const conflictsNotified = new Set(); // `${holder}|${rel}` of the partial-copy conflicts already announced
 const loggedWarnings = new Set();
 
 function log(message) {
@@ -305,16 +307,18 @@ async function doApply() {
   const desired = selection.desiredRegistrations(catalog, eff, (plugin, ids) => {
     try {
       const holder = path.join(filteredRoot, holderName(plugin, ids));
-      const { copyRoot, actions } = syncCopy(plugin, ids, holder);
+      const { copyRoot, actions, conflicts } = syncCopy(plugin, ids, holder);
       logCopyActions(plugin, actions);
-      copies.set(plugin.name, { plugin, ids, holder, copyRoot });
+      copies.set(plugin.name, { plugin, ids, holder, copyRoot, conflicts });
       return copyRoot;
     } catch (err) {
       log(`cannot build the filtered copy of ${plugin.name}: ${err.message}`);
       return null;
     }
   });
+  warnDroppedConflicts(partialCopies, copies);
   partialCopies = copies;
+  updateConflicts();
   for (const [name, p] of [...desired]) {
     if (p === null) {
       desired.delete(name);
@@ -357,19 +361,117 @@ function hasChanges() {
   return !!changes && (changes.files.length > 0 || changes.ahead > 0);
 }
 
+// A partial copy left behind (its plugin is now fully enabled, disabled or selected differently) is no longer synced:
+// its unresolved conflict versions would only wait for the cleanup, so say where they are.
+function warnDroppedConflicts(before, after) {
+  const kept = new Set([...after.values()].map((e) => e.holder));
+  for (const entry of before.values()) {
+    const n = (entry.conflicts || []).length;
+    if (n === 0 || kept.has(entry.holder)) {
+      continue;
+    }
+    log(`partial copy of ${entry.plugin.name} dropped with ${n} unresolved conflict(s): ${entry.copyRoot}`);
+    vscode.window
+      .showWarningMessage(
+        `Team plugins: the partial copy of ${entry.plugin.name} is no longer used, with ${n} conflict(s) never resolved. Its versions of those files stay in its folder for a week.`,
+        'Open files',
+      )
+      .then(async (choice) => {
+        if (!choice) {
+          return;
+        }
+        const files = entry.conflicts.map((c) => c.copy).filter((f) => fs.existsSync(f));
+        if (files.length === 0) {
+          vscode.window.showInformationMessage(
+            `The partial copy deleted these files: ${entry.conflicts.map((c) => c.rel).join(', ')}. Folder: ${entry.copyRoot}`,
+          );
+          return;
+        }
+        for (const f of files) {
+          await vscode.window.showTextDocument(vscode.Uri.file(f), { preview: false });
+        }
+      })
+      .then(undefined, (err) => log(`cannot open the dropped copy's files: ${err.message}`));
+  }
+}
+
+// Rebuilds the list of partial-copy conflicts from partialCopies and announces the new ones. Returns whether the list
+// changed.
+function updateConflicts() {
+  const before = copyConflicts.map((c) => `${c.holder}|${c.rel}`).join('\n');
+  const list = [];
+  for (const entry of partialCopies.values()) {
+    for (const c of entry.conflicts || []) {
+      list.push({ plugin: entry.plugin.name, rel: c.rel, source: c.source, copy: c.copy, holder: entry.holder });
+    }
+  }
+  list.sort((a, b) => (a.plugin < b.plugin ? -1 : a.plugin > b.plugin ? 1 : a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0));
+  copyConflicts = list;
+  const keys = new Set(list.map((c) => `${c.holder}|${c.rel}`));
+  for (const key of [...conflictsNotified]) {
+    if (!keys.has(key)) {
+      conflictsNotified.delete(key);
+    }
+  }
+  const fresh = list.filter((c) => !conflictsNotified.has(`${c.holder}|${c.rel}`));
+  for (const c of fresh) {
+    conflictsNotified.add(`${c.holder}|${c.rel}`);
+  }
+  if (fresh.length === 1) {
+    const c = fresh[0];
+    const node = buildConflictsNode([c]).children[0];
+    vscode.window
+      .showWarningMessage(
+        `Team plugins: ${c.plugin}/${c.rel} was changed both in the repository and in a partial copy since the last sync. Both versions are kept until you choose one.`,
+        'Compare',
+        'Keep repository version',
+        'Keep copy version',
+      )
+      .then((choice) => {
+        if (choice === 'Compare') {
+          return vscode.commands.executeCommand('teamPlugins.openConflict', node);
+        }
+        if (choice === 'Keep repository version') {
+          return vscode.commands.executeCommand('teamPlugins.keepRepositoryVersion', node);
+        }
+        if (choice === 'Keep copy version') {
+          return vscode.commands.executeCommand('teamPlugins.keepCopyVersion', node);
+        }
+        return undefined;
+      });
+  } else if (fresh.length > 1) {
+    vscode.window
+      .showWarningMessage(
+        `Team plugins: ${fresh.length} files were changed both in the repository and in a partial copy since the last sync. Both versions are kept until you choose one in the Conflicts group.`,
+        'Show conflicts',
+      )
+      .then((choice) => (choice ? vscode.commands.executeCommand(VIEW_COMMAND) : undefined));
+  }
+  return before !== list.map((c) => `${c.holder}|${c.rel}`).join('\n');
+}
+
 // A change of a partial copy goes to the repository (and the other way); the view then shows it in Local changes.
 function syncPartials() {
   let toSource = false;
   for (const entry of partialCopies.values()) {
     try {
-      const { actions } = syncCopy(entry.plugin, entry.ids, entry.holder);
+      const { actions, conflicts } = syncCopy(entry.plugin, entry.ids, entry.holder);
       logCopyActions(entry.plugin, actions);
+      entry.conflicts = conflicts;
       toSource = toSource || actions.some((a) => a.action === 'toSource' || a.action === 'deletedInSource');
     } catch (err) {
       log(`cannot sync the partial copy of ${entry.plugin.name}: ${err.message}`);
     }
   }
-  return toSource ? refreshChanges() : undefined;
+  const changed = updateConflicts();
+  if (toSource) {
+    return refreshChanges().then(updateStatus);
+  }
+  if (changed) {
+    treeProvider.refresh();
+    updateStatus();
+  }
+  return undefined;
 }
 
 // Copy edits still waiting for the watcher's debounce go to the repository first, so that a commit includes them.
@@ -450,7 +552,7 @@ function updateStatus() {
     text = '$(plug) Team: not configured';
   } else if (!api) {
     text = '$(error) Team';
-  } else if ((lastResult && ['conflict', 'error'].includes(lastResult.kind)) || lastApplyErrors > 0) {
+  } else if ((lastResult && ['conflict', 'error'].includes(lastResult.kind)) || lastApplyErrors > 0 || copyConflicts.length > 0) {
     text = `$(warning) Team ${count}`;
   } else {
     text = `$(plug) Team ${count}`;
@@ -476,6 +578,9 @@ function updateStatus() {
   if (hasChanges()) {
     lines.push(`Local changes: ${changes.files.length} file(s), ${changes.ahead} unpushed commit(s)`);
   }
+  if (copyConflicts.length > 0) {
+    lines.push(`Partial copy conflicts: ${copyConflicts.length} (see the Conflicts group)`);
+  }
   if (lastApplyErrors > 0) {
     lines.push(`Registration errors: ${lastApplyErrors} (see the log)`);
   }
@@ -492,7 +597,7 @@ function updateStatus() {
 // ---- tree --------------------------------------------------------------------------------------------------------
 
 // Codicons per node kind (shown after the checkbox).
-const TREE_ICONS = { plugin: 'package', skill: 'sparkle', rule: 'law', error: 'warning', changes: 'git-commit' };
+const TREE_ICONS = { plugin: 'package', skill: 'sparkle', rule: 'law', error: 'warning', changes: 'git-commit', conflicts: 'warning', conflict: 'git-merge' };
 const CHANGE_ICONS = {
   modified: 'diff-modified',
   added: 'diff-added',
@@ -534,15 +639,18 @@ class PluginTree {
     }
     const project = projectList();
     const eff = selection.effective(catalog, userSelection(), project);
-    const changesNode = buildChangesNode(changes);
-    return changesNode ? [changesNode, ...buildTree(catalog, eff, project)] : buildTree(catalog, eff, project);
+    return [buildConflictsNode(copyConflicts), buildChangesNode(changes)]
+      .filter((n) => n)
+      .concat(buildTree(catalog, eff, project));
   }
 
   getTreeItem(node) {
     let state = vscode.TreeItemCollapsibleState.None;
     if (node.children.length) {
       state =
-        node.kind === 'changes' ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed;
+        node.kind === 'changes' || node.kind === 'conflicts'
+          ? vscode.TreeItemCollapsibleState.Expanded
+          : vscode.TreeItemCollapsibleState.Collapsed;
     }
     const item = new vscode.TreeItem(node.label, state);
     item.id = node.id;
@@ -558,7 +666,9 @@ class PluginTree {
       item.command = { command: 'teamPlugins.showLog', title: 'Show log' };
     } else if (node.kind === 'change') {
       item.command = { command: 'teamPlugins.openChange', title: 'Open changes', arguments: [node] };
-    } else if (node.kind !== 'changes') {
+    } else if (node.kind === 'conflict') {
+      item.command = { command: 'teamPlugins.openConflict', title: 'Compare', arguments: [node] };
+    } else if (node.kind !== 'changes' && node.kind !== 'conflicts') {
       item.checkboxState = node.checked
         ? vscode.TreeItemCheckboxState.Checked
         : vscode.TreeItemCheckboxState.Unchecked;
@@ -861,6 +971,9 @@ function registerCommands(context) {
   reg('teamPlugins.commitAndPush', commitAndPushCommand);
   reg('teamPlugins.pushToBranch', pushToBranchCommand);
   reg('teamPlugins.openChange', openChangeCommand);
+  reg('teamPlugins.openConflict', openConflictCommand);
+  reg('teamPlugins.keepRepositoryVersion', (node) => resolveConflictCommand(node, 'source'));
+  reg('teamPlugins.keepCopyVersion', (node) => resolveConflictCommand(node, 'copy'));
   context.subscriptions.push(
     vscode.workspace.registerTextDocumentContentProvider(GIT_SCHEME, {
       async provideTextDocumentContent(uri) {
@@ -902,6 +1015,56 @@ async function openChangeCommand(node) {
   const right =
     node.status === 'deleted' ? gitUri(m.repoDir, '', node.path) : vscode.Uri.file(path.join(m.repoDir, node.path));
   await vscode.commands.executeCommand('vscode.diff', left, right, `${path.basename(node.path)} (team \u2194 yours)`);
+}
+
+// ---- partial-copy conflicts --------------------------------------------------------------------------------------------
+
+async function openConflictCommand(node) {
+  if (!node || !node.rel) {
+    return;
+  }
+  const side = (file) => (fs.existsSync(file) ? vscode.Uri.file(file) : gitUri('', '', node.rel));
+  await vscode.commands.executeCommand(
+    'vscode.diff',
+    side(node.source),
+    side(node.copy),
+    `${path.basename(node.rel)} (repository ↔ partial copy)`,
+  );
+}
+
+async function resolveConflictCommand(node, keep) {
+  if (!node || !node.rel) {
+    return;
+  }
+  const [message, detail, button] =
+    keep === 'source'
+      ? [`Keep the repository version of ${node.plugin}/${node.rel}?`, "The partial copy's version is replaced.", 'Keep repository version']
+      : [`Keep the partial copy version of ${node.plugin}/${node.rel}?`, "The repository's version is replaced.", 'Keep copy version'];
+  const choice = await vscode.window.showWarningMessage(message, { modal: true, detail }, button);
+  if (choice !== button) {
+    return;
+  }
+  await enqueue(async () => {
+    try {
+      const entry = [...partialCopies.values()].find((e) => e.holder === node.holder);
+      if (!entry) {
+        log(`conflict no longer tracked: ${node.rel}`);
+        return;
+      }
+      if (!(entry.conflicts || []).some((c) => c.rel === node.rel)) {
+        vscode.window.showInformationMessage(`${node.plugin}/${node.rel} is no longer in conflict.`);
+        return;
+      }
+      const a = resolveConflict(entry.plugin, entry.ids, entry.holder, node.rel, keep);
+      logCopyActions(entry.plugin, [a]);
+      entry.conflicts = (entry.conflicts || []).filter((c) => c.rel !== node.rel);
+      updateConflicts();
+      await refreshChanges();
+      updateStatus();
+    } catch (err) {
+      vscode.window.showErrorMessage(`Team plugins: ${err.message}`);
+    }
+  });
 }
 
 function askCommitMessage() {

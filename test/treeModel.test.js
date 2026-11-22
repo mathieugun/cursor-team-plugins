@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { effective } = require('../lib/selection');
-const { buildTree, buildChangesNode } = require('../lib/treeModel');
+const { buildTree, buildChangesNode, buildConflictsNode } = require('../lib/treeModel');
 
 const child = (id, kind) => ({ id, kind, name: id.split('/').pop(), file: `/x/${id}`, description: '' });
 const catalog = {
@@ -68,4 +68,25 @@ test('buildChangesNode', () => {
   assert.equal(onlyCommits.children.length, 0);
   assert.equal(buildChangesNode({ files: [], ahead: 0 }), null);
   assert.equal(buildChangesNode(null), null);
+});
+
+test('buildConflictsNode', () => {
+  assert.equal(buildConflictsNode([]), null);
+  const node = buildConflictsNode([
+    { plugin: 'p', rel: 'skills/a/SKILL.md', source: 'S', copy: 'C', holder: 'H' },
+    { plugin: 'p', rel: 'x.md', source: 'S2', copy: 'C2', holder: 'H' },
+  ]);
+  assert.equal(node.id, 'conflicts');
+  assert.equal(node.description, '2 file(s)');
+  assert.deepEqual(node.children.map((c) => c.id), ['conflict:H|skills/a/SKILL.md', 'conflict:H|x.md']);
+  assert.deepEqual(node.children.map((c) => c.label), ['SKILL.md', 'x.md']);
+  assert.deepEqual(node.children.map((c) => c.description), ['p/skills/a', 'p']);
+  assert.ok(node.children.every((c) => c.contextValue === 'conflict'));
+  assert.deepEqual(
+    node.children.map((c) => [c.rel, c.source, c.copy, c.holder]),
+    [
+      ['skills/a/SKILL.md', 'S', 'C', 'H'],
+      ['x.md', 'S2', 'C2', 'H'],
+    ],
+  );
 });

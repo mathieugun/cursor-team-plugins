@@ -2,7 +2,7 @@
   "name": "cursor-team-plugins",
   "displayName": "Team plugins",
   "description": "Keeps a team's Cursor plugins (rules and skills) in sync with the team git repository and registers the ones each user and project selected.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "mg",
   "author": "Mathieu Gunther",
   "license": "MIT",
@@ -144,6 +144,23 @@
         "command": "teamPlugins.discardLocalChanges",
         "title": "Discard local changes in the managed clone",
         "category": "Team Plugins"
+      },
+      {
+        "command": "teamPlugins.openConflict",
+        "title": "Compare",
+        "category": "Team Plugins"
+      },
+      {
+        "command": "teamPlugins.keepRepositoryVersion",
+        "title": "Keep repository version",
+        "category": "Team Plugins",
+        "icon": "$(arrow-left)"
+      },
+      {
+        "command": "teamPlugins.keepCopyVersion",
+        "title": "Keep copy version",
+        "category": "Team Plugins",
+        "icon": "$(arrow-right)"
       }
     ],
     "menus": {
@@ -197,6 +214,26 @@
           "command": "teamPlugins.discardLocalChanges",
           "when": "view == teamPlugins.plugins && viewItem == changes",
           "group": "1_changes@3"
+        },
+        {
+          "command": "teamPlugins.keepRepositoryVersion",
+          "when": "view == teamPlugins.plugins && viewItem == conflict",
+          "group": "inline"
+        },
+        {
+          "command": "teamPlugins.keepRepositoryVersion",
+          "when": "view == teamPlugins.plugins && viewItem == conflict",
+          "group": "1_conflict@1"
+        },
+        {
+          "command": "teamPlugins.keepCopyVersion",
+          "when": "view == teamPlugins.plugins && viewItem == conflict",
+          "group": "inline"
+        },
+        {
+          "command": "teamPlugins.keepCopyVersion",
+          "when": "view == teamPlugins.plugins && viewItem == conflict",
+          "group": "1_conflict@2"
         }
       ],
       "commandPalette": [
@@ -214,6 +251,18 @@
         },
         {
           "command": "teamPlugins.openChange",
+          "when": "false"
+        },
+        {
+          "command": "teamPlugins.openConflict",
+          "when": "false"
+        },
+        {
+          "command": "teamPlugins.keepRepositoryVersion",
+          "when": "false"
+        },
+        {
+          "command": "teamPlugins.keepCopyVersion",
           "when": "false"
         }
       ]

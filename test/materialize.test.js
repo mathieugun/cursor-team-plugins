@@ -2,10 +2,11 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { readCatalog } = require('../lib/catalog');
-const { holderName, syncCopy, markCopySynced, gcFiltered } = require('../lib/materialize');
+const { holderName, syncCopy, markCopySynced, resolveConflict, gcFiltered } = require('../lib/materialize');
 const { tmpDir, rmDir, writeFile, makePlugin } = require('./helpers');
 
 function setup(t) {
@@ -52,7 +53,10 @@ test('the first syncCopy copies only the selected children', (t) => {
   for (const rel of ['skills/b', 'rules/y.mdc', '.git']) {
     assert.ok(!fs.existsSync(f.cp(rel)), rel);
   }
-  assert.deepEqual(f.manifest().files, FOUR);
+  assert.equal(f.manifest().version, 2);
+  assert.deepEqual(Object.keys(f.manifest().files).sort(), FOUR);
+  assert.deepEqual(f.manifest().conflicts, []);
+  assert.deepEqual(f.first.conflicts, []);
   assert.deepEqual(fs.readdirSync(path.join(f.root, 'filtered')).filter((n) => n.includes('.tmp-')), []);
 });
 
@@ -70,7 +74,6 @@ test('holderName depends on the plugin and the selection only', (t) => {
 test('an edit of the copy goes to the repository', (t) => {
   const f = setupCopy(t);
   fs.writeFileSync(f.cp(SKILL_A), 'edited by the agent');
-  setMtime(f.cp(SKILL_A), f.manifest().syncedAt + 10000);
   const r = syncCopy(f.plugin, f.ids, f.holder);
   assert.deepEqual(r.actions, [{ action: 'toSource', rel: SKILL_A }]);
   assert.equal(fs.readFileSync(f.src(SKILL_A), 'utf8'), 'edited by the agent');
@@ -79,7 +82,6 @@ test('an edit of the copy goes to the repository', (t) => {
 test('an edit of the repository goes to the copy', (t) => {
   const f = setupCopy(t);
   fs.writeFileSync(f.src(SKILL_A), 'edited by the team');
-  setMtime(f.cp(SKILL_A), f.manifest().syncedAt - 10000);
   const r = syncCopy(f.plugin, f.ids, f.holder);
   assert.deepEqual(r.actions, [{ action: 'toCopy', rel: SKILL_A }]);
   assert.equal(fs.readFileSync(f.cp(SKILL_A), 'utf8'), 'edited by the team');
@@ -143,6 +145,150 @@ test('children outside the selection are left alone', (t) => {
   const r = syncCopy(f.plugin, f.ids, f.holder);
   assert.deepEqual(r.actions, []);
   assert.ok(!fs.existsSync(f.cp('skills/b')));
+});
+
+const S = (f, rel) => fs.readFileSync(f.src(rel), 'utf8');
+const C = (f, rel) => fs.readFileSync(f.cp(rel), 'utf8');
+
+function makeConflict(f) {
+  fs.writeFileSync(f.src(SKILL_A), 'team');
+  fs.writeFileSync(f.cp(SKILL_A), 'agent');
+  return syncCopy(f.plugin, f.ids, f.holder);
+}
+
+test('both sides changed is a conflict that changes nothing', (t) => {
+  const f = setupCopy(t);
+  const r = makeConflict(f);
+  assert.deepEqual(r.actions, []);
+  assert.deepEqual(r.conflicts, [{ rel: SKILL_A, source: f.src(SKILL_A), copy: f.cp(SKILL_A) }]);
+  assert.equal(S(f, SKILL_A), 'team');
+  assert.equal(C(f, SKILL_A), 'agent');
+  assert.deepEqual(f.manifest().conflicts, [SKILL_A]);
+  const again = syncCopy(f.plugin, f.ids, f.holder);
+  assert.deepEqual(again.actions, []);
+  assert.deepEqual(again.conflicts, r.conflicts);
+});
+
+test('both sides changed the same way is not a conflict', (t) => {
+  const f = setupCopy(t);
+  fs.writeFileSync(f.src(SKILL_A), 'same');
+  fs.writeFileSync(f.cp(SKILL_A), 'same');
+  const r = syncCopy(f.plugin, f.ids, f.holder);
+  assert.deepEqual(r.actions, []);
+  assert.deepEqual(r.conflicts, []);
+  assert.equal(f.manifest().files[SKILL_A], crypto.createHash('sha1').update('same').digest('hex'));
+});
+
+test('a deletion against an edit is a conflict', (t) => {
+  const f = setupCopy(t);
+  fs.rmSync(f.cp('agents/z.md'));
+  fs.writeFileSync(f.src('agents/z.md'), 'team');
+  const r = syncCopy(f.plugin, f.ids, f.holder);
+  assert.deepEqual(r.actions, []);
+  assert.deepEqual(r.conflicts.map((c) => c.rel), ['agents/z.md']);
+  assert.equal(S(f, 'agents/z.md'), 'team');
+});
+
+test('resolveConflict keeps the repository version', (t) => {
+  const f = setupCopy(t);
+  makeConflict(f);
+  assert.deepEqual(resolveConflict(f.plugin, f.ids, f.holder, SKILL_A, 'source'), { action: 'toCopy', rel: SKILL_A });
+  assert.equal(C(f, SKILL_A), 'team');
+  const r = syncCopy(f.plugin, f.ids, f.holder);
+  assert.deepEqual(r.actions, []);
+  assert.deepEqual(r.conflicts, []);
+  assert.deepEqual(f.manifest().conflicts, []);
+});
+
+test('resolveConflict keeps the copy version', (t) => {
+  const f = setupCopy(t);
+  makeConflict(f);
+  assert.deepEqual(resolveConflict(f.plugin, f.ids, f.holder, SKILL_A, 'copy'), { action: 'toSource', rel: SKILL_A });
+  assert.equal(S(f, SKILL_A), 'agent');
+  const r = syncCopy(f.plugin, f.ids, f.holder);
+  assert.deepEqual(r.actions, []);
+  assert.deepEqual(r.conflicts, []);
+  assert.deepEqual(f.manifest().conflicts, []);
+});
+
+test('resolveConflict with the kept side deleted deletes the other', (t) => {
+  const f = setupCopy(t);
+  fs.rmSync(f.cp('agents/z.md'));
+  fs.writeFileSync(f.src('agents/z.md'), 'team');
+  syncCopy(f.plugin, f.ids, f.holder);
+  assert.deepEqual(resolveConflict(f.plugin, f.ids, f.holder, 'agents/z.md', 'copy'), {
+    action: 'deletedInSource',
+    rel: 'agents/z.md',
+  });
+  assert.ok(!fs.existsSync(f.src('agents/z.md')));
+  assert.throws(() => resolveConflict(f.plugin, f.ids, f.holder, '../x', 'copy'));
+  assert.throws(() => resolveConflict(f.plugin, f.ids, f.holder, SKILL_A, 'both'));
+});
+
+test('an unreadable record never deletes unsynced edits', (t) => {
+  const f = setupCopy(t);
+  fs.writeFileSync(f.cp(SKILL_A), 'agent');
+  writeFile(f.copyRoot, 'skills/a/notes.md', 'notes');
+  writeFile(f.plugin.dir, 'agents/new.md', 'new');
+  fs.writeFileSync(path.join(f.holder, '.team-plugins-sync.json'), '{"syncedAt":17');
+  const r = syncCopy(f.plugin, f.ids, f.holder);
+  assert.deepEqual(r.actions, [
+    { action: 'toCopy', rel: 'agents/new.md' },
+    { action: 'toSource', rel: 'skills/a/notes.md' },
+  ]);
+  assert.deepEqual(r.conflicts.map((c) => c.rel), [SKILL_A]);
+  assert.equal(C(f, SKILL_A), 'agent');
+  assert.equal(f.manifest().version, 2);
+  assert.equal(f.manifest().files[SKILL_A], '');
+});
+
+test('a v1 record is migrated', (t) => {
+  const f = setupCopy(t);
+  const now = Date.now();
+  fs.writeFileSync(path.join(f.holder, '.team-plugins-sync.json'), JSON.stringify({ syncedAt: now, files: FOUR }));
+  for (const rel of FOUR) {
+    setMtime(f.cp(rel), now - 10000);
+  }
+  fs.writeFileSync(f.src(SKILL_A), 'team');
+  fs.writeFileSync(f.cp('rules/x.mdc'), 'agent');
+  fs.writeFileSync(f.src('rules/x.mdc'), 'team2');
+  setMtime(f.cp('rules/x.mdc'), now + 10000);
+  fs.rmSync(f.cp('agents/z.md'));
+  setMtime(f.src('agents/z.md'), now - 10000);
+  const r = syncCopy(f.plugin, f.ids, f.holder);
+  assert.deepEqual(r.actions, [
+    { action: 'deletedInSource', rel: 'agents/z.md' },
+    { action: 'toCopy', rel: SKILL_A },
+  ]);
+  assert.deepEqual(r.conflicts.map((c) => c.rel), ['rules/x.mdc']);
+  assert.equal(f.manifest().version, 2);
+});
+
+test('markCopySynced keeps conflicts', (t) => {
+  const f = setupCopy(t);
+  makeConflict(f);
+  assert.equal(markCopySynced(f.holder), true);
+  const r = syncCopy(f.plugin, f.ids, f.holder);
+  assert.deepEqual(r.actions, []);
+  assert.deepEqual(r.conflicts.map((c) => c.rel), [SKILL_A]);
+  assert.equal(C(f, SKILL_A), 'agent');
+});
+
+test('the record is written atomically', (t) => {
+  const f = setupCopy(t);
+  fs.writeFileSync(f.cp(SKILL_A), 'agent');
+  const fd = fs.openSync(path.join(f.holder, '.team-plugins-sync.json'), 'r');
+  try {
+    syncCopy(f.plugin, f.ids, f.holder);
+  } finally {
+    fs.closeSync(fd);
+  }
+  assert.doesNotThrow(() => f.manifest());
+  assert.deepEqual(fs.readdirSync(f.holder).filter((n) => n.includes('.tmp-')), []);
+  // a stale record (the rename can fail on Windows while the record is open) is settled by content
+  const r = syncCopy(f.plugin, f.ids, f.holder);
+  assert.deepEqual(r.actions, []);
+  assert.deepEqual(r.conflicts, []);
 });
 
 test('gcFiltered removes only old unreferenced folders', (t) => {

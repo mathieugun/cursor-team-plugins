@@ -120,6 +120,53 @@ test('sync reclones when the branch changes', async (t) => {
   assert.equal(git(['rev-parse', '--abbrev-ref', 'HEAD'], f.args.managedRepo), 'dev');
 });
 
+test('a failing git never deletes the managed clone', async (t) => {
+  if (!gitAvailable()) {
+    return t.skip('git is not available');
+  }
+  const f = setup(t);
+  await sync.syncManaged(f.args);
+  const file = path.join(f.args.managedRepo, 'p', 'skills', 's', 'SKILL.md');
+  fs.writeFileSync(file, 'edited');
+  const r = await sync.syncManaged({ ...f.args, run: makeGit('git-not-there') });
+  assert.equal(r.kind, 'error');
+  assert.match(r.message, /^cannot check the managed clone: git remote get-url origin failed/);
+  assert.ok(fs.existsSync(f.args.managedRepo));
+  assert.equal(fs.readFileSync(file, 'utf8'), 'edited');
+});
+
+test('a clone without origin is reported, not deleted', async (t) => {
+  if (!gitAvailable()) {
+    return t.skip('git is not available');
+  }
+  const f = setup(t);
+  await sync.syncManaged(f.args);
+  git(['remote', 'remove', 'origin'], f.args.managedRepo);
+  const r = await sync.syncManaged(f.args);
+  assert.equal(r.kind, 'error');
+  assert.match(r.message, /cannot check the managed clone/);
+  assert.ok(fs.existsSync(f.args.managedRepo));
+});
+
+test('a commit on a branch without upstream blocks the reclone', async (t) => {
+  if (!gitAvailable()) {
+    return t.skip('git is not available');
+  }
+  const f = setup(t);
+  await sync.syncManaged(f.args);
+  const clone = f.args.managedRepo;
+  git(['checkout', '-b', 'local'], clone);
+  writeFile(clone, 'p/mine.txt', 'mine');
+  git(['add', '-A'], clone);
+  git([...IDENTITY, 'commit', '-m', 'mine'], clone);
+  const other = makeOrigin(f.root, 'other');
+  const r = await sync.syncManaged({ ...f.args, repoUrl: other.origin });
+  assert.equal(r.kind, 'error');
+  assert.match(r.message, /has local changes/);
+  assert.ok(fs.existsSync(clone));
+  assert.equal(git(['rev-parse', '--abbrev-ref', 'HEAD'], clone), 'local');
+});
+
 test('sync lock: a fresh lock is busy, a stale one is replaced', async (t) => {
   if (!gitAvailable()) {
     return t.skip('git is not available');

@@ -12,7 +12,7 @@ Cursor picks the changes up live.
 Build the VSIX (see `AGENTS.md`) or take it from the team, then:
 
 ```
-cursor --install-extension dist/cursor-team-plugins-0.2.0.vsix
+cursor --install-extension dist/cursor-team-plugins-0.2.1.vsix
 ```
 
 and reload the Cursor window. The extension has no dependency.
@@ -73,6 +73,9 @@ Ask the agent to change a team skill, as you would any file. Where the edit land
 - A fully enabled plugin is registered from the managed clone, so the agent edits the clone directly.
 - A partly enabled plugin is registered from a partial copy. The extension keeps that copy and the clone in step both
   ways (a file changed, added or deleted on one side is carried to the other), so the edit always reaches the clone.
+  If the same file changed on both sides since the last sync (a team update and an agent edit), nothing is overwritten:
+  the file shows in a **Conflicts** group at the top of the view, click it to compare the two versions, then choose
+  **Keep repository version** or **Keep copy version**.
 
 The edits show up in the view, in a **Local changes** group at the top (the number of files and of unpushed commits is
 next to its name). Click a file to see the diff, team version on the left and yours on the right.
@@ -120,8 +123,9 @@ picked up live, no sync is needed.
   plugin is registered from a partial copy (`.cursor/plugins/filtered/<name>-<hash>/<plugin folder>`: the folder is
   named by the plugin and the selection, and Cursor names an extension plugin after its folder, so the copy keeps the
   same name) that holds only the selected skills and rules. The copy and the clone are kept in sync both ways, with a
-  `.team-plugins-sync.json` record of the last sync next to the copy: a file changed after the last sync wins, new files and
-  deletions are carried over. Windows with the same selection share a copy; copies no window used for a week are
+  `.team-plugins-sync.json` record next to the copy (the content hash of each file at the last sync): a change on one side
+  only, new files and deletions included, is carried to the other side; a file changed on both sides is a conflict that
+  waits for your choice. Windows with the same selection share a copy; copies no window used for a week are
   deleted.
 - Several windows share one clone: a lock file serialises the git commands, and the other windows notice the new
   state through `sync-state.json`.
@@ -148,6 +152,7 @@ picked up live, no sync is needed.
 - The extension does not update itself: install the new VSIX by hand (`cursor --install-extension <file>`).
 - Resolving a real conflict inside the extension: updates pause, the files are named, and you can push your changes to
   a branch (to merge in your own clone) or discard them; the extension never merges by itself.
+- A conflict between a partial copy and the repository is not merged line by line: you keep one of the two versions.
 - Commit and push needs the managed clone: with `localRepoPath`, use your own git tools (the extension still copies
   partial-copy edits into the local clone).
 - The commit includes every change of the managed clone (`git add -A`); there is no per-file choice.
