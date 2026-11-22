@@ -165,3 +165,18 @@ test('a plugin knows its repository folder', (t) => {
   makePlugin(root, 'p', { name: 'p', skills: ['a'] });
   assert.equal(readCatalog(root).plugins[0].repoDir, path.resolve(root));
 });
+
+test('frontmatterDescription reads folded, literal and continued values', () => {
+  const d = frontmatterDescription;
+  assert.equal(d('---\ndescription: >\n  Folded line one\n  line two\n\n  para two\nname: x\n---\n'), 'Folded line one line two\npara two');
+  assert.equal(d('---\ndescription: |\n  Line one\n  Line two\nname: x\n---\n'), 'Line one\nLine two');
+  assert.equal(d('---\ndescription: >-\n  a\n  b\n---\n'), 'a b');
+  assert.equal(d('---\r\ndescription: |+\r\n    deep\r\n    lines\r\n---\r\n'), 'deep\nlines');
+  assert.equal(d('---\ndescription: plain start\n  continued here\nother: 1\n---\n'), 'plain start continued here');
+  assert.equal(d('---\ndescription: >\nname: y\n---\n'), '');
+  assert.equal(d('---\ndescription:\n  on the next line\n---\n'), 'on the next line');
+  assert.equal(d('---\ndescription: |\n  x\n---\ndescription: outside\n'), 'x');
+  // the single-line forms are unchanged
+  assert.equal(d("---\ndescription: 'Quoted'\n---\n"), 'Quoted');
+  assert.equal(d('---\ndescription: Does X.\nname: x\n---\n'), 'Does X.');
+});

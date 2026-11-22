@@ -213,3 +213,20 @@ test('pushToBranch refuses bad or taken branch names and has nothing to push on 
   r = await pushToBranch({ ...f.args, branch: 'team-plugins/clean' });
   assert.deepEqual(r, { kind: 'nothing' });
 });
+
+test('commitAndPush reports an old git', async (t) => {
+  if (!gitAvailable()) {
+    return t.skip('git is not available');
+  }
+  const f = await setup(t);
+  writeFile(f.clone, 'f.md', withLine(1, 'mine'));
+  f.teamPush('f.md', withLine(1, 'team'), 'team f');
+  const run = (args, cwd, timeoutMs, opts) =>
+    args[args.length - 1] === 'version'
+      ? Promise.resolve({ code: 0, stdout: 'git version 2.37.1', stderr: '' })
+      : f.run(args, cwd, timeoutMs, opts);
+  const r = await commitAndPush({ ...f.args, run });
+  assert.equal(r.kind, 'error');
+  assert.equal(r.step, 'conflicts');
+  assert.match(r.message, /git 2\.38 or later/);
+});

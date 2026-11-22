@@ -382,6 +382,7 @@ test('the same lines changed locally and by the team is a conflict that changes 
   assert.deepEqual(r.files, ['f.md']);
   assert.equal(r.behind, 1);
   assert.equal(r.head, head);
+  assert.equal(r.upstream, git(['rev-parse', 'HEAD'], f.work));
   assert.equal(git(['rev-parse', 'HEAD'], f.clone), head);
   assert.equal(f.read('f.md'), lines(1, 'local1'));
   assert.equal(stashes(f), '');
@@ -593,4 +594,66 @@ test('discard is busy while the lock is held', async (t) => {
   assert.equal(d.busy, true);
   assert.equal(typeof d.message, 'string');
   assert.equal(f.read('a.md'), 'local\n');
+});
+
+// run that answers `git version` with `text` (the real run for everything else)
+function withGitVersion(run, text) {
+  return (args, cwd, timeoutMs, opts) =>
+    args[args.length - 1] === 'version' ? Promise.resolve({ code: 0, stdout: text, stderr: '' }) : run(args, cwd, timeoutMs, opts);
+}
+
+test('a new team commit changes the conflict upstream', async (t) => {
+  if (!gitAvailable()) {
+    return t.skip('git is not available');
+  }
+  const f = await setupFiles(t);
+  writeFile(f.clone, 'f.md', lines(1, 'local1'));
+  pushCommit(f.work, 'f.md', lines(1, 'team1'), 'team f');
+  const first = await sync.syncManaged(f.args);
+  assert.equal(first.kind, 'conflict');
+  pushCommit(f.work, 'other.md', 'x\n', 'team other');
+  const second = await sync.syncManaged(f.args);
+  assert.equal(second.kind, 'conflict');
+  assert.equal(second.head, first.head);
+  assert.notEqual(second.upstream, first.upstream);
+  assert.equal(second.upstream, git(['rev-parse', 'HEAD'], f.work));
+});
+
+test('gitVersionOf', () => {
+  assert.deepEqual(sync.gitVersionOf('git version 2.47.0.windows.1'), [2, 47, 0]);
+  assert.deepEqual(sync.gitVersionOf('git version 2.38'), [2, 38, 0]);
+  assert.deepEqual(sync.gitVersionOf('git version 1.9.5'), [1, 9, 5]);
+  assert.equal(sync.gitVersionOf('nope'), null);
+});
+
+test('an old git is reported before an update', async (t) => {
+  if (!gitAvailable()) {
+    return t.skip('git is not available');
+  }
+  const f = await setupFiles(t);
+  const head = git(['rev-parse', 'HEAD'], f.clone);
+  pushCommit(f.work, 'other.md', 'x\n', 'team other');
+  const old = await sync.syncManaged({ ...f.args, run: withGitVersion(f.args.run, 'git version 2.37.1') });
+  assert.equal(old.kind, 'error');
+  assert.match(old.message, /git 2\.38 or later/);
+  assert.match(old.message, /2\.37\.1/);
+  assert.equal(git(['rev-parse', 'HEAD'], f.clone), head);
+  const ok = await sync.syncManaged({ ...f.args, run: withGitVersion(f.args.run, 'git version 2.38.0') });
+  assert.equal(ok.kind, 'updated');
+});
+
+test('recentlySynced', () => {
+  const now = Date.parse('2026-01-01T12:00:00Z');
+  const min = 60000;
+  const at = (offset) => new Date(now + offset).toISOString();
+  const every = 60 * min;
+  assert.equal(sync.recentlySynced(null, every, now), false);
+  assert.equal(sync.recentlySynced({ kind: 'upToDate', at: at(-10 * min) }, every, now), true);
+  assert.equal(sync.recentlySynced({ kind: 'upToDate', at: at(-40 * min) }, every, now), false);
+  assert.equal(sync.recentlySynced({ kind: 'conflict', at: at(-1 * min) }, every, now), true);
+  assert.equal(sync.recentlySynced({ kind: 'error', at: at(-1 * min) }, every, now), false);
+  assert.equal(sync.recentlySynced({ kind: 'busy', at: at(-1 * min) }, every, now), false);
+  assert.equal(sync.recentlySynced({ kind: 'upToDate', at: at(5 * min) }, every, now), false);
+  assert.equal(sync.recentlySynced({ kind: 'upToDate', at: 'x' }, every, now), false);
+  assert.equal(sync.recentlySynced({ kind: 'upToDate' }, every, now), false);
 });

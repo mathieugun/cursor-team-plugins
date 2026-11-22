@@ -1,6 +1,6 @@
 # cursor-team-plugins: developer notes
 
-Cursor (VS Code) extension, version in `package.json` (0.2.2). Plain JavaScript, CommonJS, no npm dependency, no
+Cursor (VS Code) extension, version in `package.json` (0.2.3). Plain JavaScript, CommonJS, no npm dependency, no
 build step. User documentation: `README.md`.
 
 ## Layout
@@ -9,14 +9,17 @@ build step. User documentation: `README.md`.
   watchers). Not covered by the tests: check its syntax with the command below.
 - `lib/`: pure logic, never requires `vscode`, tested with node: `catalog` (read the team repo), `selection`
   (selection model), `treeModel` (`buildTree`, `buildChangesNode`, `buildConflictsNode`), `materialize` (`holderName`,
-  `copyRootOf`, `syncCopy`, `markCopySynced`, `resolveConflict`: partial plugin copies kept in sync both ways), `git`,
-  `sync` (managed clone: `syncManaged`, `localChanges`, `checkConflicts`, `parseStatusZ`, `discardLocalChanges`,
-  `withLock`, `withLockSync`, `removeStaleIndexLock`, `removeLeftovers`), `contribute` (`commitAndPush`,
-  `pushToBranch`, `defaultBranchName`), `cursorApi`, `registrar`.
-- `scripts/`: `test.js` (test runner), `zip.js` + `package.js` (VSIX writer), `make_icon.py` (regenerates `resources/icon.png`: three stacked package boxes on a blue rounded square, drawn from no source image: `uv run --with pillow python scripts/make_icon.py`; not packaged). Nothing under `lib/` or `scripts/`
+  `copyRootOf`, `syncCopy`, `markCopySynced`, `resolveConflict`, `hashCache`: partial plugin copies kept in sync both
+  ways), `git`, `sync` (managed clone: `syncManaged`, `localChanges`, `checkConflicts`, `gitVersionOf`, `parseStatusZ`,
+  `discardLocalChanges`, `withLock`, `withLockSync`, `removeStaleIndexLock`, `removeLeftovers`, `recentlySynced`),
+  `contribute` (`commitAndPush`, `pushToBranch`, `defaultBranchName`), `cursorApi`, `registrar`.
+- `scripts/`: `test.js` (test runner), `zip.js` + `package.js` (VSIX writer), `make-test-repo.js` (bare test team
+  repository for live tests, from `test/fixtures/team-repo`), `make_icon.py` (regenerates `resources/icon.png`: three stacked package boxes on a blue rounded square, drawn from no source image: `uv run --with pillow python scripts/make_icon.py`; not packaged). Nothing under `lib/` or `scripts/`
   may require `vscode`.
 - `test/`: one test file per module (`*.test.js`, `node:test`), `helpers.js` for fixtures. Tests use only local bare
-  git repositories, no network.
+  git repositories, no network. `fixtures/team-repo/` is the test team repository (plugins `review`: skills
+  `code-review`, `security-check`, rule `style.mdc`; `docs`: skill `write-readme`, with a folded description);
+  `make-test-repo.test.js` checks its catalog, so change the two together.
 
 ## Commands
 
@@ -27,6 +30,7 @@ from the repository root):
 ELECTRON_RUN_AS_NODE=1 "$LOCALAPPDATA/Programs/cursor/Cursor.exe" scripts/test.js
 ELECTRON_RUN_AS_NODE=1 "$LOCALAPPDATA/Programs/cursor/Cursor.exe" scripts/package.js
 ELECTRON_RUN_AS_NODE=1 "$LOCALAPPDATA/Programs/cursor/Cursor.exe" --check extension.js
+ELECTRON_RUN_AS_NODE=1 "$LOCALAPPDATA/Programs/cursor/Cursor.exe" scripts/make-test-repo.js <target.git>
 ```
 
 The VSIX is written to `dist/cursor-team-plugins-<version>.vsix`. The runner passes explicit test files to
@@ -73,6 +77,17 @@ The VSIX is written to `dist/cursor-team-plugins-<version>.vsix`. The runner pas
 - Links (symlinks, junctions) in a plugin: `listFiles` follows them only inside the repository; a junction reads as
   `isSymbolicLink()`, never `isDirectory()`.
 - `fs.rmSync` fails with EPERM on git's read-only files with Cursor's runtime on Windows: use `sync.removeTree`.
+- Partial-copy hashes are cached per window (`hashCache`, by full path): the key holds size, mtime, ctime, birthtime and
+  ino because a copy keeps the source's mtime and ctime on Windows; a file changed less than 2 s ago is never cached
+  (two writes in one clock tick share their timestamps); the module's own writes and deletions drop their entry.
+- A path of the copy under a skill or rule left out of the selection never reaches the clone: deleted from the copy when
+  unchanged since the last sync, otherwise left there and reported.
+- Tree ids are `plugin:<name>` and `item:<id>` (a plugin named `changes` would collide with a built-in node); the
+  selection id is the node's `key`.
+- `merge-tree --write-tree` needs git 2.38: `checkConflicts` checks `git version` first.
+- Timed syncs are skipped when `sync-state.json` records another window's sync younger than half the interval
+  (`recentlySynced`); every window touches its registered copies every hour so another window's 7-day cleanup never
+  removes them.
 
 ## Rules
 

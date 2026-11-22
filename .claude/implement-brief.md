@@ -24,7 +24,10 @@ README.md (users, authors, limits), AGENTS.md, `package.json` version and `contr
 Needs the user's OK (it changes the Cursor they use): package
 (`ELECTRON_RUN_AS_NODE=1 "$LOCALAPPDATA/Programs/cursor/Cursor.exe" scripts/package.js`), then
 `cursor --install-extension dist/cursor-team-plugins-<version>.vsix` and a window reload; check the Cursor Plugins
-log and the Team Plugins view. A local bare repo in the scratchpad can stand in for the team repository.
+log and the Team Plugins view. The team repository is the fixture: build it with
+`scripts/make-test-repo.js <scratchpad>/team-plugins.git` (plugins `review` and `docs`) and point `teamPlugins.repoUrl`
+at the path it prints (a URL change switches the managed clone in place). Test names stay generic: no company or
+team names in fixtures, settings or test data.
 
 ## Don't
 Never install the extension or launch Cursor windows without the user asking (probe windows for checking

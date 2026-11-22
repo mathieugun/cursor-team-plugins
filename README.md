@@ -12,7 +12,7 @@ Cursor picks the changes up live.
 Build the VSIX (see `AGENTS.md`) or take it from the team, then:
 
 ```
-cursor --install-extension dist/cursor-team-plugins-0.2.2.vsix
+cursor --install-extension dist/cursor-team-plugins-0.2.3.vsix
 ```
 
 and reload the Cursor window. The extension has no dependency.
@@ -22,7 +22,9 @@ and reload the Cursor window. The extension has no dependency.
 1. In Cursor, remove the old local marketplace import of the team repository (a plugin with the same name installed
    from a marketplace conflicts with the one this extension registers).
 2. Make sure `git clone <team repository url>` works in a terminal: the extension uses your own git credentials
-   (credential manager or SSH agent) and never asks for a password.
+   (credential manager or SSH agent) and never asks for a password. Git 2.38 or later is needed: the extension finds
+   conflicts with `git merge-tree --write-tree` before an update, and an older git makes every update fail with a
+   message saying so.
 3. Open the **Team Plugins** view (activity bar) and choose **Set repository URL**, or set
    `teamPlugins.repoUrl` in the settings. The repository is cloned in the background.
 
@@ -100,8 +102,9 @@ the edits made in partial copies into your clone.
 
 The managed clone is checked at startup, every `teamPlugins.updateIntervalMinutes` (default 60, minimum 5; 0 means
 only at startup) and with **Sync now**. The team's new commits are rebased under your local changes, which are
-kept (the notification says so). After an update, start a new chat to use the changes. **What changed** in the
-notification lists the new commits in the log.
+kept (the notification says so). With several windows open, only one fetches per interval (a timed update is skipped
+when another window synced less than half an interval ago). After an update, start a new chat to use the changes.
+**What changed** in the notification lists the new commits in the log.
 
 Updates pause only on a real conflict (see "Changing a team skill"). **Discard local changes** (or the command "Discard
 local changes in the managed clone") asks for a confirmation that lists the files and commits it deletes. If the
@@ -127,13 +130,19 @@ picked up live, no sync is needed.
   `.team-plugins-sync.json` record next to the copy (the content hash of each file at the last sync): a change on one side
   only, new files and deletions included, is carried to the other side; a file changed on both sides is a conflict that
   waits for your choice. A symlink or junction in a plugin is copied as its content when it points inside the
-  repository; one that points outside, is broken or loops is left out of the partial copy (see the log). A copy sync
-  that meets a locked file is retried every 2 seconds for a minute. Windows with the same selection share a copy;
-  copies no window used for a week are deleted.
+  repository; one that points outside, is broken or loops is left out of the partial copy (see the log). A file an
+  agent creates in a copy at the path of a skill or rule that is not selected is never copied to the repository (it
+  stays in the copy, see the log). A sync reads a file again only when its size or timestamps changed. A copy sync
+  that meets a locked file is retried every 2 seconds for a minute. Windows with the same selection share a copy; every
+  open window marks the copies it uses every hour, and copies no window used for a week are deleted. The copy's folder
+  name is the plugin name with characters other than letters, digits, `.`, `_` and `-` replaced by `_` (the plugin's
+  own folder name, which Cursor uses, is unchanged).
 - Several windows share one clone: a lock file serialises every operation that changes it (sync, commit and push, push
-  to a branch, discard, partial-copy syncs), and the other windows notice the new state through `sync-state.json`. A
-  first clone may take up to 30 minutes, a fetch 5. A `.git/index.lock` older than a minute (left by a killed git) is
-  removed before the next operation, and leftover `repo.tmp-*` folders of a failed clone at the next sync.
+  to a branch, discard, partial-copy syncs), and the other windows notice the new state through `sync-state.json`. An
+  edit in the managed clone (another window's partial copy, or by hand) reaches this window's partial copies and view
+  within a second. A first clone may take up to 30 minutes, a fetch 5. A `.git/index.lock` older than a minute (left by
+  a killed git) is removed before the next operation, and leftover `repo.tmp-*` folders of a failed clone at the next
+  sync.
 
 ## Troubleshooting
 
@@ -142,6 +151,7 @@ picked up live, no sync is needed.
 - The status bar item (`Team <count>`) shows how many plugins this window registered; its tooltip lists them, the last
   commit and the last sync state. A warning icon means a paused update, a failed sync or a failed registration.
 - "vscode.cursor.plugins is missing": this Cursor is too old for extension plugins; update Cursor.
+- A background sync error is shown once, and again only after a sync succeeded (Sync now always shows it).
 
 ## Limits
 
@@ -166,6 +176,9 @@ picked up live, no sync is needed.
   (harmless).
 - Switching the managed clone to an empty repository (no branch yet) is an error.
 - A symlink or junction created inside a partial copy is left out of the sync (see the log), never followed.
+- A frontmatter description written as a quoted string over several lines shows only as written on the first line.
+- After the window that did the timed fetches closes, the next timed update in another window can be up to half an
+  interval late.
 
 ## License
 

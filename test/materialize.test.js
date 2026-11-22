@@ -6,7 +6,15 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { readCatalog } = require('../lib/catalog');
-const { holderName, copyRootOf, syncCopy, markCopySynced, resolveConflict, gcFiltered } = require('../lib/materialize');
+const {
+  holderName,
+  copyRootOf,
+  syncCopy,
+  markCopySynced,
+  resolveConflict,
+  gcFiltered,
+  hashCache,
+} = require('../lib/materialize');
 const { removeTree } = require('../lib/sync');
 const { tmpDir, rmDir, writeFile, makePlugin } = require('./helpers');
 
@@ -418,4 +426,130 @@ test('copyRootOf is the copy root that syncCopy returns', (t) => {
   const f = setup(t);
   const holder = holderFor(f, IDS);
   assert.equal(copyRootOf(f.plugin, holder), syncCopy(f.plugin, IDS, holder).copyRoot);
+});
+
+const NOT_SELECTED = 'not in the selection: never copied to the repository';
+
+test('a file at an excluded path in the copy never reaches the repository', (t) => {
+  const f = setupCopy(t);
+  const original = {
+    b: fs.readFileSync(f.src('skills/b/SKILL.md'), 'utf8'),
+    y: fs.readFileSync(f.src('rules/y.mdc'), 'utf8'),
+  };
+  fs.mkdirSync(path.dirname(f.cp('skills/b/SKILL.md')), { recursive: true });
+  fs.writeFileSync(f.cp('skills/b/SKILL.md'), 'AGENT');
+  fs.writeFileSync(f.cp('rules/y.mdc'), 'AGENT RULE');
+  for (let i = 0; i < 2; i++) {
+    const r = syncCopy(f.plugin, f.ids, f.holder);
+    assert.deepEqual(r.actions, []);
+    assert.deepEqual(r.conflicts, []);
+    assert.equal(fs.readFileSync(f.src('skills/b/SKILL.md'), 'utf8'), original.b);
+    assert.equal(fs.readFileSync(f.src('rules/y.mdc'), 'utf8'), original.y);
+    assert.equal(fs.readFileSync(f.cp('skills/b/SKILL.md'), 'utf8'), 'AGENT');
+    assert.equal(fs.readFileSync(f.cp('rules/y.mdc'), 'utf8'), 'AGENT RULE');
+    assert.ok(r.skipped.some((s) => s.rel === 'rules/y.mdc' && s.reason === NOT_SELECTED));
+    assert.ok(r.skipped.some((s) => s.rel === 'skills/b/SKILL.md' && s.reason === NOT_SELECTED));
+    assert.ok(!('skills/b/SKILL.md' in f.manifest().files));
+    assert.ok(!('rules/y.mdc' in f.manifest().files));
+  }
+});
+
+test('a new skill of the copy goes to the repository, then leaves the copy when it is not selected', (t) => {
+  const f = setupCopy(t);
+  fs.mkdirSync(path.dirname(f.cp('skills/c/SKILL.md')), { recursive: true });
+  fs.writeFileSync(f.cp('skills/c/SKILL.md'), '---\ndescription: C\n---\n');
+  assert.deepEqual(syncCopy(f.plugin, f.ids, f.holder).actions, [{ action: 'toSource', rel: 'skills/c/SKILL.md' }]);
+  const plugin = readCatalog(path.join(f.root, 'repo')).plugins[0];
+  assert.ok(plugin.children.some((c) => c.id === 'p/skills/c'));
+  assert.deepEqual(syncCopy(plugin, f.ids, f.holder).actions, [{ action: 'deletedInCopy', rel: 'skills/c/SKILL.md' }]);
+  assert.ok(fs.existsSync(f.src('skills/c/SKILL.md')));
+  assert.ok(!fs.existsSync(f.cp('skills/c/SKILL.md')));
+});
+
+test('a new skill of the copy edited after the sync stays in the copy when it is not selected', (t) => {
+  const f = setupCopy(t);
+  fs.mkdirSync(path.dirname(f.cp('skills/c/SKILL.md')), { recursive: true });
+  fs.writeFileSync(f.cp('skills/c/SKILL.md'), '---\ndescription: C\n---\n');
+  syncCopy(f.plugin, f.ids, f.holder);
+  fs.writeFileSync(f.cp('skills/c/SKILL.md'), 'EDIT2');
+  const plugin = readCatalog(path.join(f.root, 'repo')).plugins[0];
+  const r = syncCopy(plugin, f.ids, f.holder);
+  assert.deepEqual(r.actions, []);
+  assert.equal(fs.readFileSync(f.src('skills/c/SKILL.md'), 'utf8'), '---\ndescription: C\n---\n');
+  assert.equal(fs.readFileSync(f.cp('skills/c/SKILL.md'), 'utf8'), 'EDIT2');
+  assert.ok(r.skipped.some((s) => s.rel === 'skills/c/SKILL.md' && s.reason === NOT_SELECTED));
+});
+
+test('holderName makes a safe folder name', (t) => {
+  const { root, plugin } = setup(t);
+  const ids = ['p/skills/a'];
+  const filtered = path.join(root, 'filtered');
+  assert.match(holderName({ ...plugin, name: 'a/b:c\\..' }, ids), /^a_b_c_\.\.-[0-9a-f]{12}$/);
+  const evil = holderName({ ...plugin, name: '../../evil' }, ids);
+  assert.match(evil, /^\.\._\.\._evil-[0-9a-f]{12}$/);
+  assert.equal(path.dirname(path.join(filtered, evil)), filtered);
+  const long = holderName({ ...plugin, name: 'x'.repeat(200) }, ids);
+  assert.equal(long.slice(0, long.lastIndexOf('-')).length, 64);
+  assert.notEqual(holderName({ ...plugin, name: 'a/b' }, ids), holderName({ ...plugin, name: 'a:b' }, ids));
+});
+
+test('a plugin name with path characters gets a working copy', (t) => {
+  const root = tmpDir();
+  t.after(() => rmDir(root));
+  const repo = path.join(root, 'repo');
+  makePlugin(repo, 'p', { name: 'team:review/x', skills: ['a', 'b'] });
+  const plugin = readCatalog(repo).plugins[0];
+  const ids = ['team:review/x/skills/a'];
+  const holder = path.join(root, 'filtered', holderName(plugin, ids));
+  const r = syncCopy(plugin, ids, holder);
+  assert.ok(fs.existsSync(r.copyRoot));
+  assert.equal(path.dirname(holder), path.join(root, 'filtered'));
+  assert.ok(fs.existsSync(path.join(r.copyRoot, 'skills/a/SKILL.md')));
+  assert.ok(!fs.existsSync(path.join(r.copyRoot, 'skills/b')));
+});
+
+function cacheAll(t) {
+  hashCache.racyMs = -Infinity;
+  t.after(() => {
+    hashCache.racyMs = 2000;
+    hashCache.entries.clear();
+  });
+}
+
+test('unchanged files are not read again', (t) => {
+  cacheAll(t);
+  const f = setupCopy(t);
+  syncCopy(f.plugin, f.ids, f.holder);
+  const real = fs.readFileSync;
+  let reads = 0;
+  fs.readFileSync = (p, ...rest) => {
+    if (!String(p).endsWith('.team-plugins-sync.json')) {
+      reads++;
+    }
+    return real(p, ...rest);
+  };
+  try {
+    assert.deepEqual(syncCopy(f.plugin, f.ids, f.holder).actions, []);
+  } finally {
+    fs.readFileSync = real;
+  }
+  assert.equal(reads, 0);
+  fs.writeFileSync(f.cp(SKILL_A), 'a longer edit by the agent');
+  assert.deepEqual(syncCopy(f.plugin, f.ids, f.holder).actions, [{ action: 'toSource', rel: SKILL_A }]);
+});
+
+test('a file changed in the last 2 seconds is not cached', (t) => {
+  hashCache.entries.clear();
+  t.after(() => hashCache.entries.clear());
+  setupCopy(t);
+  assert.equal(hashCache.entries.size, 0);
+});
+
+test("the sync's own writes are forgotten", (t) => {
+  cacheAll(t);
+  const f = setupCopy(t);
+  syncCopy(f.plugin, f.ids, f.holder);
+  fs.writeFileSync(f.src(SKILL_A), 'team edit');
+  assert.deepEqual(syncCopy(f.plugin, f.ids, f.holder).actions, [{ action: 'toCopy', rel: SKILL_A }]);
+  assert.equal(hashCache.entries.has(path.resolve(f.cp(SKILL_A))), false);
 });

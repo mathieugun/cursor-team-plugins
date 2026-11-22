@@ -1,0 +1,5 @@
+---
+description: Team code style for the live test.
+alwaysApply: false
+---
+Prefer small functions and explicit names.

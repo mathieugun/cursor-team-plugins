@@ -27,6 +27,13 @@ test('tree nodes', () => {
   const eff = effective(catalog, { enabled: ['P1'], excluded: ['P1/skills/s1'] }, project);
   const [p1, p2, p3] = buildTree(catalog, eff, project);
 
+  // the node id is for the tree, the key is the selection id (a plugin named like a built-in node can't collide)
+  assert.equal(p1.id, 'plugin:P1');
+  assert.equal(p1.key, 'P1');
+  assert.equal(p1.children[0].id, 'item:P1/skills/s1');
+  assert.equal(p1.children[0].key, 'P1/skills/s1');
+  assert.equal(p2.id, 'plugin:P2');
+  assert.equal(p2.children[0].key, 'P2/skills/s3');
   assert.equal(p1.checked, false);
   assert.equal(p1.description, 'v1.0.0 · 2/3');
   assert.equal(p1.contextValue, 'plugin');
@@ -68,6 +75,45 @@ test('buildChangesNode', () => {
   assert.equal(onlyCommits.children.length, 0);
   assert.equal(buildChangesNode({ files: [], ahead: 0 }), null);
   assert.equal(buildChangesNode(null), null);
+});
+
+test('plugin ids never collide with the built-in nodes', () => {
+  const names = ['changes', 'conflicts', 'sync-error'];
+  const cat = {
+    plugins: names.map((name) => ({
+      name,
+      displayName: name,
+      version: '',
+      description: '',
+      dir: `/repo/${name}`,
+      children: [child(`${name}/skills/s`, 'skill')],
+    })),
+    warnings: [],
+  };
+  const tree = buildTree(cat, effective(cat, { enabled: [], excluded: [] }, []), []);
+  const changesNode = buildChangesNode({ files: [{ path: 'a', status: 'modified' }], ahead: 0 });
+  const conflictsNode = buildConflictsNode([{ plugin: 'changes', rel: 'x', source: '/s', copy: '/c', holder: 'H' }]);
+  const top = [changesNode, conflictsNode, ...tree];
+  const ids = [...top, ...top.flatMap((n) => n.children)].map((n) => n.id);
+  assert.equal(new Set(ids).size, ids.length);
+  for (const n of tree) {
+    assert.ok(!['changes', 'conflicts', 'sync-error'].includes(n.id));
+    assert.equal(n.id, `plugin:${n.key}`);
+  }
+});
+
+test('a renamed change keeps its old path', () => {
+  const node = buildChangesNode({
+    files: [
+      { path: 'skills/new.md', status: 'renamed', from: 'skills/old.md' },
+      { path: 'a.md', status: 'modified' },
+    ],
+    ahead: 0,
+  });
+  assert.equal(node.children[0].from, 'skills/old.md');
+  assert.equal(node.children[0].tooltip, 'skills/old.md \u2192 skills/new.md');
+  assert.ok(!('from' in node.children[1]));
+  assert.equal(node.children[1].tooltip, 'a.md');
 });
 
 test('buildConflictsNode', () => {

@@ -43,7 +43,6 @@ let partialCopies = new Map(); // plugin name -> { plugin, ids, holder, copyRoot
 let copyConflicts = []; // the conflicts of all partial copies, as given to buildConflictsNode
 let copyWatcher = null;
 let copyDebounce = null;
-let changesDebounce = null;
 let copyRetryTimer = null;
 let copyRetries = 0;
 let checkboxChain = Promise.resolve();
@@ -207,6 +206,9 @@ async function doRefresh(doSync, userInitiated) {
 }
 
 function notifyAfterSync(result, { hadClone, userInitiated, run, repoDir }) {
+  if (result.kind !== 'error' && result.kind !== 'busy') {
+    errorShown = false; // a recovery re-arms the error notice
+  }
   const ask = (kind, message, ...buttons) => vscode.window[kind](message, ...buttons);
   switch (result.kind) {
     case 'cloned':
@@ -238,7 +240,7 @@ function notifyAfterSync(result, { hadClone, userInitiated, run, repoDir }) {
       });
       break;
     case 'conflict': {
-      const key = `conflict:${result.head}`;
+      const key = `conflict:${result.head}|${result.upstream || ''}|${result.files.join(',')}`;
       if (conflictShown.has(key)) {
         break;
       }
@@ -277,9 +279,11 @@ function notifyAfterSync(result, { hadClone, userInitiated, run, repoDir }) {
   }
 }
 
-// Filtered copies are shared by windows with the same selection; each window touches the ones it registered at each
-// apply, and copies nobody touched for a week are removed.
+// Filtered copies are shared by windows with the same selection; every window touches the copies it registered at each
+// apply and every hour, and copies nobody touched for a week are removed.
 const FILTERED_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const KEEP_ALIVE_MS = 60 * 60 * 1000;
+let keepAliveTimer = null;
 
 // The folders directly under filteredRoot that hold the registered filtered copies (<name>-<hash>/<plugin folder>).
 function filteredHolders(filteredRoot, registeredPaths) {
@@ -783,7 +787,7 @@ async function onCheckboxChange(e) {
       continue;
     }
     const checked = state === vscode.TreeItemCheckboxState.Checked;
-    user = selection.toggle(catalog, user, node.id, checked);
+    user = selection.toggle(catalog, user, node.key, checked);
     if (!checked) {
       unchecked.push(node);
     }
@@ -797,17 +801,17 @@ async function onCheckboxChange(e) {
   }
   treeProvider.refresh();
   for (const node of unchecked) {
-    const owner = catalog.plugins.find((p) => p.name === node.id || p.children.some((c) => c.id === node.id));
+    const owner = catalog.plugins.find((p) => p.name === node.key || p.children.some((c) => c.id === node.key));
     const info = owner && eff.get(owner.name);
     if (!info) {
       continue;
     }
     const stays =
-      node.kind === 'plugin' ? info.projectPlugin || info.fromProject.size > 0 : info.fromProject.has(node.id);
-    if (!stays || projectNoticeShown.has(node.id)) {
+      node.kind === 'plugin' ? info.projectPlugin || info.fromProject.size > 0 : info.fromProject.has(node.key);
+    if (!stays || projectNoticeShown.has(node.key)) {
       continue;
     }
-    projectNoticeShown.add(node.id);
+    projectNoticeShown.add(node.key);
     vscode.window
       .showInformationMessage(
         `"${node.label}" stays enabled: this project requires it (teamPlugins.projectPlugins in .vscode/settings.json).`,
@@ -842,7 +846,7 @@ async function addToProjectCommand(node) {
   const list = stringList(inspected && inspected.workspaceFolderValue);
   await config.update(
     'projectPlugins',
-    selection.addToProject(catalog, list, node.id),
+    selection.addToProject(catalog, list, node.key),
     vscode.ConfigurationTarget.WorkspaceFolder,
   );
 }
@@ -854,7 +858,7 @@ async function removeFromProjectCommand(node) {
     const inspected = config.inspect('projectPlugins');
     if (inspected && Array.isArray(inspected.workspaceFolderValue)) {
       const list = stringList(inspected.workspaceFolderValue);
-      const next = selection.removeFromProject(catalog, list, node.id);
+      const next = selection.removeFromProject(catalog, list, node.key);
       if (!same(list, next)) {
         await config.update('projectPlugins', next, vscode.ConfigurationTarget.WorkspaceFolder);
       }
@@ -864,7 +868,7 @@ async function removeFromProjectCommand(node) {
   const inspected = config.inspect('projectPlugins');
   if (inspected && Array.isArray(inspected.workspaceValue)) {
     const list = stringList(inspected.workspaceValue);
-    const next = selection.removeFromProject(catalog, list, node.id);
+    const next = selection.removeFromProject(catalog, list, node.key);
     if (!same(list, next)) {
       await config.update('projectPlugins', next, vscode.ConfigurationTarget.Workspace);
     }
@@ -887,7 +891,23 @@ function startTimer() {
     return;
   }
   const minutes = Math.max(5, m.intervalMinutes);
-  timer = setInterval(() => refresh({ sync: true }), minutes * 60000);
+  timer = setInterval(() => timedSync(minutes * 60000), minutes * 60000);
+}
+
+// A timed sync is skipped when another window synced less than half an interval ago (one fetch per interval, not one
+// per window); the other window's state write reaches this window through the sync-state.json watcher.
+function timedSync(intervalMs) {
+  let state = null;
+  try {
+    state = JSON.parse(fs.readFileSync(paths().stateFile, 'utf8'));
+  } catch {
+    // none yet
+  }
+  if (sync.recentlySynced(state, intervalMs)) {
+    log(`timed sync skipped: another window synced at ${state.at}`);
+    return;
+  }
+  refresh({ sync: true });
 }
 
 function debouncedApply() {
@@ -913,10 +933,6 @@ function stopWatchers() {
   if (debounceTimer) {
     clearTimeout(debounceTimer);
     debounceTimer = null;
-  }
-  if (changesDebounce) {
-    clearTimeout(changesDebounce);
-    changesDebounce = null;
   }
 }
 
@@ -949,7 +965,8 @@ function startWatchers() {
     w.onDidChange(onState);
     watchers.push(w);
 
-    // an edit inside the managed clone (an agent's, or one copied from a partial plugin) changes Local changes
+    // an edit inside the managed clone (an agent's, another window's partial copy, a direct edit) reaches this window's
+    // catalog, partial copies and Local changes
     const c = vscode.workspace.createFileSystemWatcher(
       new vscode.RelativePattern(vscode.Uri.file(m.repoDir), '**/*'),
     );
@@ -957,13 +974,7 @@ function startWatchers() {
       if (isGitPath(uri.fsPath)) {
         return;
       }
-      if (changesDebounce) {
-        clearTimeout(changesDebounce);
-      }
-      changesDebounce = setTimeout(() => {
-        changesDebounce = null;
-        refreshChanges().catch((err) => log(`cannot read the local changes: ${err.message}`));
-      }, 1000);
+      debouncedApply();
     };
     c.onDidCreate(onClone);
     c.onDidChange(onClone);
@@ -1117,7 +1128,7 @@ async function openChangeCommand(node) {
     return;
   }
   const isNew = node.status === 'added' || node.status === 'untracked';
-  const left = gitUri(m.repoDir, isNew ? '' : 'HEAD', node.path);
+  const left = gitUri(m.repoDir, isNew ? '' : 'HEAD', node.from || node.path);
   const right =
     node.status === 'deleted' ? gitUri(m.repoDir, '', node.path) : vscode.Uri.file(path.join(m.repoDir, node.path));
   await vscode.commands.executeCommand('vscode.diff', left, right, `${path.basename(node.path)} (team \u2194 yours)`);
@@ -1418,11 +1429,17 @@ function activate(context) {
   startWatchers();
   if (registrar) {
     startCopyWatcher();
+    keepAliveTimer = setInterval(
+      () => touchFiltered(filteredHolders(paths().filteredRoot, [...registrar.current.values()])),
+      KEEP_ALIVE_MS,
+    );
   }
 }
 
 async function deactivate() {
   stopTimer();
+  clearInterval(keepAliveTimer);
+  keepAliveTimer = null;
   stopWatchers();
   stopCopyWatcher();
   if (registrar) {

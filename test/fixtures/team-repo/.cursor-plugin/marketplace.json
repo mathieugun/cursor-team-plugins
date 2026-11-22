@@ -1,0 +1,7 @@
+{
+  "name": "team-test",
+  "plugins": [
+    { "name": "review", "source": "./review", "description": "Review helpers (test)" },
+    { "name": "docs", "source": "./docs", "description": "Documentation helpers (test)" }
+  ]
+}
