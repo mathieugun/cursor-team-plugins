@@ -2,7 +2,7 @@
   "name": "cursor-team-plugins",
   "displayName": "Team plugins",
   "description": "Keeps a team's Cursor plugins (rules and skills) in sync with the team git repository and registers the ones each user and project selected.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "mg",
   "author": "Mathieu Gunther",
   "license": "MIT",
@@ -124,6 +124,23 @@
         "category": "Team Plugins"
       },
       {
+        "command": "teamPlugins.commitAndPush",
+        "title": "Commit and push local changes",
+        "category": "Team Plugins",
+        "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "teamPlugins.pushToBranch",
+        "title": "Push local changes to a branch",
+        "category": "Team Plugins",
+        "icon": "$(git-branch)"
+      },
+      {
+        "command": "teamPlugins.openChange",
+        "title": "Open changes",
+        "category": "Team Plugins"
+      },
+      {
         "command": "teamPlugins.discardLocalChanges",
         "title": "Discard local changes in the managed clone",
         "category": "Team Plugins"
@@ -131,6 +148,11 @@
     ],
     "menus": {
       "view/title": [
+        {
+          "command": "teamPlugins.commitAndPush",
+          "when": "view == teamPlugins.plugins && teamPlugins.hasChanges",
+          "group": "navigation@0"
+        },
         {
           "command": "teamPlugins.syncNow",
           "when": "view == teamPlugins.plugins",
@@ -155,6 +177,26 @@
         {
           "command": "teamPlugins.removeFromProject",
           "when": "view == teamPlugins.plugins && viewItem =~ /\\.project$/"
+        },
+        {
+          "command": "teamPlugins.commitAndPush",
+          "when": "view == teamPlugins.plugins && viewItem == changes",
+          "group": "inline"
+        },
+        {
+          "command": "teamPlugins.commitAndPush",
+          "when": "view == teamPlugins.plugins && viewItem == changes",
+          "group": "1_changes@1"
+        },
+        {
+          "command": "teamPlugins.pushToBranch",
+          "when": "view == teamPlugins.plugins && viewItem == changes",
+          "group": "1_changes@2"
+        },
+        {
+          "command": "teamPlugins.discardLocalChanges",
+          "when": "view == teamPlugins.plugins && viewItem == changes",
+          "group": "1_changes@3"
         }
       ],
       "commandPalette": [
@@ -168,6 +210,10 @@
         },
         {
           "command": "teamPlugins.openItem",
+          "when": "false"
+        },
+        {
+          "command": "teamPlugins.openChange",
           "when": "false"
         }
       ]

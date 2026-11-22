@@ -37,5 +37,10 @@ assumptions are fine when the user asked for the assumptions to be tested).
 - `git reset --hard @{u}` resets to the upstream as of the last fetch: a test expecting `updated` afterwards needs a
   new remote commit.
 
+- Partial copies sync both ways: any operation that resets the managed clone (discard, push to a branch) must also
+  reset the copies (`resetPartialCopies` → `markCopySynced`), or their newer edits flow back into the clone.
+- On Windows a folder Cursor watches (a registered plugin) cannot be deleted: EPERM, and it is left half-deleted and
+  unreadable. Update registered folders in place; delete only unregistered ones.
+
 ## Implementer lessons
 <!-- One line per project-specific mistake seen in review. -->

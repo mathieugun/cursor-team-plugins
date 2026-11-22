@@ -5,10 +5,11 @@ const fs = require('fs');
 const path = require('path');
 const { readCatalog } = require('./lib/catalog');
 const selection = require('./lib/selection');
-const { buildTree } = require('./lib/treeModel');
-const { filteredDirName, materialize, gcFiltered } = require('./lib/materialize');
+const { buildTree, buildChangesNode } = require('./lib/treeModel');
+const { holderName, syncCopy, markCopySynced, gcFiltered } = require('./lib/materialize');
 const { makeGit } = require('./lib/git');
 const sync = require('./lib/sync');
+const contribute = require('./lib/contribute');
 const { pluginApi } = require('./lib/cursorApi');
 const { Registrar } = require('./lib/registrar');
 
@@ -32,8 +33,13 @@ let debounceTimer = null;
 let queue = Promise.resolve();
 let storage = '';
 let errorShown = false;
+let changes = null; // { files, ahead } of the managed clone, null outside managed mode
+let partialCopies = new Map(); // plugin name -> { plugin, ids, holder, copyRoot }
+let copyWatcher = null;
+let copyDebounce = null;
+let changesDebounce = null;
 const projectNoticeShown = new Set();
-const dirtyShown = new Set();
+const conflictShown = new Set();
 const loggedWarnings = new Set();
 
 function log(message) {
@@ -175,6 +181,9 @@ async function doRefresh(doSync, userInitiated) {
       if (lastResult.kind === 'busy') {
         readStateFile(); // another window is syncing: show what it recorded last; its next write re-applies here
       }
+      if (lastResult.kind === 'cloned') {
+        startWatchers(); // the clone watcher was created before the folder existed
+      }
       notifyAfterSync(lastResult, { hadClone, userInitiated, run, repoDir: p.managedRepo });
     } else {
       lastResult = await sync.localStatus({ run, repoDir: m.repoDir });
@@ -203,7 +212,9 @@ function notifyAfterSync(result, { hadClone, userInitiated, run, repoDir }) {
     case 'updated':
       ask(
         'showInformationMessage',
-        `Team plugins updated (${result.commits} new commit(s)). Start a new chat to use the changes.`,
+        `Team plugins updated (${result.commits} new commit(s)). Start a new chat to use the changes.${
+          result.kept > 0 ? ' Your local changes were kept.' : ''
+        }`,
         'What changed',
       ).then(async (choice) => {
         if (choice === 'What changed') {
@@ -213,22 +224,27 @@ function notifyAfterSync(result, { hadClone, userInitiated, run, repoDir }) {
         }
       });
       break;
-    case 'dirty':
-    case 'diverged': {
-      const key = `${result.kind}:${result.head}`;
-      if (dirtyShown.has(key)) {
+    case 'conflict': {
+      const key = `conflict:${result.head}`;
+      if (conflictShown.has(key)) {
         break;
       }
-      dirtyShown.add(key);
-      const message =
-        result.kind === 'dirty'
-          ? `Team plugins: the managed clone has local changes, so updates are paused (${result.behind} commit(s) behind).`
-          : 'Team plugins: the managed clone has local commits, so updates are paused.';
-      ask('showWarningMessage', message, 'Discard local changes', 'Show log').then((choice) => {
-        if (choice === 'Discard local changes') {
+      conflictShown.add(key);
+      const shown = result.files.slice(0, 3).join(', ');
+      const more = result.files.length > 3 ? ` and ${result.files.length - 3} more` : '';
+      ask(
+        'showWarningMessage',
+        `Team plugins: ${result.behind} new team commit(s) conflict with your changes in ${shown}${more}, so updates are paused. Push your changes to a branch to merge them in your own clone, or discard them.`,
+        'Push to a branch',
+        'Show changes',
+        'Discard local changes',
+      ).then((choice) => {
+        if (choice === 'Push to a branch') {
+          vscode.commands.executeCommand('teamPlugins.pushToBranch');
+        } else if (choice === 'Show changes') {
+          vscode.commands.executeCommand(VIEW_COMMAND);
+        } else if (choice === 'Discard local changes') {
           vscode.commands.executeCommand('teamPlugins.discardLocalChanges');
-        } else if (choice === 'Show log') {
-          output.show();
         }
       });
       break;
@@ -285,14 +301,20 @@ async function doApply() {
   const project = projectList();
   const eff = selection.effective(catalog, user, project);
   const { filteredRoot } = paths();
+  const copies = new Map();
   const desired = selection.desiredRegistrations(catalog, eff, (plugin, ids) => {
     try {
-      return materialize(plugin, ids, path.join(filteredRoot, filteredDirName(plugin, ids)));
+      const holder = path.join(filteredRoot, holderName(plugin, ids));
+      const { copyRoot, actions } = syncCopy(plugin, ids, holder);
+      logCopyActions(plugin, actions);
+      copies.set(plugin.name, { plugin, ids, holder, copyRoot });
+      return copyRoot;
     } catch (err) {
       log(`cannot build the filtered copy of ${plugin.name}: ${err.message}`);
       return null;
     }
   });
+  partialCopies = copies;
   for (const [name, p] of [...desired]) {
     if (p === null) {
       desired.delete(name);
@@ -306,8 +328,111 @@ async function doApply() {
     touchFiltered(holders);
     gcFiltered(filteredRoot, holders, FILTERED_MAX_AGE_MS);
   }
-  treeProvider.refresh();
+  await refreshChanges();
   updateStatus();
+}
+
+function logCopyActions(plugin, actions) {
+  for (const a of actions) {
+    log(`synced ${plugin.name}/${a.rel}: ${a.action}`);
+  }
+}
+
+// Reads the local changes of the managed clone (shown as a group in the view; they enable Commit and push).
+async function refreshChanges() {
+  const m = currentMode();
+  changes = null;
+  if (m.mode === 'managed' && fs.existsSync(path.join(m.repoDir, '.git'))) {
+    try {
+      changes = await sync.localChanges({ run: makeGit(gitPath()), repo: m.repoDir });
+    } catch (err) {
+      log(`cannot read the local changes: ${err.message}`);
+    }
+  }
+  await vscode.commands.executeCommand('setContext', 'teamPlugins.hasChanges', hasChanges());
+  treeProvider.refresh();
+}
+
+function hasChanges() {
+  return !!changes && (changes.files.length > 0 || changes.ahead > 0);
+}
+
+// A change of a partial copy goes to the repository (and the other way); the view then shows it in Local changes.
+function syncPartials() {
+  let toSource = false;
+  for (const entry of partialCopies.values()) {
+    try {
+      const { actions } = syncCopy(entry.plugin, entry.ids, entry.holder);
+      logCopyActions(entry.plugin, actions);
+      toSource = toSource || actions.some((a) => a.action === 'toSource' || a.action === 'deletedInSource');
+    } catch (err) {
+      log(`cannot sync the partial copy of ${entry.plugin.name}: ${err.message}`);
+    }
+  }
+  return toSource ? refreshChanges() : undefined;
+}
+
+// Copy edits still waiting for the watcher's debounce go to the repository first, so that a commit includes them.
+async function flushPartials() {
+  if (copyDebounce) {
+    clearTimeout(copyDebounce);
+    copyDebounce = null;
+  }
+  await enqueue(syncPartials);
+}
+
+// After the clone was reset to the team version (discard, push to a branch), the partial copies take the clone's side
+// at the next apply: left as they are, their edits (newer than the last sync) would be copied back into the clone.
+// They are updated in place (markCopySynced), not deleted: Windows refuses to delete a folder Cursor watches.
+function resetPartialCopies() {
+  for (const entry of partialCopies.values()) {
+    try {
+      markCopySynced(entry.holder);
+    } catch (err) {
+      log(`cannot reset the partial copy of ${entry.plugin.name}: ${err.message}`);
+    }
+  }
+}
+
+function startCopyWatcher() {
+  const { filteredRoot } = paths();
+  fs.mkdirSync(filteredRoot, { recursive: true });
+  copyWatcher = vscode.workspace.createFileSystemWatcher(
+    new vscode.RelativePattern(vscode.Uri.file(filteredRoot), '**/*'),
+  );
+  const onFile = (uri) => {
+    if (uri.fsPath.includes('.tmp-')) {
+      return;
+    }
+    const inside = [...partialCopies.values()].some((e) => {
+      const rel = path.relative(e.copyRoot, uri.fsPath);
+      return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
+    });
+    if (!inside) {
+      return;
+    }
+    if (copyDebounce) {
+      clearTimeout(copyDebounce);
+    }
+    copyDebounce = setTimeout(() => {
+      copyDebounce = null;
+      enqueue(syncPartials);
+    }, 500);
+  };
+  copyWatcher.onDidCreate(onFile);
+  copyWatcher.onDidChange(onFile);
+  copyWatcher.onDidDelete(onFile);
+}
+
+function stopCopyWatcher() {
+  if (copyWatcher) {
+    copyWatcher.dispose();
+    copyWatcher = null;
+  }
+  if (copyDebounce) {
+    clearTimeout(copyDebounce);
+    copyDebounce = null;
+  }
 }
 
 // ---- status bar --------------------------------------------------------------------------------------------------
@@ -325,10 +450,7 @@ function updateStatus() {
     text = '$(plug) Team: not configured';
   } else if (!api) {
     text = '$(error) Team';
-  } else if (
-    (lastResult && ['dirty', 'diverged', 'error'].includes(lastResult.kind)) ||
-    lastApplyErrors > 0
-  ) {
+  } else if ((lastResult && ['conflict', 'error'].includes(lastResult.kind)) || lastApplyErrors > 0) {
     text = `$(warning) Team ${count}`;
   } else {
     text = `$(plug) Team ${count}`;
@@ -351,6 +473,9 @@ function updateStatus() {
   } else if (lastResult) {
     lines.push(`State: ${lastResult.kind}${lastResult.message ? ` - ${lastResult.message}` : ''}`);
   }
+  if (hasChanges()) {
+    lines.push(`Local changes: ${changes.files.length} file(s), ${changes.ahead} unpushed commit(s)`);
+  }
   if (lastApplyErrors > 0) {
     lines.push(`Registration errors: ${lastApplyErrors} (see the log)`);
   }
@@ -367,7 +492,14 @@ function updateStatus() {
 // ---- tree --------------------------------------------------------------------------------------------------------
 
 // Codicons per node kind (shown after the checkbox).
-const TREE_ICONS = { plugin: 'package', skill: 'sparkle', rule: 'law', error: 'warning' };
+const TREE_ICONS = { plugin: 'package', skill: 'sparkle', rule: 'law', error: 'warning', changes: 'git-commit' };
+const CHANGE_ICONS = {
+  modified: 'diff-modified',
+  added: 'diff-added',
+  untracked: 'diff-added',
+  deleted: 'diff-removed',
+  renamed: 'diff-renamed',
+};
 
 class PluginTree {
   constructor() {
@@ -402,24 +534,31 @@ class PluginTree {
     }
     const project = projectList();
     const eff = selection.effective(catalog, userSelection(), project);
-    return buildTree(catalog, eff, project);
+    const changesNode = buildChangesNode(changes);
+    return changesNode ? [changesNode, ...buildTree(catalog, eff, project)] : buildTree(catalog, eff, project);
   }
 
   getTreeItem(node) {
-    const item = new vscode.TreeItem(
-      node.label,
-      node.children.length ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None,
-    );
+    let state = vscode.TreeItemCollapsibleState.None;
+    if (node.children.length) {
+      state =
+        node.kind === 'changes' ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed;
+    }
+    const item = new vscode.TreeItem(node.label, state);
     item.id = node.id;
     item.description = node.description;
     item.tooltip = node.tooltip;
     item.contextValue = node.contextValue;
-    if (TREE_ICONS[node.kind]) {
+    if (node.kind === 'change') {
+      item.iconPath = new vscode.ThemeIcon(CHANGE_ICONS[node.status] || 'diff-modified');
+    } else if (TREE_ICONS[node.kind]) {
       item.iconPath = new vscode.ThemeIcon(TREE_ICONS[node.kind]);
     }
     if (node.kind === 'error') {
       item.command = { command: 'teamPlugins.showLog', title: 'Show log' };
-    } else {
+    } else if (node.kind === 'change') {
+      item.command = { command: 'teamPlugins.openChange', title: 'Open changes', arguments: [node] };
+    } else if (node.kind !== 'changes') {
       item.checkboxState = node.checked
         ? vscode.TreeItemCheckboxState.Checked
         : vscode.TreeItemCheckboxState.Unchecked;
@@ -437,7 +576,7 @@ async function onCheckboxChange(e) {
   const project = projectList();
   const unchecked = [];
   for (const [node, state] of e.items) {
-    if (node.kind === 'error') {
+    if (node.kind !== 'plugin' && node.kind !== 'skill' && node.kind !== 'rule') {
       continue;
     }
     const checked = state === vscode.TreeItemCheckboxState.Checked;
@@ -558,6 +697,11 @@ function debouncedApply() {
   }, 1000);
 }
 
+// .git changes (fetch, the editor's own git status) don't change plugin files
+function isGitPath(fsPath) {
+  return /[\\/]\.git([\\/]|$)/.test(fsPath);
+}
+
 function stopWatchers() {
   for (const w of watchers) {
     w.dispose();
@@ -566,6 +710,10 @@ function stopWatchers() {
   if (debounceTimer) {
     clearTimeout(debounceTimer);
     debounceTimer = null;
+  }
+  if (changesDebounce) {
+    clearTimeout(changesDebounce);
+    changesDebounce = null;
   }
 }
 
@@ -597,13 +745,34 @@ function startWatchers() {
     w.onDidCreate(onState);
     w.onDidChange(onState);
     watchers.push(w);
+
+    // an edit inside the managed clone (an agent's, or one copied from a partial plugin) changes Local changes
+    const c = vscode.workspace.createFileSystemWatcher(
+      new vscode.RelativePattern(vscode.Uri.file(m.repoDir), '**/*'),
+    );
+    const onClone = (uri) => {
+      if (isGitPath(uri.fsPath)) {
+        return;
+      }
+      if (changesDebounce) {
+        clearTimeout(changesDebounce);
+      }
+      changesDebounce = setTimeout(() => {
+        changesDebounce = null;
+        refreshChanges().catch((err) => log(`cannot read the local changes: ${err.message}`));
+      }, 1000);
+    };
+    c.onDidCreate(onClone);
+    c.onDidChange(onClone);
+    c.onDidDelete(onClone);
+    watchers.push(c);
   } else if (m.mode === 'local') {
     const w = vscode.workspace.createFileSystemWatcher(
       new vscode.RelativePattern(vscode.Uri.file(m.localRepoPath), '**/*'),
     );
     // .git changes (fetch, the editor's own git status) don't change plugin files
     const onFile = (uri) => {
-      if (!/[\\/]\.git([\\/]|$)/.test(uri.fsPath)) {
+      if (!isGitPath(uri.fsPath)) {
         debouncedApply();
       }
     };
@@ -658,9 +827,23 @@ function registerCommands(context) {
       vscode.window.showInformationMessage('There is no managed clone: a local clone is never changed by this extension.');
       return;
     }
+    await flushPartials();
+    await refreshChanges();
+    if (!hasChanges()) {
+      vscode.window.showInformationMessage('Nothing to discard.');
+      return;
+    }
+    const listed = changes.files.slice(0, 10).map((f) => `${f.status} ${f.path}`);
+    let detail = `These are deleted:\n${listed.join('\n')}`;
+    if (changes.files.length > 10) {
+      detail += `\n\u2026 and ${changes.files.length - 10} more`;
+    }
+    if (changes.ahead > 0) {
+      detail += `\n${changes.ahead} unpushed commit(s)`;
+    }
     const choice = await vscode.window.showWarningMessage(
-      'Discard all local changes in the managed clone? Edits made there are deleted.',
-      { modal: true },
+      'Discard all local changes in the managed clone?',
+      { modal: true, detail },
       'Discard',
     );
     if (choice !== 'Discard') {
@@ -668,11 +851,211 @@ function registerCommands(context) {
     }
     const result = await sync.discardLocalChanges({ run: makeGit(gitPath()), managedRepo: paths().managedRepo });
     log(`discard local changes: ${result.message}`);
-    if (!result.ok) {
+    if (result.ok) {
+      resetPartialCopies();
+    } else {
       vscode.window.showErrorMessage(`Team plugins: ${result.message}`);
     }
     await refresh({ sync: true, userInitiated: true });
   });
+  reg('teamPlugins.commitAndPush', commitAndPushCommand);
+  reg('teamPlugins.pushToBranch', pushToBranchCommand);
+  reg('teamPlugins.openChange', openChangeCommand);
+  context.subscriptions.push(
+    vscode.workspace.registerTextDocumentContentProvider(GIT_SCHEME, {
+      async provideTextDocumentContent(uri) {
+        try {
+          const { repo, rev, path: file } = JSON.parse(decodeURIComponent(uri.query));
+          if (!rev) {
+            return '';
+          }
+          const r = await makeGit(gitPath())(['show', `${rev}:${file}`], repo, undefined, { trim: false });
+          return r.code === 0 ? r.stdout : '';
+        } catch {
+          return '';
+        }
+      },
+    }),
+  );
+}
+
+// ---- local changes: diff, commit and push ------------------------------------------------------------------------
+
+const GIT_SCHEME = 'team-plugins-git';
+const NOT_MANAGED = 'With a local clone, commit and push with your own git tools.';
+
+function gitUri(repo, rev, file) {
+  return vscode.Uri.from({
+    scheme: GIT_SCHEME,
+    path: `/${file}`,
+    query: encodeURIComponent(JSON.stringify({ repo, rev, path: file })),
+  });
+}
+
+async function openChangeCommand(node) {
+  const m = currentMode();
+  if (!node || !node.path || m.mode !== 'managed') {
+    return;
+  }
+  const isNew = node.status === 'added' || node.status === 'untracked';
+  const left = gitUri(m.repoDir, isNew ? '' : 'HEAD', node.path);
+  const right =
+    node.status === 'deleted' ? gitUri(m.repoDir, '', node.path) : vscode.Uri.file(path.join(m.repoDir, node.path));
+  await vscode.commands.executeCommand('vscode.diff', left, right, `${path.basename(node.path)} (team \u2194 yours)`);
+}
+
+function askCommitMessage() {
+  return vscode.window.showInputBox({
+    prompt: 'Commit message for your changes to the team plugins',
+    placeHolder: 'Update the review skill',
+    ignoreFocusOut: true,
+    validateInput: (v) => (v.trim() ? null : 'Enter a commit message'),
+  });
+}
+
+// Shows the outcome of commitAndPush / pushToBranch.
+function reportContribution(result, nothingText) {
+  switch (result.kind) {
+    case 'pushed':
+      vscode.window.showInformationMessage(
+        `Pushed ${String(result.head).slice(0, 7)} to ${result.branch}: the team gets it at their next sync.`,
+      );
+      break;
+    case 'pushedBranch': {
+      const merge = `git fetch ${result.remote}\ngit merge ${result.remote}/${result.branch}`;
+      vscode.window
+        .showInformationMessage(
+          `Pushed your changes to branch ${result.branch}. The managed clone is back on the team version. To merge, in your own clone: git fetch ${result.remote} && git merge ${result.remote}/${result.branch}`,
+          'Copy merge commands',
+        )
+        .then((choice) => (choice === 'Copy merge commands' ? vscode.env.clipboard.writeText(merge) : undefined));
+      break;
+    }
+    case 'nothing':
+      vscode.window.showInformationMessage(nothingText);
+      break;
+    case 'busy':
+      vscode.window.showWarningMessage('Another Cursor window is syncing the team plugins: try again in a moment.');
+      break;
+    case 'conflict':
+      vscode.window
+        .showWarningMessage(
+          `Your commit conflicts with team changes in ${result.files.join(', ')}. It is kept in the managed clone but not pushed.`,
+          'Push to a branch',
+          'Open repository folder',
+        )
+        .then((choice) => {
+          if (choice === 'Push to a branch') {
+            vscode.commands.executeCommand('teamPlugins.pushToBranch');
+          } else if (choice === 'Open repository folder') {
+            vscode.commands.executeCommand('teamPlugins.openRepo');
+          }
+        });
+      break;
+    default:
+      vscode.window.showErrorMessage(`Team plugins: ${result.message}`, 'Show log').then((choice) => {
+        if (choice === 'Show log') {
+          output.show();
+        }
+      });
+      break;
+  }
+}
+
+async function commitAndPushCommand() {
+  if (currentMode().mode !== 'managed') {
+    vscode.window.showInformationMessage(NOT_MANAGED);
+    return;
+  }
+  await flushPartials();
+  await refreshChanges();
+  if (!hasChanges()) {
+    vscode.window.showInformationMessage('Nothing to commit or push.');
+    return;
+  }
+  let message = '';
+  if (changes.files.length > 0) {
+    const typed = await askCommitMessage();
+    if (typed === undefined) {
+      return;
+    }
+    message = typed.trim();
+  } else {
+    const choice = await vscode.window.showWarningMessage(
+      `Push ${changes.ahead} unpushed commit(s) to the team?`,
+      { modal: true },
+      'Push',
+    );
+    if (choice !== 'Push') {
+      return;
+    }
+  }
+  const p = paths();
+  const result = await vscode.window.withProgress(
+    { location: vscode.ProgressLocation.Notification, title: 'Team plugins: committing and pushing\u2026' },
+    () =>
+      contribute.commitAndPush({
+        run: makeGit(gitPath()),
+        repo: p.managedRepo,
+        message,
+        lockFile: p.lockFile,
+        stateFile: p.stateFile,
+        log,
+      }),
+  );
+  reportContribution(result, 'Nothing to commit or push.');
+  await refresh({ sync: false });
+}
+
+async function pushToBranchCommand() {
+  if (currentMode().mode !== 'managed') {
+    vscode.window.showInformationMessage(NOT_MANAGED);
+    return;
+  }
+  await flushPartials();
+  await refreshChanges();
+  if (!hasChanges()) {
+    vscode.window.showInformationMessage('Nothing to push.');
+    return;
+  }
+  const p = paths();
+  const run = makeGit(gitPath());
+  const name = await run(['config', 'user.name'], p.managedRepo);
+  const branch = await vscode.window.showInputBox({
+    prompt: 'Branch to push your changes to (merge it later from your own clone)',
+    value: contribute.defaultBranchName(name.stdout, new Date()),
+    ignoreFocusOut: true,
+    validateInput: (v) => (v.trim() ? null : 'Enter a branch name'),
+  });
+  if (branch === undefined) {
+    return;
+  }
+  let message = '';
+  if (changes.files.length > 0) {
+    const typed = await askCommitMessage();
+    if (typed === undefined) {
+      return;
+    }
+    message = typed.trim();
+  }
+  const result = await vscode.window.withProgress(
+    { location: vscode.ProgressLocation.Notification, title: 'Team plugins: pushing to a branch\u2026' },
+    () =>
+      contribute.pushToBranch({
+        run,
+        repo: p.managedRepo,
+        message,
+        branch: branch.trim(),
+        lockFile: p.lockFile,
+        stateFile: p.stateFile,
+        log,
+      }),
+  );
+  if (result.kind === 'pushedBranch') {
+    resetPartialCopies();
+  }
+  reportContribution(result, 'Nothing to push.');
+  await refresh({ sync: true });
 }
 
 function activate(context) {
@@ -748,11 +1131,15 @@ function activate(context) {
   refresh({ sync: true });
   startTimer();
   startWatchers();
+  if (registrar) {
+    startCopyWatcher();
+  }
 }
 
 async function deactivate() {
   stopTimer();
   stopWatchers();
+  stopCopyWatcher();
   if (registrar) {
     await registrar.removeAll();
   }

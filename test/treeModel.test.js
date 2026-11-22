@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { effective } = require('../lib/selection');
-const { buildTree } = require('../lib/treeModel');
+const { buildTree, buildChangesNode } = require('../lib/treeModel');
 
 const child = (id, kind) => ({ id, kind, name: id.split('/').pop(), file: `/x/${id}`, description: '' });
 const catalog = {
@@ -48,4 +48,24 @@ test('tree nodes', () => {
   assert.equal(p3.children.length, 0);
   assert.equal(p3.checked, false);
   assert.equal(p3.description, '');
+});
+
+test('buildChangesNode', () => {
+  const node = buildChangesNode({
+    files: [
+      { path: 'p/skills/a/SKILL.md', status: 'modified' },
+      { path: 'top.md', status: 'untracked' },
+    ],
+    ahead: 2,
+  });
+  assert.equal(node.description, '2 file(s) · 2 unpushed commit(s)');
+  assert.equal(node.contextValue, 'changes');
+  assert.deepEqual(node.children.map((c) => c.label), ['SKILL.md', 'top.md']);
+  assert.deepEqual(node.children.map((c) => c.description), ['p/skills/a · modified', 'untracked']);
+
+  const onlyCommits = buildChangesNode({ files: [], ahead: 1 });
+  assert.equal(onlyCommits.description, '1 unpushed commit(s)');
+  assert.equal(onlyCommits.children.length, 0);
+  assert.equal(buildChangesNode({ files: [], ahead: 0 }), null);
+  assert.equal(buildChangesNode(null), null);
 });
