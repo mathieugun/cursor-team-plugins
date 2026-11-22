@@ -6,7 +6,7 @@ const path = require('path');
 const { readCatalog } = require('./lib/catalog');
 const selection = require('./lib/selection');
 const { buildTree, buildChangesNode, buildConflictsNode } = require('./lib/treeModel');
-const { holderName, syncCopy, markCopySynced, resolveConflict, gcFiltered } = require('./lib/materialize');
+const { holderName, copyRootOf, syncCopy, markCopySynced, resolveConflict, gcFiltered } = require('./lib/materialize');
 const { makeGit } = require('./lib/git');
 const sync = require('./lib/sync');
 const contribute = require('./lib/contribute');
@@ -15,6 +15,11 @@ const { Registrar } = require('./lib/registrar');
 
 const SECTION = 'teamPlugins';
 const VIEW_COMMAND = 'workbench.view.extension.teamPlugins';
+const BUSY_TEXT = 'Another Cursor window is syncing the team plugins: try again in a moment.';
+const UNEXPECTED = { kind: 'error', message: 'unexpected error: see the log' };
+const COPY_RETRY_MS = 2000;
+const COPY_RETRY_MAX = 30;
+const LOCKED_CODES = ['EBUSY', 'EPERM', 'EACCES'];
 
 let output;
 let statusItem;
@@ -39,6 +44,9 @@ let copyConflicts = []; // the conflicts of all partial copies, as given to buil
 let copyWatcher = null;
 let copyDebounce = null;
 let changesDebounce = null;
+let copyRetryTimer = null;
+let copyRetries = 0;
+let checkboxChain = Promise.resolve();
 const projectNoticeShown = new Set();
 const conflictShown = new Set();
 const conflictsNotified = new Set(); // `${holder}|${rel}` of the partial-copy conflicts already announced
@@ -187,6 +195,9 @@ async function doRefresh(doSync, userInitiated) {
         startWatchers(); // the clone watcher was created before the folder existed
       }
       notifyAfterSync(lastResult, { hadClone, userInitiated, run, repoDir: p.managedRepo });
+      if (lastResult.kind === 'switched') {
+        log(`managed clone now follows ${m.repoUrl} (${lastResult.branch})`);
+      }
     } else {
       lastResult = await sync.localStatus({ run, repoDir: m.repoDir });
       lastCheck = new Date();
@@ -304,18 +315,44 @@ async function doApply() {
   const eff = selection.effective(catalog, user, project);
   const { filteredRoot } = paths();
   const copies = new Map();
-  const desired = selection.desiredRegistrations(catalog, eff, (plugin, ids) => {
-    try {
+  const previous = partialCopies;
+  let retry = '';
+  const build = (synced) =>
+    selection.desiredRegistrations(catalog, eff, (plugin, ids) => {
       const holder = path.join(filteredRoot, holderName(plugin, ids));
-      const { copyRoot, actions, conflicts } = syncCopy(plugin, ids, holder);
-      logCopyActions(plugin, actions);
-      copies.set(plugin.name, { plugin, ids, holder, copyRoot, conflicts });
-      return copyRoot;
-    } catch (err) {
-      log(`cannot build the filtered copy of ${plugin.name}: ${err.message}`);
-      return null;
-    }
-  });
+      const copyRoot = copyRootOf(plugin, holder);
+      const keep = () => {
+        const old = [...previous.values()].find((e) => e.holder === holder);
+        copies.set(plugin.name, { plugin, ids, holder, copyRoot, conflicts: old ? old.conflicts : [] });
+        return copyRoot;
+      };
+      if (!synced && fs.existsSync(copyRoot)) {
+        retry = 'another window holds the sync lock';
+        return keep();
+      }
+      try {
+        const { actions, conflicts, skipped } = syncCopy(plugin, ids, holder);
+        logCopyActions(plugin, actions);
+        logSkipped(plugin, skipped);
+        copies.set(plugin.name, { plugin, ids, holder, copyRoot, conflicts });
+        return copyRoot;
+      } catch (err) {
+        log(`cannot build the filtered copy of ${plugin.name}: ${err.message}`);
+        if (!fs.existsSync(copyRoot)) {
+          return null;
+        }
+        if (LOCKED_CODES.includes(err.code)) {
+          retry = err.code;
+        }
+        return keep(); // an existing copy stays registered
+      }
+    });
+  // a missing copy is still built when the lock is busy: building writes only under filtered/
+  const locked = withCopyLock(() => build(true));
+  const desired = locked.kind === 'busy' ? build(false) : locked.value;
+  if (retry) {
+    scheduleCopyRetry(retry);
+  }
   warnDroppedConflicts(partialCopies, copies);
   partialCopies = copies;
   updateConflicts();
@@ -340,6 +377,43 @@ function logCopyActions(plugin, actions) {
   for (const a of actions) {
     log(`synced ${plugin.name}/${a.rel}: ${a.action}`);
   }
+}
+
+// What a partial-copy sync left out (links that are not followed), once per file and reason.
+function logSkipped(plugin, skipped) {
+  for (const s of skipped) {
+    const key = `skip:${plugin.name}/${s.rel}:${s.reason}`;
+    if (!loggedWarnings.has(key)) {
+      loggedWarnings.add(key);
+      log(`${plugin.name}/${s.rel} left out of the partial copy: ${s.reason}`);
+    }
+  }
+}
+
+// Partial-copy syncs write into the managed clone: in managed mode they hold the sync lock like git operations.
+function withCopyLock(fn) {
+  if (currentMode().mode !== 'managed') {
+    return { kind: 'done', value: fn() };
+  }
+  return sync.withLockSync(paths().lockFile, fn);
+}
+
+// A partial-copy sync that met a locked file or a busy lock is retried shortly, so a copy edit reaches the clone
+// without another trigger.
+function scheduleCopyRetry(reason) {
+  if (copyRetryTimer) {
+    return;
+  }
+  if (copyRetries >= COPY_RETRY_MAX) {
+    log(`partial-copy sync still failing after ${COPY_RETRY_MAX} retries (${reason}): the next change retries it`);
+    copyRetries = 0;
+    return;
+  }
+  copyRetries++;
+  copyRetryTimer = setTimeout(() => {
+    copyRetryTimer = null;
+    enqueue(syncPartials);
+  }, COPY_RETRY_MS);
 }
 
 // Reads the local changes of the managed clone (shown as a group in the view; they enable Commit and push).
@@ -453,15 +527,30 @@ function updateConflicts() {
 // A change of a partial copy goes to the repository (and the other way); the view then shows it in Local changes.
 function syncPartials() {
   let toSource = false;
-  for (const entry of partialCopies.values()) {
-    try {
-      const { actions, conflicts } = syncCopy(entry.plugin, entry.ids, entry.holder);
-      logCopyActions(entry.plugin, actions);
-      entry.conflicts = conflicts;
-      toSource = toSource || actions.some((a) => a.action === 'toSource' || a.action === 'deletedInSource');
-    } catch (err) {
-      log(`cannot sync the partial copy of ${entry.plugin.name}: ${err.message}`);
+  let retry = '';
+  const locked = withCopyLock(() => {
+    for (const entry of partialCopies.values()) {
+      try {
+        const { actions, conflicts, skipped } = syncCopy(entry.plugin, entry.ids, entry.holder);
+        logCopyActions(entry.plugin, actions);
+        logSkipped(entry.plugin, skipped);
+        entry.conflicts = conflicts;
+        toSource = toSource || actions.some((a) => a.action === 'toSource' || a.action === 'deletedInSource');
+      } catch (err) {
+        log(`cannot sync the partial copy of ${entry.plugin.name}: ${err.message}`);
+        if (LOCKED_CODES.includes(err.code)) {
+          retry = err.code;
+        }
+      }
     }
+  });
+  if (locked.kind === 'busy') {
+    retry = 'another window holds the sync lock';
+  }
+  if (retry) {
+    scheduleCopyRetry(retry);
+  } else {
+    copyRetries = 0;
   }
   const changed = updateConflicts();
   if (toSource) {
@@ -534,6 +623,10 @@ function stopCopyWatcher() {
   if (copyDebounce) {
     clearTimeout(copyDebounce);
     copyDebounce = null;
+  }
+  if (copyRetryTimer) {
+    clearTimeout(copyRetryTimer);
+    copyRetryTimer = null;
   }
 }
 
@@ -959,11 +1052,24 @@ function registerCommands(context) {
     if (choice !== 'Discard') {
       return;
     }
-    const result = await sync.discardLocalChanges({ run: makeGit(gitPath()), managedRepo: paths().managedRepo });
+    const p = paths();
+    let result;
+    await enqueue(async () => {
+      result = await sync.discardLocalChanges({
+        run: makeGit(gitPath()),
+        managedRepo: p.managedRepo,
+        lockFile: p.lockFile,
+        log,
+      });
+      if (result.ok) {
+        resetPartialCopies();
+      }
+    });
+    result = result || { ok: false, message: UNEXPECTED.message };
     log(`discard local changes: ${result.message}`);
-    if (result.ok) {
-      resetPartialCopies();
-    } else {
+    if (result.busy) {
+      vscode.window.showWarningMessage(BUSY_TEXT);
+    } else if (!result.ok) {
       vscode.window.showErrorMessage(`Team plugins: ${result.message}`);
     }
     await refresh({ sync: true, userInitiated: true });
@@ -1055,7 +1161,12 @@ async function resolveConflictCommand(node, keep) {
         vscode.window.showInformationMessage(`${node.plugin}/${node.rel} is no longer in conflict.`);
         return;
       }
-      const a = resolveConflict(entry.plugin, entry.ids, entry.holder, node.rel, keep);
+      const locked = withCopyLock(() => resolveConflict(entry.plugin, entry.ids, entry.holder, node.rel, keep));
+      if (locked.kind === 'busy') {
+        vscode.window.showWarningMessage(BUSY_TEXT);
+        return;
+      }
+      const a = locked.value;
       logCopyActions(entry.plugin, [a]);
       entry.conflicts = (entry.conflicts || []).filter((c) => c.rel !== node.rel);
       updateConflicts();
@@ -1098,7 +1209,7 @@ function reportContribution(result, nothingText) {
       vscode.window.showInformationMessage(nothingText);
       break;
     case 'busy':
-      vscode.window.showWarningMessage('Another Cursor window is syncing the team plugins: try again in a moment.');
+      vscode.window.showWarningMessage(BUSY_TEXT);
       break;
     case 'conflict':
       vscode.window
@@ -1154,18 +1265,21 @@ async function commitAndPushCommand() {
     }
   }
   const p = paths();
-  const result = await vscode.window.withProgress(
-    { location: vscode.ProgressLocation.Notification, title: 'Team plugins: committing and pushing\u2026' },
-    () =>
-      contribute.commitAndPush({
-        run: makeGit(gitPath()),
-        repo: p.managedRepo,
-        message,
-        lockFile: p.lockFile,
-        stateFile: p.stateFile,
-        log,
-      }),
-  );
+  const result =
+    (await enqueue(() =>
+      vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: 'Team plugins: committing and pushing\u2026' },
+        () =>
+          contribute.commitAndPush({
+            run: makeGit(gitPath()),
+            repo: p.managedRepo,
+            message,
+            lockFile: p.lockFile,
+            stateFile: p.stateFile,
+            log,
+          }),
+      ),
+    )) || UNEXPECTED;
   reportContribution(result, 'Nothing to commit or push.');
   await refresh({ sync: false });
 }
@@ -1201,22 +1315,27 @@ async function pushToBranchCommand() {
     }
     message = typed.trim();
   }
-  const result = await vscode.window.withProgress(
-    { location: vscode.ProgressLocation.Notification, title: 'Team plugins: pushing to a branch\u2026' },
-    () =>
-      contribute.pushToBranch({
-        run,
-        repo: p.managedRepo,
-        message,
-        branch: branch.trim(),
-        lockFile: p.lockFile,
-        stateFile: p.stateFile,
-        log,
-      }),
-  );
-  if (result.kind === 'pushedBranch') {
-    resetPartialCopies();
-  }
+  const result =
+    (await enqueue(() =>
+      vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: 'Team plugins: pushing to a branch\u2026' },
+        async () => {
+          const r = await contribute.pushToBranch({
+            run,
+            repo: p.managedRepo,
+            message,
+            branch: branch.trim(),
+            lockFile: p.lockFile,
+            stateFile: p.stateFile,
+            log,
+          });
+          if (r.kind === 'pushedBranch') {
+            resetPartialCopies();
+          }
+          return r;
+        },
+      ),
+    )) || UNEXPECTED;
   reportContribution(result, 'Nothing to push.');
   await refresh({ sync: true });
 }
@@ -1243,7 +1362,10 @@ function activate(context) {
   context.subscriptions.push(treeView);
   context.subscriptions.push(
     treeView.onDidChangeCheckboxState((e) => {
-      onCheckboxChange(e).catch((err) => log(`checkbox error: ${err.message}`));
+      // one click at a time: each reads the selection after the previous click's settings write
+      checkboxChain = checkboxChain
+        .then(() => onCheckboxChange(e))
+        .catch((err) => log(`checkbox error: ${err.message}`));
     }),
   );
 

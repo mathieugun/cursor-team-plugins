@@ -39,8 +39,11 @@ assumptions are fine when the user asked for the assumptions to be tested).
 
 - Partial copies sync both ways: any operation that resets the managed clone (discard, push to a branch) must also
   reset the copies (`resetPartialCopies` → `markCopySynced`), or their newer edits flow back into the clone.
-- On Windows a folder Cursor watches (a registered plugin) cannot be deleted: EPERM, and it is left half-deleted and
-  unreadable. Update registered folders in place; delete only unregistered ones.
+- On Windows the **parent** of a registered plugin folder cannot be deleted or renamed while the plugin is registered
+  (EPERM, possibly left half-deleted), in any window that registered it; the registered folder itself, its files and
+  subfolders can be edited and deleted, and after `removePlugin` the parent can be deleted at once (probe, Cursor
+  3.31, 2026-11-22). The managed clone and the `filtered/<name>-<hash>` holders are such parents: update them in
+  place; delete only unregistered ones.
 
 - On Windows `revealFileInOS` opens Explorer behind the Cursor window, so the user sees nothing happen: open the
   files in an editor instead (`showTextDocument`).

@@ -68,3 +68,15 @@ trigger.
 
 - Each bug is fixed or, for #3, shown not to happen (with the evidence written in the brief's report).
 - Tests for the `lib/` parts, full suite green, README kept in step, version bumped.
+
+## Report
+
+- **#3 happens.** Probe extension in Cursor 3.31 on Windows (2026-11-22), with a plugin registered from
+  `<storage>/.cursor/plugins/<repo>/<plugin>` 5 s earlier:
+  - delete `<repo>` (`removeTree`): EPERM; rename `<repo>`: EPERM
+  - inside the registered folder: edit a file, delete a subfolder, delete the registered folder itself: ok
+  - after `removePlugin`: delete `<repo>`: ok, immediately
+
+  So the managed clone, the parent of registered plugin folders in every window, can't be deleted to reclone it.
+  Fix: a URL or branch change switches the clone in place with git (fetch the branch into a temporary ref,
+  `checkout -B`, then the remote URL and upstream), which only deletes or edits files inside it.

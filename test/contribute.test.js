@@ -152,6 +152,21 @@ test('commitAndPush is busy while the lock is held', async (t) => {
   assert.deepEqual(await commitAndPush(f.args), { kind: 'busy' });
 });
 
+test('commitAndPush is not blocked by a stale index.lock', async (t) => {
+  if (!gitAvailable()) {
+    return t.skip('git is not available');
+  }
+  const f = await setup(t);
+  writeFile(f.clone, 'f.md', withLine(1, 'mine'));
+  const lock = path.join(f.clone, '.git', 'index.lock');
+  fs.writeFileSync(lock, '');
+  const old = new Date(Date.now() - 2 * 60 * 1000);
+  fs.utimesSync(lock, old, old);
+  const r = await commitAndPush(f.args);
+  assert.equal(r.kind, 'pushed');
+  assert.ok(!fs.existsSync(lock));
+});
+
 test('defaultBranchName', () => {
   assert.equal(defaultBranchName('Jane D.', new Date(2026, 10, 22, 14, 5)), 'team-plugins/jane-d-20261122-1405');
   assert.equal(defaultBranchName('', new Date(2026, 0, 2, 3, 4)), 'team-plugins/20260102-0304');

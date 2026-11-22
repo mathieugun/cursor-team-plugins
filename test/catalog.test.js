@@ -2,6 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('fs');
 const path = require('path');
 const { readCatalog, frontmatterDescription } = require('../lib/catalog');
 const { tmpDir, rmDir, writeFile, makePlugin } = require('./helpers');
@@ -136,4 +137,31 @@ test('frontmatterDescription', () => {
   assert.equal(frontmatterDescription('﻿---\r\ndescription: "Quoted"\r\n---\r\n'), 'Quoted');
   assert.equal(frontmatterDescription('no front matter'), '');
   assert.equal(frontmatterDescription('---\nname: x\n---\ndescription: outside\n'), '');
+});
+
+test('linked skill folders and rule files are listed', (t) => {
+  const root = fixture(t);
+  makePlugin(root, 'p', { name: 'p', skills: ['a'], rules: ['q.mdc'] });
+  writeFile(root, 'shared/s/SKILL.md', '---\ndescription: Linked skill.\n---\nbody\n');
+  fs.symlinkSync(path.join(root, 'shared', 's'), path.join(root, 'p', 'skills', 's'), 'junction');
+  writeFile(root, 'shared/r.mdc', '---\ndescription: Linked rule.\n---\nbody\n');
+  let fileLink = true;
+  try {
+    fs.symlinkSync(path.join(root, 'shared', 'r.mdc'), path.join(root, 'p', 'rules', 'r.mdc'), 'file');
+  } catch (err) {
+    if (err.code !== 'EPERM') {
+      throw err;
+    }
+    fileLink = false;
+    t.diagnostic('file symlinks need privileges');
+  }
+  const ids = readCatalog(root).plugins[0].children.map((c) => c.id);
+  assert.ok(ids.includes('p/skills/s'));
+  assert.equal(ids.includes('p/rules/r.mdc'), fileLink);
+});
+
+test('a plugin knows its repository folder', (t) => {
+  const root = fixture(t);
+  makePlugin(root, 'p', { name: 'p', skills: ['a'] });
+  assert.equal(readCatalog(root).plugins[0].repoDir, path.resolve(root));
 });

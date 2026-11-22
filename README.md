@@ -12,7 +12,7 @@ Cursor picks the changes up live.
 Build the VSIX (see `AGENTS.md`) or take it from the team, then:
 
 ```
-cursor --install-extension dist/cursor-team-plugins-0.2.1.vsix
+cursor --install-extension dist/cursor-team-plugins-0.2.2.vsix
 ```
 
 and reload the Cursor window. The extension has no dependency.
@@ -105,7 +105,8 @@ notification lists the new commits in the log.
 
 Updates pause only on a real conflict (see "Changing a team skill"). **Discard local changes** (or the command "Discard
 local changes in the managed clone") asks for a confirmation that lists the files and commits it deletes. If the
-repository URL or branch setting changes, the managed clone is cloned again (an error if it has local changes).
+repository URL or branch setting changes, the managed clone switches to it in place (an error if it has local
+changes). An empty branch setting follows the repository's default branch, also when the team changes it.
 
 ## Plugin authors
 
@@ -125,10 +126,14 @@ picked up live, no sync is needed.
   same name) that holds only the selected skills and rules. The copy and the clone are kept in sync both ways, with a
   `.team-plugins-sync.json` record next to the copy (the content hash of each file at the last sync): a change on one side
   only, new files and deletions included, is carried to the other side; a file changed on both sides is a conflict that
-  waits for your choice. Windows with the same selection share a copy; copies no window used for a week are
-  deleted.
-- Several windows share one clone: a lock file serialises the git commands, and the other windows notice the new
-  state through `sync-state.json`.
+  waits for your choice. A symlink or junction in a plugin is copied as its content when it points inside the
+  repository; one that points outside, is broken or loops is left out of the partial copy (see the log). A copy sync
+  that meets a locked file is retried every 2 seconds for a minute. Windows with the same selection share a copy;
+  copies no window used for a week are deleted.
+- Several windows share one clone: a lock file serialises every operation that changes it (sync, commit and push, push
+  to a branch, discard, partial-copy syncs), and the other windows notice the new state through `sync-state.json`. A
+  first clone may take up to 30 minutes, a fetch 5. A `.git/index.lock` older than a minute (left by a killed git) is
+  removed before the next operation, and leftover `repo.tmp-*` folders of a failed clone at the next sync.
 
 ## Troubleshooting
 
@@ -157,6 +162,10 @@ picked up live, no sync is needed.
   partial-copy edits into the local clone).
 - The commit includes every change of the managed clone (`git add -A`); there is no per-file choice.
 - Pushing needs write access with your git credentials; a rejected push is reported as is.
+- After a change of the repository URL, the tags and git objects of the previous repository stay in the managed clone
+  (harmless).
+- Switching the managed clone to an empty repository (no branch yet) is an error.
+- A symlink or junction created inside a partial copy is left out of the sync (see the log), never followed.
 
 ## License
 

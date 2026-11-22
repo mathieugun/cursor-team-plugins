@@ -6,7 +6,8 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { readCatalog } = require('../lib/catalog');
-const { holderName, syncCopy, markCopySynced, resolveConflict, gcFiltered } = require('../lib/materialize');
+const { holderName, copyRootOf, syncCopy, markCopySynced, resolveConflict, gcFiltered } = require('../lib/materialize');
+const { removeTree } = require('../lib/sync');
 const { tmpDir, rmDir, writeFile, makePlugin } = require('./helpers');
 
 function setup(t) {
@@ -308,4 +309,113 @@ test('gcFiltered removes only old unreferenced folders', (t) => {
   assert.ok(fs.existsSync(keep));
   assert.ok(fs.existsSync(young));
   assert.ok(!fs.existsSync(old));
+});
+
+// Links (junctions: a folder link needs no privilege on Windows)
+const IDS = ['p/skills/a', 'p/rules/x.mdc'];
+
+function junction(target, link) {
+  fs.mkdirSync(path.dirname(link), { recursive: true });
+  fs.symlinkSync(target, link, 'junction');
+}
+
+// setup() plus shared/l/SKILL.md at the repository root, outside the plugin, and p/skills/l linked to it
+function setupLinked(t) {
+  const f = setup(t);
+  const repo = path.join(f.root, 'repo');
+  writeFile(repo, 'shared/l/SKILL.md', '---\nname: l\ndescription: Skill l.\n---\nlinked\n');
+  junction(path.join(repo, 'shared', 'l'), path.join(repo, 'p', 'skills', 'l'));
+  f.repo = repo;
+  f.plugin = readCatalog(repo).plugins[0];
+  f.holder = path.join(f.root, 'filtered', holderName(f.plugin, IDS));
+  return f;
+}
+
+function holderFor(f, ids) {
+  return path.join(f.root, 'filtered', holderName(f.plugin, ids));
+}
+
+test('a linked folder inside the repository is copied as its content', (t) => {
+  const f = setupLinked(t);
+  const ids = ['p/skills/a', 'p/skills/l'];
+  const holder = holderFor(f, ids);
+  const first = syncCopy(f.plugin, ids, holder);
+  const copyFile = path.join(first.copyRoot, 'skills', 'l', 'SKILL.md');
+  assert.ok(fs.existsSync(copyFile));
+  assert.equal(fs.lstatSync(path.join(first.copyRoot, 'skills', 'l')).isSymbolicLink(), false);
+  assert.deepEqual(first.skipped, []);
+
+  fs.writeFileSync(copyFile, 'edited in the copy');
+  let r = syncCopy(f.plugin, ids, holder);
+  assert.ok(r.actions.some((a) => a.action === 'toSource' && a.rel === 'skills/l/SKILL.md'));
+  assert.equal(fs.readFileSync(path.join(f.repo, 'shared', 'l', 'SKILL.md'), 'utf8'), 'edited in the copy');
+
+  fs.rmSync(copyFile);
+  r = syncCopy(f.plugin, ids, holder);
+  assert.ok(r.actions.some((a) => a.action === 'deletedInSource' && a.rel === 'skills/l/SKILL.md'));
+  assert.ok(!fs.existsSync(path.join(f.repo, 'shared', 'l', 'SKILL.md')));
+  assert.equal(fs.lstatSync(path.join(f.plugin.dir, 'skills', 'l')).isSymbolicLink(), true, 'the link survives');
+});
+
+test('a link outside the repository is left out and reported', (t) => {
+  const f = setup(t);
+  const outside = writeFile(f.root, 'outside/x.txt', 'outside');
+  junction(path.join(f.root, 'outside'), path.join(f.plugin.dir, 'assets'));
+  const holder = holderFor(f, IDS);
+  const reason = 'link to a path outside the repository';
+  const first = syncCopy(f.plugin, IDS, holder);
+  assert.deepEqual(first.skipped, [{ rel: 'assets', reason }]);
+  assert.ok(!fs.existsSync(path.join(first.copyRoot, 'assets')));
+  const second = syncCopy(f.plugin, IDS, holder);
+  assert.deepEqual(second.skipped, [{ rel: 'assets', reason }]);
+  assert.ok(!second.actions.some((a) => a.rel.startsWith('assets')));
+  assert.equal(fs.readFileSync(outside, 'utf8'), 'outside');
+});
+
+test('a broken link is left out', (t) => {
+  const f = setup(t);
+  writeFile(f.root, 'tmpdir/x.txt', 'x');
+  junction(path.join(f.root, 'tmpdir'), path.join(f.plugin.dir, 'gone'));
+  removeTree(path.join(f.root, 'tmpdir'));
+  const r = syncCopy(f.plugin, IDS, holderFor(f, IDS));
+  assert.deepEqual(r.skipped, [{ rel: 'gone', reason: 'broken link' }]);
+});
+
+test('a link loop is left out', (t) => {
+  const f = setup(t);
+  const loop = path.join(f.plugin.dir, 'agents', 'loop');
+  junction(f.plugin.dir, loop);
+  try {
+    const r = syncCopy(f.plugin, IDS, holderFor(f, IDS));
+    assert.deepEqual(r.skipped, [{ rel: 'agents/loop', reason: 'link loop' }]);
+    assert.ok(fs.existsSync(path.join(r.copyRoot, 'agents', 'z.md')));
+  } finally {
+    fs.rmdirSync(loop); // removes the junction only: the cleanup of the temporary folder can't follow a loop
+  }
+});
+
+test('a link inside the copy is never synced', (t) => {
+  const f = setup(t);
+  const holder = holderFor(f, IDS);
+  const first = syncCopy(f.plugin, IDS, holder);
+  writeFile(f.root, 'outside/x.txt', 'outside');
+  junction(path.join(f.root, 'outside'), path.join(first.copyRoot, 'extra'));
+  const r = syncCopy(f.plugin, IDS, holder);
+  assert.ok(r.skipped.some((s) => s.rel === 'extra' && s.reason === 'link in the partial copy'));
+  assert.ok(!fs.existsSync(path.join(f.plugin.dir, 'extra')));
+  assert.deepEqual(r.actions, []);
+});
+
+test('an unselected linked skill is not reported', (t) => {
+  const f = setupLinked(t);
+  const ids = ['p/skills/a'];
+  const r = syncCopy(f.plugin, ids, holderFor(f, ids));
+  assert.ok(!fs.existsSync(path.join(r.copyRoot, 'skills', 'l')));
+  assert.deepEqual(r.skipped, []);
+});
+
+test('copyRootOf is the copy root that syncCopy returns', (t) => {
+  const f = setup(t);
+  const holder = holderFor(f, IDS);
+  assert.equal(copyRootOf(f.plugin, holder), syncCopy(f.plugin, IDS, holder).copyRoot);
 });

@@ -87,7 +87,7 @@ test('sync lifecycle: clone, upToDate, updated, discard', async (t) => {
   assert.ok(log.includes('second commit'));
 
   fs.appendFileSync(path.join(args.managedRepo, 'p', 'notes.txt'), ' local edit');
-  const d = await sync.discardLocalChanges({ run: args.run, managedRepo: args.managedRepo });
+  const d = await sync.discardLocalChanges({ run: args.run, managedRepo: args.managedRepo, lockFile: args.lockFile });
   assert.equal(d.ok, true);
   assert.equal(fs.readFileSync(path.join(args.managedRepo, 'p', 'notes.txt'), 'utf8'), 'one');
   // the reset goes to the already fetched upstream: a commit pushed after it is what the next sync updates to
@@ -96,28 +96,140 @@ test('sync lifecycle: clone, upToDate, updated, discard', async (t) => {
   assert.equal(r.kind, 'updated');
 });
 
-test('sync reclones when the url changes', async (t) => {
+const refsOf = (clone, pattern) => git(['for-each-ref', '--format=%(refname:short)', pattern], clone);
+
+// a marker inside .git: it survives only if the managed clone is switched in place, never deleted and cloned again
+function addMarker(f) {
+  const marker = path.join(f.args.managedRepo, '.git', 'team-marker');
+  fs.writeFileSync(marker, 'x');
+  return marker;
+}
+
+// a `dev` branch on origin with p/dev.txt
+function pushDev(f) {
+  git(['checkout', '-b', 'dev'], f.work);
+  writeFile(f.work, 'p/dev.txt', 'dev');
+  commitAll(f.work, 'dev commit');
+  git(['push', 'origin', 'dev'], f.work);
+  git(['checkout', 'main'], f.work);
+}
+
+test('sync switches in place when the url changes', async (t) => {
   if (!gitAvailable()) {
     return t.skip('git is not available');
   }
   const f = setup(t);
-  await sync.syncManaged(f.args);
+  const clone = f.args.managedRepo;
+  assert.equal((await sync.syncManaged(f.args)).kind, 'cloned');
+  const marker = addMarker(f);
   const other = makeOrigin(f.root, 'other');
   const r = await sync.syncManaged({ ...f.args, repoUrl: other.origin });
-  assert.equal(r.kind, 'cloned');
-  assert.equal(git(['remote', 'get-url', 'origin'], f.args.managedRepo), other.origin);
+  assert.equal(r.kind, 'switched');
+  assert.equal(r.branch, 'main');
+  assert.equal(git(['remote', 'get-url', 'origin'], clone), other.origin);
+  assert.ok(fs.existsSync(marker));
+  assert.equal(git(['rev-parse', 'HEAD'], clone), git(['rev-parse', 'HEAD'], other.work));
+  assert.equal(refsOf(clone, 'refs/heads/'), 'main');
+  assert.equal(git(['rev-parse', '--abbrev-ref', '@{u}'], clone), 'origin/main');
+  assert.equal(refsOf(clone, 'refs/team-plugins'), '');
+  assert.equal((await sync.syncManaged({ ...f.args, repoUrl: other.origin })).kind, 'upToDate');
 });
 
-test('sync reclones when the branch changes', async (t) => {
+test('sync switches in place when the branch changes', async (t) => {
   if (!gitAvailable()) {
     return t.skip('git is not available');
   }
   const f = setup(t);
-  git(['push', 'origin', 'main:dev'], f.work);
-  await sync.syncManaged(f.args);
+  const clone = f.args.managedRepo;
+  pushDev(f);
+  assert.equal((await sync.syncManaged(f.args)).kind, 'cloned');
+  const marker = addMarker(f);
   const r = await sync.syncManaged({ ...f.args, branch: 'dev' });
-  assert.equal(r.kind, 'cloned');
+  assert.equal(r.kind, 'switched');
+  assert.equal(r.branch, 'dev');
+  assert.equal(git(['rev-parse', '--abbrev-ref', 'HEAD'], clone), 'dev');
+  assert.ok(fs.existsSync(path.join(clone, 'p', 'dev.txt')));
+  assert.ok(fs.existsSync(marker));
+  assert.equal(git(['rev-parse', '--abbrev-ref', '@{u}'], clone), 'origin/dev');
+  assert.equal(refsOf(clone, 'refs/heads/'), 'dev');
+});
+
+test('an empty branch setting goes back to the default branch', async (t) => {
+  if (!gitAvailable()) {
+    return t.skip('git is not available');
+  }
+  const f = setup(t);
+  const clone = f.args.managedRepo;
+  pushDev(f);
+  await sync.syncManaged(f.args);
+  assert.equal((await sync.syncManaged({ ...f.args, branch: 'dev' })).kind, 'switched');
+  const r = await sync.syncManaged({ ...f.args, branch: '' });
+  assert.equal(r.kind, 'switched');
+  assert.equal(r.branch, 'main');
+  assert.ok(!fs.existsSync(path.join(clone, 'p', 'dev.txt')));
+  assert.equal(git(['rev-parse', '--abbrev-ref', '@{u}'], clone), 'origin/main');
+  assert.equal((await sync.syncManaged({ ...f.args, branch: '' })).kind, 'upToDate');
+});
+
+test('an empty branch setting follows a new default branch', async (t) => {
+  if (!gitAvailable()) {
+    return t.skip('git is not available');
+  }
+  const f = setup(t);
+  pushDev(f);
+  await sync.syncManaged(f.args);
+  git(['symbolic-ref', 'HEAD', 'refs/heads/dev'], f.origin);
+  const r = await sync.syncManaged({ ...f.args, branch: '' });
+  assert.equal(r.kind, 'switched');
+  assert.equal(r.branch, 'dev');
   assert.equal(git(['rev-parse', '--abbrev-ref', 'HEAD'], f.args.managedRepo), 'dev');
+});
+
+test('a missing branch is an error that changes nothing', async (t) => {
+  if (!gitAvailable()) {
+    return t.skip('git is not available');
+  }
+  const f = setup(t);
+  const clone = f.args.managedRepo;
+  await sync.syncManaged(f.args);
+  const marker = addMarker(f);
+  const r = await sync.syncManaged({ ...f.args, branch: 'nope' });
+  assert.equal(r.kind, 'error');
+  assert.equal(r.message, `branch nope not found on ${f.args.repoUrl}`);
+  assert.equal(git(['rev-parse', '--abbrev-ref', 'HEAD'], clone), 'main');
+  assert.ok(fs.existsSync(marker));
+  assert.equal(refsOf(clone, 'refs/team-plugins'), '');
+});
+
+test('an unreachable repository is an error that changes nothing', async (t) => {
+  if (!gitAvailable()) {
+    return t.skip('git is not available');
+  }
+  const f = setup(t);
+  const clone = f.args.managedRepo;
+  await sync.syncManaged(f.args);
+  const r = await sync.syncManaged({ ...f.args, repoUrl: fwd(path.join(f.root, 'missing.git')) });
+  assert.equal(r.kind, 'error');
+  assert.ok(r.message.startsWith('cannot read the default branch of'), r.message);
+  assert.equal(git(['remote', 'get-url', 'origin'], clone), f.args.repoUrl);
+  assert.ok(fs.existsSync(clone));
+});
+
+test('a local edit blocks the switch', async (t) => {
+  if (!gitAvailable()) {
+    return t.skip('git is not available');
+  }
+  const f = setup(t);
+  const clone = f.args.managedRepo;
+  pushDev(f);
+  await sync.syncManaged(f.args);
+  const file = path.join(clone, 'p', 'skills', 's', 'SKILL.md');
+  fs.writeFileSync(file, 'edited');
+  const r = await sync.syncManaged({ ...f.args, branch: 'dev' });
+  assert.equal(r.kind, 'error');
+  assert.match(r.message, /has local changes/);
+  assert.equal(fs.readFileSync(file, 'utf8'), 'edited');
+  assert.equal(git(['rev-parse', '--abbrev-ref', 'HEAD'], clone), 'main');
 });
 
 test('a failing git never deletes the managed clone', async (t) => {
@@ -148,7 +260,7 @@ test('a clone without origin is reported, not deleted', async (t) => {
   assert.ok(fs.existsSync(f.args.managedRepo));
 });
 
-test('a commit on a branch without upstream blocks the reclone', async (t) => {
+test('a commit on a branch without upstream blocks the switch', async (t) => {
   if (!gitAvailable()) {
     return t.skip('git is not available');
   }
@@ -347,4 +459,138 @@ test('localChanges lists modified, untracked and deleted files and the unpushed 
   git([...IDENTITY, 'commit', '-m', 'local'], f.clone);
   c = await sync.localChanges({ run: f.args.run, repo: f.clone });
   assert.deepEqual(c, { files: [], ahead: 1 });
+});
+
+const MIN2_AGO = () => new Date(Date.now() - 2 * 60 * 1000);
+
+test('removeStaleIndexLock removes only an old index.lock', (t) => {
+  const root = tmpDir();
+  t.after(() => rmDir(root));
+  const lock = path.join(root, '.git', 'index.lock');
+  const messages = [];
+  assert.equal(sync.removeStaleIndexLock(root, (m) => messages.push(m)), false);
+  writeFile(root, '.git/index.lock', '');
+  assert.equal(sync.removeStaleIndexLock(root, (m) => messages.push(m)), false);
+  assert.ok(fs.existsSync(lock));
+  fs.utimesSync(lock, MIN2_AGO(), MIN2_AGO());
+  assert.equal(sync.removeStaleIndexLock(root, (m) => messages.push(m)), true);
+  assert.ok(!fs.existsSync(lock));
+  assert.equal(messages.length, 1);
+  assert.match(messages[0], /removed a stale .*index\.lock/);
+});
+
+test('a stale index.lock no longer blocks the sync', async (t) => {
+  if (!gitAvailable()) {
+    return t.skip('git is not available');
+  }
+  const f = await setupFiles(t);
+  pushCommit(f.work, 'a.txt', 'a', 'team');
+  fs.writeFileSync(path.join(f.clone, 'p', 'skills', 's', 'SKILL.md'), 'local edit');
+  const lock = path.join(f.clone, '.git', 'index.lock');
+  fs.writeFileSync(lock, '');
+  fs.utimesSync(lock, MIN2_AGO(), MIN2_AGO());
+  const r = await sync.syncManaged(f.args);
+  assert.equal(r.kind, 'updated');
+  assert.ok(!fs.existsSync(lock));
+});
+
+test('leftover temporary clones are removed', async (t) => {
+  if (!gitAvailable()) {
+    return t.skip('git is not available');
+  }
+  const f = setup(t);
+  const parent = path.dirname(f.args.managedRepo);
+  const leftover = path.join(parent, 'repo.tmp-1-2');
+  writeFile(parent, 'repo.tmp-1-2/x.txt', 'x');
+  writeFile(parent, 'other/y.txt', 'y');
+  assert.equal((await sync.syncManaged(f.args)).kind, 'cloned');
+  assert.ok(!fs.existsSync(leftover));
+  writeFile(parent, 'repo.tmp-1-2/x.txt', 'x');
+  assert.equal((await sync.syncManaged(f.args)).kind, 'upToDate');
+  assert.ok(!fs.existsSync(leftover));
+  assert.ok(fs.existsSync(path.join(parent, 'other', 'y.txt')));
+});
+
+test('clone and fetch get the long timeouts', async (t) => {
+  if (!gitAvailable()) {
+    return t.skip('git is not available');
+  }
+  const f = setup(t);
+  const calls = [];
+  const run = (args, cwd, timeoutMs, opts) => {
+    calls.push([args, timeoutMs]);
+    return f.args.run(args, cwd, timeoutMs, opts);
+  };
+  assert.equal((await sync.syncManaged({ ...f.args, run })).kind, 'cloned');
+  pushCommit(f.work, 'a.txt', 'a', 'team');
+  assert.equal((await sync.syncManaged({ ...f.args, run })).kind, 'updated');
+  const clone = calls.find(([args]) => args.includes('clone'));
+  assert.equal(clone[1], sync.CLONE_TIMEOUT_MS);
+  const fetch = calls.find(([args]) => args.includes('fetch') && args.includes('origin'));
+  assert.equal(fetch[1], sync.FETCH_TIMEOUT_MS);
+});
+
+test('withLock', async (t) => {
+  const root = tmpDir();
+  t.after(() => rmDir(root));
+  const lockFile = path.join(root, 'sub', 'x.lock');
+
+  fs.mkdirSync(path.dirname(lockFile), { recursive: true });
+  fs.writeFileSync(lockFile, 'other');
+  let called = false;
+  assert.deepEqual(await sync.withLock({ lockFile }, () => { called = true; }), { kind: 'busy' });
+  assert.equal(called, false);
+  fs.rmSync(lockFile);
+
+  assert.equal(await sync.withLock({ lockFile }, async () => 42), 42);
+  assert.ok(!fs.existsSync(lockFile));
+
+  await assert.rejects(
+    sync.withLock({ lockFile }, async () => {
+      throw new Error('boom');
+    }),
+    /boom/,
+  );
+  assert.ok(!fs.existsSync(lockFile));
+
+  // the heartbeat keeps a long operation from being taken for a stale lock
+  await sync.withLock({ lockFile, heartbeatMs: 20 }, async () => {
+    const hourAgo = new Date(Date.now() - 3600 * 1000);
+    fs.utimesSync(lockFile, hourAgo, hourAgo);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.ok(Date.now() - fs.statSync(lockFile).mtimeMs < 5000);
+  });
+});
+
+test('withLockSync', (t) => {
+  const root = tmpDir();
+  t.after(() => rmDir(root));
+  const lockFile = path.join(root, 'x.lock');
+  fs.writeFileSync(lockFile, 'other');
+  assert.deepEqual(sync.withLockSync(lockFile, () => 1), { kind: 'busy' });
+  fs.rmSync(lockFile);
+  assert.deepEqual(sync.withLockSync(lockFile, () => 7), { kind: 'done', value: 7 });
+  assert.ok(!fs.existsSync(lockFile));
+  assert.throws(
+    () =>
+      sync.withLockSync(lockFile, () => {
+        throw new Error('boom');
+      }),
+    /boom/,
+  );
+  assert.ok(!fs.existsSync(lockFile));
+});
+
+test('discard is busy while the lock is held', async (t) => {
+  if (!gitAvailable()) {
+    return t.skip('git is not available');
+  }
+  const f = await setupFiles(t);
+  writeFile(f.clone, 'a.md', 'local\n');
+  fs.writeFileSync(f.args.lockFile, 'other');
+  const d = await sync.discardLocalChanges({ run: f.args.run, managedRepo: f.clone, lockFile: f.args.lockFile });
+  assert.equal(d.ok, false);
+  assert.equal(d.busy, true);
+  assert.equal(typeof d.message, 'string');
+  assert.equal(f.read('a.md'), 'local\n');
 });
