@@ -230,3 +230,22 @@ test('commitAndPush reports an old git', async (t) => {
   assert.equal(r.step, 'conflicts');
   assert.match(r.message, /git 2\.38 or later/);
 });
+
+test('a failing status is an error, not "nothing"', async (t) => {
+  if (!gitAvailable()) {
+    return t.skip('git is not available');
+  }
+  const f = await setup(t);
+  const run = (args, cwd, timeoutMs, opts) =>
+    args.includes('status')
+      ? Promise.resolve({ code: 128, stdout: '', stderr: 'fatal: boom' })
+      : f.run(args, cwd, timeoutMs, opts);
+  let r = await commitAndPush({ ...f.args, run });
+  assert.equal(r.kind, 'error');
+  assert.equal(r.step, 'status');
+  assert.match(r.message, /git status failed/);
+  r = await pushToBranch({ ...f.args, run, branch: 'dev/mine' });
+  assert.equal(r.kind, 'error');
+  assert.equal(r.step, 'status');
+  assert.match(r.message, /git status failed/);
+});

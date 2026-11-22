@@ -47,3 +47,13 @@ test('buildVsix', (t) => {
   assert.ok(manifest.includes('<Icon>extension/resources/icon.png</Icon>'));
   assert.ok(manifest.includes('Path="extension/LICENSE.txt"'));
 });
+
+// The README is the extension's details page, which opens only http, https and mailto links (Cursor 3.31): a relative
+// link to a file (or any other scheme) does nothing when clicked.
+test('the README links only to web pages', () => {
+  const readme = fs.readFileSync(path.join(__dirname, '..', 'README.md'), 'utf8');
+  const links = [...readme.matchAll(/\]\(([^)\s]+)\)/g)].map((m) => m[1]);
+  for (const l of links) {
+    assert.match(l, /^(https?|mailto):/i, `${l} can't be opened from the extension's details page`);
+  }
+});

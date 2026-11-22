@@ -394,11 +394,9 @@ function logSkipped(plugin, skipped) {
   }
 }
 
-// Partial-copy syncs write into the managed clone: in managed mode they hold the sync lock like git operations.
+// Partial-copy syncs and conflict choices hold the sync lock in every mode: windows with the same selection share a
+// copy (in managed mode they also write into the clone).
 function withCopyLock(fn) {
-  if (currentMode().mode !== 'managed') {
-    return { kind: 'done', value: fn() };
-  }
   return sync.withLockSync(paths().lockFile, fn);
 }
 
@@ -428,7 +426,12 @@ async function refreshChanges() {
     try {
       changes = await sync.localChanges({ run: makeGit(gitPath()), repo: m.repoDir });
     } catch (err) {
-      log(`cannot read the local changes: ${err.message}`);
+      changes = { files: [], ahead: 0, error: err.message };
+      const key = `changes:${err.message}`;
+      if (!loggedWarnings.has(key)) {
+        loggedWarnings.add(key);
+        log(`cannot read the local changes: ${err.message}`);
+      }
     }
   }
   await vscode.commands.executeCommand('setContext', 'teamPlugins.hasChanges', hasChanges());
@@ -437,6 +440,16 @@ async function refreshChanges() {
 
 function hasChanges() {
   return !!changes && (changes.files.length > 0 || changes.ahead > 0);
+}
+
+// Reports a local-changes read failure (true) so a command never says "nothing to commit" when git failed.
+function changesUnreadable() {
+  if (changes && changes.error) {
+    vscode.window.showErrorMessage(`Team plugins: cannot read the local changes: ${changes.error}`, 'Show log')
+      .then((choice) => (choice === 'Show log' ? output.show() : undefined));
+    return true;
+  }
+  return false;
 }
 
 // A partial copy left behind (its plugin is now fully enabled, disabled or selected differently) is no longer synced:
@@ -649,7 +662,12 @@ function updateStatus() {
     text = '$(plug) Team: not configured';
   } else if (!api) {
     text = '$(error) Team';
-  } else if ((lastResult && ['conflict', 'error'].includes(lastResult.kind)) || lastApplyErrors > 0 || copyConflicts.length > 0) {
+  } else if (
+    (lastResult && ['conflict', 'error'].includes(lastResult.kind)) ||
+    lastApplyErrors > 0 ||
+    copyConflicts.length > 0 ||
+    (changes && changes.error)
+  ) {
     text = `$(warning) Team ${count}`;
   } else {
     text = `$(plug) Team ${count}`;
@@ -674,6 +692,9 @@ function updateStatus() {
   }
   if (hasChanges()) {
     lines.push(`Local changes: ${changes.files.length} file(s), ${changes.ahead} unpushed commit(s)`);
+  }
+  if (changes && changes.error) {
+    lines.push('Local changes: cannot be read (see the log)');
   }
   if (copyConflicts.length > 0) {
     lines.push(`Partial copy conflicts: ${copyConflicts.length} (see the Conflicts group)`);
@@ -756,6 +777,9 @@ class PluginTree {
     item.contextValue = node.contextValue;
     if (node.kind === 'change') {
       item.iconPath = new vscode.ThemeIcon(CHANGE_ICONS[node.status] || 'diff-modified');
+    } else if (node.kind === 'changes' && node.error) {
+      item.iconPath = new vscode.ThemeIcon('warning');
+      item.command = { command: 'teamPlugins.showLog', title: 'Show log' };
     } else if (TREE_ICONS[node.kind]) {
       item.iconPath = new vscode.ThemeIcon(TREE_ICONS[node.kind]);
     }
@@ -1043,6 +1067,9 @@ function registerCommands(context) {
     }
     await flushPartials();
     await refreshChanges();
+    if (changesUnreadable()) {
+      return;
+    }
     if (!hasChanges()) {
       vscode.window.showInformationMessage('Nothing to discard.');
       return;
@@ -1095,11 +1122,15 @@ function registerCommands(context) {
     vscode.workspace.registerTextDocumentContentProvider(GIT_SCHEME, {
       async provideTextDocumentContent(uri) {
         try {
-          const { repo, rev, path: file } = JSON.parse(decodeURIComponent(uri.query));
-          if (!rev) {
+          const request = JSON.parse(decodeURIComponent(uri.query));
+          if (currentMode().mode !== 'managed') {
             return '';
           }
-          const r = await makeGit(gitPath())(['show', `${rev}:${file}`], repo, undefined, { trim: false });
+          const args = sync.headFileArgs(request, paths().managedRepo);
+          if (!args) {
+            return '';
+          }
+          const r = await makeGit(gitPath())(args, paths().managedRepo, undefined, { trim: false });
           return r.code === 0 ? r.stdout : '';
         } catch {
           return '';
@@ -1254,6 +1285,9 @@ async function commitAndPushCommand() {
   }
   await flushPartials();
   await refreshChanges();
+  if (changesUnreadable()) {
+    return;
+  }
   if (!hasChanges()) {
     vscode.window.showInformationMessage('Nothing to commit or push.');
     return;
@@ -1302,6 +1336,9 @@ async function pushToBranchCommand() {
   }
   await flushPartials();
   await refreshChanges();
+  if (changesUnreadable()) {
+    return;
+  }
   if (!hasChanges()) {
     vscode.window.showInformationMessage('Nothing to push.');
     return;

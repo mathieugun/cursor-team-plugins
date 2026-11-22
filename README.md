@@ -12,7 +12,7 @@ Cursor picks the changes up live.
 Build the VSIX (see `AGENTS.md`) or take it from the team, then:
 
 ```
-cursor --install-extension dist/cursor-team-plugins-0.2.3.vsix
+cursor --install-extension dist/cursor-team-plugins-0.2.4.vsix
 ```
 
 and reload the Cursor window. The extension has no dependency.
@@ -80,7 +80,8 @@ Ask the agent to change a team skill, as you would any file. Where the edit land
   **Keep repository version** or **Keep copy version**.
 
 The edits show up in the view, in a **Local changes** group at the top (the number of files and of unpushed commits is
-next to its name). Click a file to see the diff, team version on the left and yours on the right.
+next to its name). Click a file to see the diff, team version on the left and yours on the right. When git cannot read
+the changes, the group says so (see the log) instead of looking empty.
 
 **Commit and push** (the cloud icon in the view's title bar, or right-click **Local changes**) asks for a commit
 message, commits every change of the managed clone, rebases it on the team's latest commits and pushes to the
@@ -138,11 +139,11 @@ picked up live, no sync is needed.
   name is the plugin name with characters other than letters, digits, `.`, `_` and `-` replaced by `_` (the plugin's
   own folder name, which Cursor uses, is unchanged).
 - Several windows share one clone: a lock file serialises every operation that changes it (sync, commit and push, push
-  to a branch, discard, partial-copy syncs), and the other windows notice the new state through `sync-state.json`. An
-  edit in the managed clone (another window's partial copy, or by hand) reaches this window's partial copies and view
-  within a second. A first clone may take up to 30 minutes, a fetch 5. A `.git/index.lock` older than a minute (left by
-  a killed git) is removed before the next operation, and leftover `repo.tmp-*` folders of a failed clone at the next
-  sync.
+  to a branch, discard, partial-copy syncs, which take the lock in local mode too since windows with the same selection
+  share a copy), and the other windows notice the new state through `sync-state.json`. An edit in the managed clone
+  (another window's partial copy, or by hand) reaches this window's partial copies and view within a second. A first
+  clone may take up to 30 minutes, a fetch 5. A `.git/index.lock` older than a minute (left by a killed git) is removed
+  before the next operation, and leftover `repo.tmp-*` folders of a failed clone at the next sync.
 
 ## Troubleshooting
 
@@ -182,4 +183,5 @@ picked up live, no sync is needed.
 
 ## License
 
-MIT, see [LICENSE](LICENSE). Copyright (c) 2026 Mathieu Gunther.
+MIT. Copyright (c) 2026 Mathieu Gunther. The full text is in `LICENSE.txt`, next to this README (in the repository and
+in the installed extension's folder).

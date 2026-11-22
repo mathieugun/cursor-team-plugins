@@ -657,3 +657,82 @@ test('recentlySynced', () => {
   assert.equal(sync.recentlySynced({ kind: 'upToDate', at: 'x' }, every, now), false);
   assert.equal(sync.recentlySynced({ kind: 'upToDate' }, every, now), false);
 });
+
+test('a vanished lock is tried again, never deleted', (t) => {
+  const root = tmpDir();
+  t.after(() => rmDir(root));
+  const lock = path.join(root, 'x.lock');
+  fs.writeFileSync(lock, 'third window');
+  const real = fs.statSync;
+  let thrown = false;
+  fs.statSync = (p, ...rest) => {
+    if (!thrown && path.resolve(String(p)) === path.resolve(lock)) {
+      thrown = true;
+      const err = new Error('ENOENT: no such file or directory');
+      err.code = 'ENOENT';
+      throw err;
+    }
+    return real(p, ...rest);
+  };
+  try {
+    assert.equal(sync.acquireLock(lock), false);
+  } finally {
+    fs.statSync = real;
+  }
+  assert.ok(thrown);
+  assert.equal(fs.readFileSync(lock, 'utf8'), 'third window');
+});
+
+test('an interrupted url switch is completed by the next sync', async (t) => {
+  if (!gitAvailable()) {
+    return t.skip('git is not available');
+  }
+  const f = setup(t);
+  const clone = f.args.managedRepo;
+  assert.equal((await sync.syncManaged(f.args)).kind, 'cloned');
+  const other = makeOrigin(f.root, 'other');
+  pushCommit(other.work, 'p/other.txt', 'other', 'other commit'); // a history of its own: the switch moves the branch
+  let failed = false;
+  const run = (args, cwd, timeoutMs, opts) => {
+    if (!failed && args.includes('set-url')) {
+      failed = true;
+      return Promise.resolve({ code: 1, stdout: '', stderr: 'simulated failure' });
+    }
+    return f.args.run(args, cwd, timeoutMs, opts);
+  };
+  const args = { ...f.args, run, repoUrl: other.origin };
+  const first = await sync.syncManaged(args);
+  assert.equal(first.kind, 'error');
+  assert.ok(failed);
+  const second = await sync.syncManaged(args);
+  assert.equal(second.kind, 'switched');
+  assert.equal(git(['remote', 'get-url', 'origin'], clone), other.origin);
+  assert.equal(refsOf(clone, 'refs/team-plugins'), '');
+  assert.equal(git(['rev-parse', 'HEAD'], clone), git(['rev-parse', 'HEAD'], other.work));
+});
+
+test('localChanges reports a failing status', async (t) => {
+  const run = (args) =>
+    Promise.resolve(
+      args.includes('status') ? { code: 128, stdout: '', stderr: 'fatal: boom' } : { code: 0, stdout: '0', stderr: '' },
+    );
+  await assert.rejects(sync.localChanges({ run, repo: 'x' }), /git status failed: fatal: boom/);
+});
+
+test('headFileArgs serves only HEAD of the managed clone', (t) => {
+  const root = tmpDir();
+  t.after(() => rmDir(root));
+  const M = path.join(root, 'store', 'repo');
+  const ok = ['show', 'HEAD:p/skills/s/SKILL.md'];
+  const req = (extra) => ({ repo: M, rev: 'HEAD', path: 'p/skills/s/SKILL.md', ...extra });
+  assert.deepEqual(sync.headFileArgs(req(), M), ok);
+  assert.deepEqual(sync.headFileArgs(req({ repo: M + path.sep }), M), ok);
+  assert.deepEqual(sync.headFileArgs(req({ repo: path.join(M, '.') }), M), ok);
+  assert.equal(sync.headFileArgs(req({ rev: '--output=x' }), M), null);
+  assert.equal(sync.headFileArgs(req({ rev: '' }), M), null);
+  assert.equal(sync.headFileArgs(req({ rev: 'HEAD~1' }), M), null);
+  assert.equal(sync.headFileArgs(req({ repo: path.join(root, 'other') }), M), null);
+  assert.equal(sync.headFileArgs(req({ path: '' }), M), null);
+  assert.equal(sync.headFileArgs(req({ path: 5 }), M), null);
+  assert.equal(sync.headFileArgs(null, M), null);
+});

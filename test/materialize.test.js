@@ -553,3 +553,27 @@ test("the sync's own writes are forgotten", (t) => {
   assert.deepEqual(syncCopy(f.plugin, f.ids, f.holder).actions, [{ action: 'toCopy', rel: SKILL_A }]);
   assert.equal(hashCache.entries.has(path.resolve(f.cp(SKILL_A))), false);
 });
+
+test('a source changed while a copy is built goes to the copy, never back to the source', (t) => {
+  const f = setup(t);
+  const srcA = path.join(f.plugin.dir, SKILL_A);
+  fs.writeFileSync(srcA, 'old');
+  const ids = ['p/skills/a'];
+  const holder = path.join(f.root, 'filtered', holderName(f.plugin, ids));
+  const real = fs.copyFileSync;
+  fs.copyFileSync = (from, to, ...rest) => {
+    real(from, to, ...rest);
+    if (path.resolve(from) === path.resolve(srcA)) {
+      fs.writeFileSync(srcA, 'team update'); // the team's update lands right after the file was copied
+    }
+  };
+  try {
+    syncCopy(f.plugin, ids, holder);
+  } finally {
+    fs.copyFileSync = real;
+  }
+  const second = syncCopy(f.plugin, ids, holder);
+  assert.deepEqual(second.actions, [{ action: 'toCopy', rel: SKILL_A }]);
+  assert.equal(fs.readFileSync(srcA, 'utf8'), 'team update');
+  assert.equal(fs.readFileSync(path.join(second.copyRoot, SKILL_A), 'utf8'), 'team update');
+});

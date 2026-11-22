@@ -51,6 +51,9 @@ assumptions are fine when the user asked for the assumptions to be tested).
 - On Windows `revealFileInOS` opens Explorer behind the Cursor window, so the user sees nothing happen: open the
   files in an editor instead (`showTextDocument`).
 
+- Two test repositories built the same way (`makeOrigin` in `test/sync.test.js`) within one second get identical
+  commit hashes (same tree, identity and time): a test that needs them to differ pushes an extra commit to one.
+
 - A VSIX rebuilt without a version change may not replace the installed one: check
   `%USERPROFILE%\.cursor\extensions\mg.cursor-team-plugins-<version>\extension.js` after installing (`--force`).
 

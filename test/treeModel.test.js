@@ -136,3 +136,14 @@ test('buildConflictsNode', () => {
     ],
   );
 });
+
+test('buildChangesNode with a read error', () => {
+  const node = buildChangesNode({ files: [], ahead: 0, error: 'git status failed: boom' });
+  assert.equal(node.id, 'changes');
+  assert.equal(node.kind, 'changes');
+  assert.equal(node.contextValue, 'changes.error');
+  assert.deepEqual(node.children, []);
+  assert.equal(node.tooltip, 'git status failed: boom');
+  assert.equal(node.error, 'git status failed: boom');
+  assert.equal(node.description, 'cannot be read: see the log');
+});

@@ -68,12 +68,11 @@ function vsixEntries() {
     { name: '[Content_Types].xml', data: Buffer.from(CONTENT_TYPES) },
     { name: 'extension.vsixmanifest', data: Buffer.from(manifestOf(pkg)) },
   ];
-  const files = ['package.json', 'extension.js', 'README.md', ...filesOf('lib'), ...filesOf('resources')];
+  // LICENSE.txt, not LICENSE: [Content_Types].xml maps types by extension, and README.md links the file by this name
+  const files = ['package.json', 'extension.js', 'README.md', 'LICENSE.txt', ...filesOf('lib'), ...filesOf('resources')];
   for (const f of files) {
     entries.push({ name: `extension/${f}`, data: fs.readFileSync(path.join(ROOT, f)) });
   }
-  // Packed as LICENSE.txt: [Content_Types].xml maps types by extension.
-  entries.push({ name: 'extension/LICENSE.txt', data: fs.readFileSync(path.join(ROOT, 'LICENSE')) });
   return entries;
 }
 
