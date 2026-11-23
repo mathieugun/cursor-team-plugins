@@ -18,7 +18,8 @@ No node on PATH: run with Cursor's runtime.
 (`--test` needs explicit files under this runtime; scripts/test.js lists them).
 
 ## Keep in step
-README.md (users, authors, limits), AGENTS.md, `package.json` version and `contributes` (settings, commands, menus).
+README.md (Cursor users: features, install, usage, main limits), docs/development.md (internals, platform notes,
+detailed limits, releasing), AGENTS.md, `package.json` version and `contributes` (settings, commands, menus).
 
 ## Live test
 Needs the user's OK (it changes the Cursor they use): package

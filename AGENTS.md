@@ -1,7 +1,9 @@
 # cursor-team-plugins: developer notes
 
 Cursor (VS Code) extension, version in `package.json` (0.4.1). Plain JavaScript, CommonJS, no npm dependency, no
-build step. User documentation: `README.md`.
+build step. User documentation: `README.md` (for Cursor users: what it does, install, usage; it shows
+only the current version, with no history). Internals, platform notes, detailed limits and the release process:
+`docs/development.md`.
 
 ## Layout
 
@@ -145,4 +147,5 @@ On a Linux machine with a Cursor server (a Remote-SSH host), the suite runs with
 
 - Never run `cursor --install-extension` or launch Cursor from an agent unless the user asks.
 - Don't add dependencies, TypeScript or a bundler.
-- Keep README (user and author documentation) in step with settings, commands and behaviour.
+- Keep README (user documentation) in step with settings, commands and behaviour; implementation details, platform
+  quirks and limits that only matter to developers go to `docs/development.md`, not the README.
