@@ -51,4 +51,5 @@ jobs:
 
       - name: Open VSX token missing
         if: env.OVSX_PAT == ''
-        run: echo "::warning::OVSX_PAT is not set: the VSIX is on the GitHub release only, not on Open VSX"
+        run: |
+          echo "::warning::OVSX_PAT is not set: the VSIX is on the GitHub release only, not on Open VSX"
