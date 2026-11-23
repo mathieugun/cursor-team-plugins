@@ -1,0 +1,54 @@
+# Runs when a tag `v*` is pushed: checks the tag against package.json, runs the tests, makes a GitHub release with the
+# VSIX and publishes it to Open VSX. OVSX_PAT is an Open VSX access token (README, "Building and releasing"); without
+# it only the GitHub release is made.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      OVSX_PAT: ${{ secrets.OVSX_PAT }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Check the tag matches package.json
+        run: |
+          version="v$(node -p "require('./package.json').version")"
+          if [ "$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match package.json ($version)"
+            exit 1
+          fi
+
+      - name: Test
+        run: node scripts/test.js
+
+      - name: Package
+        id: package
+        run: echo "vsix=$(node scripts/package.js)" >> "$GITHUB_OUTPUT"
+
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" "${{ steps.package.outputs.vsix }}" --title "$GITHUB_REF_NAME" --generate-notes
+
+      - name: Publish to Open VSX
+        if: env.OVSX_PAT != ''
+        run: |
+          curl --fail-with-body -sS -X POST -H "Content-Type: application/octet-stream" \
+            --data-binary "@${{ steps.package.outputs.vsix }}" \
+            "https://open-vsx.org/api/-/publish?token=$OVSX_PAT"
+
+      - name: Open VSX token missing
+        if: env.OVSX_PAT == ''
+        run: echo "::warning::OVSX_PAT is not set: the VSIX is on the GitHub release only, not on Open VSX"

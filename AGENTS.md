@@ -1,6 +1,6 @@
 # cursor-team-plugins: developer notes
 
-Cursor (VS Code) extension, version in `package.json` (0.4.0). Plain JavaScript, CommonJS, no npm dependency, no
+Cursor (VS Code) extension, version in `package.json` (0.4.1). Plain JavaScript, CommonJS, no npm dependency, no
 build step. User documentation: `README.md`.
 
 ## Layout
@@ -23,6 +23,9 @@ build step. User documentation: `README.md`.
   `code-review`, `security-check`, rule `style.mdc`; `docs`: skill `write-readme`, with a folded description);
   `make-test-repo.test.js` checks its catalog, so change the two together. `manual-remote-checks.md` is the hand
   checklist for the SSH and credential cases that tests can't cover.
+- `.github/workflows/release.yml`: on a `v*` tag, checks the tag against `package.json`, runs the tests, packages,
+  makes a GitHub release with the VSIX and publishes it to Open VSX when the `OVSX_PAT` secret is set (`curl` to
+  `https://open-vsx.org/api/-/publish?token=`; no npm).
 
 ## Commands
 
@@ -38,6 +41,8 @@ ELECTRON_RUN_AS_NODE=1 "$LOCALAPPDATA/Programs/cursor/Cursor.exe" scripts/make-t
 
 The VSIX is written to `dist/cursor-team-plugins-<version>.vsix`. The runner passes explicit test files to
 `--test`: with Cursor's runtime a directory argument fails.
+
+Release: bump `version`, commit, `git tag v<version>`, `git push origin v<version>`.
 
 On a Linux machine with a Cursor server (a Remote-SSH host), the suite runs with the server's node:
 `~/.cursor-server/bin/linux-x64/<commit>/node scripts/test.js`.
@@ -130,6 +135,11 @@ On a Linux machine with a Cursor server (a Remote-SSH host), the suite runs with
   folder (outside `.git`); a restarted watcher covers the whole tree as it is then.
 - Linux git says `repository '<path>' does not exist` for a missing local path (Windows git: `does not appear to be a
   git repository`).
+- Cursor's extension gallery (`marketplace.cursorapi.com`) mirrors Open VSX live: publishing there is how the extension
+  auto-updates (local and remote). The Open VSX namespace must equal `publisher` (`mathieugun`).
+- A VSIX install is pinned (`installGivenVersion`): Cursor never auto-updates it.
+- The publisher was `mg` up to 0.4.0: `extension.js` warns while `mg.cursor-team-plugins` is installed (both would
+  register the same plugins).
 
 ## Rules
 

@@ -2,8 +2,8 @@
   "name": "cursor-team-plugins",
   "displayName": "Team plugins",
   "description": "Keeps a team's Cursor plugins (rules and skills) in sync with the team git repository and registers the ones each user and project selected.",
-  "version": "0.4.0",
-  "publisher": "mg",
+  "version": "0.4.1",
+  "publisher": "mathieugun",
   "author": "Mathieu Gunther",
   "license": "MIT",
   "repository": {

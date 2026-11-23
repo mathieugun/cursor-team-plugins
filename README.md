@@ -9,13 +9,18 @@ Cursor picks the changes up live.
 
 ## Install
 
-Build the VSIX (see `AGENTS.md`) or take it from the team, then:
+In Cursor's Extensions view, search **Team plugins** (publisher `mathieugun`) and install it. Cursor updates it like
+any other extension (its marketplace is Open VSX: https://open-vsx.org/extension/mathieugun/cursor-team-plugins).
 
-```
-cursor --install-extension dist/cursor-team-plugins-0.4.0.vsix
-```
+Or download the VSIX from the GitHub releases (https://github.com/mathieugun/cursor-team-plugins/releases) and run
+`cursor --install-extension cursor-team-plugins-<version>.vsix`, then reload the window. A VSIX install is pinned:
+Cursor never updates it; install from the Extensions view to get updates.
 
-and reload the Cursor window. The extension has no dependency.
+Upgrading from 0.4.0 or earlier (publisher `mg`): uninstall the old **Team plugins** first (the new one warns while it
+is installed: both would register the same plugins). Settings and selections are kept; the team repository is cloned
+again into the new extension's storage.
+
+The extension has no dependency.
 
 ## First setup
 
@@ -73,13 +78,14 @@ choose **Sync now**.
 
 In a window connected to a remote machine, Cursor's agent runs on that machine, so the extension must run there too:
 install it once per remote machine. In the Extensions view of the remote window, Team plugins shows **Install in SSH:
-<host>**; click it and reload the window. To update it there, copy the new VSIX to the remote machine and run
-`cursor --install-extension <file>.vsix --force` in a terminal of the remote window, then reload the window.
+<host>**; click it and reload the window. Cursor updates it there like on your computer (when installed from the
+Extensions view); with a VSIX, run `cursor --install-extension <file>.vsix --force` in a terminal of the remote window,
+then reload the window.
 
 What runs on the remote machine:
 
 - The managed clone and the partial copies, in the extension's storage there
-  (`~/.cursor-server/data/User/globalStorage/mg.cursor-team-plugins`).
+  (`~/.cursor-server/data/User/globalStorage/mathieugun.cursor-team-plugins`).
 - git (2.38 or later, on that machine's PATH or `git.path` in the remote settings), with that machine's credentials
   and SSH keys: set them up in a terminal of the remote window (it opens on the remote machine), as in "Remote
   repository setup". The error messages name the machine.
@@ -190,6 +196,17 @@ Set `teamPlugins.localRepoPath` (or **Use a local clone**) to your own clone of 
 then never runs a git command that changes it: edit, commit and push with git as usual. File changes in the clone are
 picked up live, no sync is needed.
 
+### Building and releasing
+
+Build the VSIX with `node scripts/package.js` (see `AGENTS.md` for running without node). A release is: bump `version`
+in `package.json`, commit, push a tag `v<version>` (`git tag v0.4.1`, `git push origin v0.4.1`). The GitHub workflow
+`.github/workflows/release.yml` checks that the tag matches the version, runs the tests, attaches the VSIX to a GitHub
+release and publishes it to Open VSX. One-time Open VSX setup: sign in to https://open-vsx.org with GitHub, link an
+Eclipse Foundation account and accept the publisher agreement when asked, create an access token in the profile
+settings, create the namespace `mathieugun` (`npx ovsx create-namespace mathieugun -p <token>`, or on the site), and
+add the token as the repository secret `OVSX_PAT` (GitHub: Settings, Secrets and variables, Actions). Without the
+secret the workflow only makes the GitHub release.
+
 ## How it works
 
 - The managed clone lives in the extension's global storage, in `.cursor/plugins/repo`. The `.cursor/plugins` part of
@@ -243,7 +260,7 @@ picked up live, no sync is needed.
   plugins.
 - A plugin with the same name installed from a marketplace (for example the old local marketplace import) conflicts:
   remove that import first.
-- The extension does not update itself: install the new VSIX by hand (`cursor --install-extension <file>`).
+- A VSIX installed by hand is never updated by Cursor (pinned): install from the Extensions view to get updates.
 - Resolving a real conflict inside the extension: updates pause, the files are named, and you can push your changes to
   a branch (to merge in your own clone) or discard them; the extension never merges by itself.
 - A conflict between a partial copy and the repository is not merged line by line: you keep one of the two versions.
@@ -268,7 +285,7 @@ picked up live, no sync is needed.
   not tested): set the credentials up on the remote machine.
 - WSL and dev containers are not tested; they should work the same way (install the extension on that side). A dev
   container rebuild loses the clone, which is cloned again at the next start.
-- The extension must be installed on each remote machine, and updated there too (the same VSIX).
+- The extension must be installed on each remote machine (the Extensions view updates it there too).
 - After the window that did the timed fetches closes, the next timed update in another window can be up to half an
   interval late.
 

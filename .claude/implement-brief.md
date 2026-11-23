@@ -63,7 +63,7 @@ assumptions are fine when the user asked for the assumptions to be tested).
   commit hashes (same tree, identity and time): a test that needs them to differ pushes an extra commit to one.
 
 - A VSIX rebuilt without a version change may not replace the installed one: check
-  `%USERPROFILE%\.cursor\extensions\mg.cursor-team-plugins-<version>\extension.js` after installing (`--force`).
+  `%USERPROFILE%\.cursor\extensions\mathieugun.cursor-team-plugins-<version>\extension.js` after installing (`--force`).
 
 ## Implementer lessons
 <!-- One line per project-specific mistake seen in review. -->

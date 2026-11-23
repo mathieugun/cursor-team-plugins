@@ -22,6 +22,7 @@ const COPY_RETRY_MS = 2000;
 const COPY_RETRY_MAX = 30;
 const LOCKED_CODES = ['EBUSY', 'EPERM', 'EACCES'];
 const OFFLINE_RETRY_MS = 5 * 60 * 1000;
+const OLD_EXTENSION_ID = 'mg.cursor-team-plugins'; // the publisher was `mg` up to 0.4.0
 
 let output;
 let statusItem;
@@ -1530,6 +1531,23 @@ async function pushToBranchCommand() {
   await refresh({ sync: true });
 }
 
+// The extension of the old publisher registers the same plugins: ask to uninstall it (fire and forget).
+function warnOldExtension() {
+  if (!vscode.extensions.getExtension(OLD_EXTENSION_ID)) {
+    return;
+  }
+  const text = `The old Team plugins extension (${OLD_EXTENSION_ID}) is still installed: both register the same plugins. Uninstall it, then reload the window.`;
+  log(text);
+  vscode.window.showWarningMessage(text, 'Show it').then(
+    (choice) => {
+      if (choice === 'Show it') {
+        return vscode.commands.executeCommand('workbench.extensions.search', `@installed ${OLD_EXTENSION_ID}`);
+      }
+    },
+    (err) => log(`old extension warning error: ${err.message}`),
+  );
+}
+
 function activate(context) {
   storage = context.globalStorageUri.fsPath;
   fs.mkdirSync(storage, { recursive: true });
@@ -1560,6 +1578,7 @@ function activate(context) {
   );
 
   registerCommands(context);
+  warnOldExtension();
 
   let cursorApi;
   try {

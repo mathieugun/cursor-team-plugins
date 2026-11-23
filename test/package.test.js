@@ -42,7 +42,7 @@ test('buildVsix', (t) => {
   assert.ok(!names.some((n) => n.startsWith('extension/test/') || n.startsWith('extension/scripts/')));
   const manifest = entries.find((e) => e.name === 'extension.vsixmanifest').data.toString('utf8');
   assert.ok(manifest.includes('Id="cursor-team-plugins"'));
-  assert.ok(manifest.includes('Publisher="mg"'));
+  assert.ok(manifest.includes('Publisher="mathieugun"'));
   assert.ok(manifest.includes(`Version="${require('../package.json').version}"`));
   assert.ok(manifest.includes('<Icon>extension/resources/icon.png</Icon>'));
   assert.ok(manifest.includes('Path="extension/LICENSE.txt"'));
