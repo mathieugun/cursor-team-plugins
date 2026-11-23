@@ -6,6 +6,14 @@
   "publisher": "mg",
   "author": "Mathieu Gunther",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mathieugun/cursor-team-plugins.git"
+  },
+  "homepage": "https://github.com/mathieugun/cursor-team-plugins#readme",
+  "bugs": {
+    "url": "https://github.com/mathieugun/cursor-team-plugins/issues"
+  },
   "icon": "resources/icon.png",
   "engines": {
     "vscode": "^1.85.0"
