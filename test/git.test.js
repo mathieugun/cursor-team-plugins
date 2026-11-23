@@ -48,9 +48,6 @@ test('a command running too long is stopped', async () => {
 });
 
 test('stopping a command kills its child processes too', async (t) => {
-  if (process.platform !== 'win32') {
-    return t.skip('taskkill /T is the Windows path');
-  }
   const pidFile = path.join(tmpDir(), 'child.pid');
   t.after(() => {
     try {
@@ -65,7 +62,7 @@ test('stopping a command kills its child processes too', async (t) => {
     "require('fs').writeFileSync(" + JSON.stringify(pidFile) + ", String(c.pid)); setTimeout(() => {}, 30000);";
   const r = await fake(['-e', script], process.cwd(), 0, { idleMs: 1000 });
   assert.equal(r.timedOut, 'idle');
-  // taskkill is not awaited: give it up to 10 s under a loaded machine
+  // the kill is not awaited: give it up to 10 s under a loaded machine
   const pid = Number(fs.readFileSync(pidFile, 'utf8'));
   const alive = () => {
     try {
@@ -79,6 +76,43 @@ test('stopping a command kills its child processes too', async (t) => {
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   assert.equal(alive(), false, `child ${pid} still runs`);
+});
+
+test("a child process holding the output open doesn't keep a stopped command waiting", async (t) => {
+  const pidFile = path.join(tmpDir(), 'child.pid');
+  t.after(() => {
+    try {
+      process.kill(Number(fs.readFileSync(pidFile, 'utf8')));
+    } catch {
+      // already gone
+    }
+    rmDir(path.dirname(pidFile));
+  });
+  // the grandchild shares the stderr pipe (stdio: 'inherit') and outlives git unless the whole tree is killed
+  const script =
+    "const c = require('child_process').spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: 'inherit' }); " +
+    "require('fs').writeFileSync(" + JSON.stringify(pidFile) + ", String(c.pid)); setTimeout(() => {}, 30000);";
+  const started = Date.now();
+  const r = await fake(['-e', script], process.cwd(), 0, { idleMs: 1000 });
+  assert.equal(r.timedOut, 'idle');
+  assert.ok(Date.now() - started < 10000, `took ${Date.now() - started} ms`);
+});
+
+test('a git that cannot start reports the error', async (t) => {
+  const dir = tmpDir();
+  t.after(() => rmDir(dir));
+  const r = await makeGit(path.join(dir, 'no-such-git'))(['--version'], process.cwd());
+  assert.equal(r.code, 1);
+  assert.equal(r.stdout, '');
+  assert.match(r.stderr, /ENOENT/);
+});
+
+test('output over 16 MB stops the command', async () => {
+  const script = 'process.stdout.write(Buffer.alloc(17 * 1024 * 1024, 97)); setTimeout(() => {}, 30000);';
+  const r = await fake(['-e', script], process.cwd(), 20000);
+  assert.notEqual(r.code, 0);
+  assert.equal(r.timedOut, undefined);
+  assert.ok(r.stderr.endsWith('git output exceeded 16 MB'), r.stderr);
 });
 
 test('git runs without prompts', async () => {

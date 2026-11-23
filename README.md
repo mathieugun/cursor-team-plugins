@@ -12,7 +12,7 @@ Cursor picks the changes up live.
 Build the VSIX (see `AGENTS.md`) or take it from the team, then:
 
 ```
-cursor --install-extension dist/cursor-team-plugins-0.3.0.vsix
+cursor --install-extension dist/cursor-team-plugins-0.4.0.vsix
 ```
 
 and reload the Cursor window. The extension has no dependency.
@@ -22,9 +22,9 @@ and reload the Cursor window. The extension has no dependency.
 1. In Cursor, remove the old local marketplace import of the team repository (a plugin with the same name installed
    from a marketplace conflicts with the one this extension registers).
 2. Make sure `git clone <team repository url>` works in a terminal: the extension uses your own git credentials
-   (credential manager or SSH agent) and never asks for a password. Git 2.38 or later is needed: the extension finds
-   conflicts with `git merge-tree --write-tree` before an update, and an older git makes every update fail with a
-   message saying so.
+   (credential manager, credential helper or SSH key) and never asks for a password. Git 2.38 or later is needed: the
+   extension finds conflicts with `git merge-tree --write-tree` before an update, and an older git makes every update
+   fail with a message saying so.
 3. Open the **Team Plugins** view (activity bar) and choose **Set repository URL**, or set
    `teamPlugins.repoUrl` in the settings. The URL is checked as soon as it is set (a message says that the server
    answers, or why it doesn't), then the repository is cloned in the background.
@@ -48,6 +48,9 @@ waits for a typed answer. So SSH and HTTPS must work without questions once, whi
 
 - Git Credential Manager keeps your credentials: sign in once in a terminal with `git ls-remote <url>`. The extension
   never opens a sign-in window, so a background sync never waits on a hidden one.
+- On Linux and macOS (and on the remote machine of a remote window), git keeps credentials only with a credential
+  helper: for example `git config --global credential.helper store` (a plain-text file readable only by you) or
+  `gh auth setup-git`, then sign in once with `git ls-remote <url>` (a token as the password for GitHub).
 
 When something is wrong, the message tells what to do. The **Open terminal** button runs
 `git ls-remote -- <url> HEAD` in a Cursor terminal, where SSH and the credential manager can ask their questions; then
@@ -65,6 +68,32 @@ choose **Sync now**.
 | Cannot reach the server | Offline, VPN down or DNS: nothing to do, the update is retried after 5 minutes. |
 | No answer for 2 minutes | git was stopped, often because SSH waited for a question: Open terminal, answer it, Sync now. |
 | The server refused the push | A protected branch or no write access: **Push to a branch**, then open a pull request. |
+
+## Remote windows (Remote-SSH)
+
+In a window connected to a remote machine, Cursor's agent runs on that machine, so the extension must run there too:
+install it once per remote machine. In the Extensions view of the remote window, Team plugins shows **Install in SSH:
+<host>**; click it and reload the window. To update it there, copy the new VSIX to the remote machine and run
+`cursor --install-extension <file>.vsix --force` in a terminal of the remote window, then reload the window.
+
+What runs on the remote machine:
+
+- The managed clone and the partial copies, in the extension's storage there
+  (`~/.cursor-server/data/User/globalStorage/mg.cursor-team-plugins`).
+- git (2.38 or later, on that machine's PATH or `git.path` in the remote settings), with that machine's credentials
+  and SSH keys: set them up in a terminal of the remote window (it opens on the remote machine), as in "Remote
+  repository setup". The error messages name the machine.
+
+Settings: the repository URL, the branch, the update interval and your selection (`enabled`, `excluded`) are user
+settings, the same in local and remote windows. `teamPlugins.localRepoPath` is set per machine: in a remote window it
+is a path on the remote machine (stored in its remote settings). A project's `projectPlugins` is read from the remote
+project's `.vscode/settings.json`.
+
+Each machine has its own clone: an agent's edit in a remote window lands in that machine's clone and shows in its
+Local changes; commit and push it from a window on that machine. Other machines get it at their next sync. Several
+windows on the same remote machine share its clone, as local windows do.
+
+The status bar tooltip shows `Machine: <host> (remote window)`.
 
 ## Picking plugins
 
@@ -164,7 +193,8 @@ picked up live, no sync is needed.
 ## How it works
 
 - The managed clone lives in the extension's global storage, in `.cursor/plugins/repo`. The `.cursor/plugins` part of
-  the path matters: Cursor lists a `SKILL.md` as a skill only below such a folder.
+  the path matters: Cursor lists a `SKILL.md` as a skill only below such a folder. In a remote window this is the
+  remote machine's storage (see "Remote windows").
 - For each selected plugin the extension calls `vscode.cursor.plugins.addPlugin({ path })` in every window, at
   startup and whenever the selection or the repository changes. Cursor does not persist these registrations.
 - A fully selected plugin is registered from the clone itself, so Cursor sees `git pull` changes directly. A partial
@@ -197,6 +227,8 @@ picked up live, no sync is needed.
 - The status bar item (`Team <count>`) shows how many plugins this window registered; its tooltip lists them, the last
   commit and the last sync state. A warning icon means a paused update, a failed sync or a failed registration; a
   plug-off icon means the last update couldn't reach the server (offline).
+- In a remote window, **Output > Team Plugins** is the remote extension's log; Cursor's own plugin log is on the
+  remote machine too.
 - "vscode.cursor.plugins is missing": this Cursor is too old for extension plugins; update Cursor.
 - A background sync error is shown once, and again only after a sync succeeded (Sync now always shows it).
 
@@ -232,6 +264,11 @@ picked up live, no sync is needed.
 - Switching the managed clone to an empty repository (no branch yet) is an error.
 - A symlink or junction created inside a partial copy is left out of the sync (see the log), never followed.
 - A frontmatter description written as a quoted string over several lines shows only as written on the first line.
+- Forwarding your local credentials or SSH agent to the git of a remote machine is not supported (agent forwarding is
+  not tested): set the credentials up on the remote machine.
+- WSL and dev containers are not tested; they should work the same way (install the extension on that side). A dev
+  container rebuild loses the clone, which is cloned again at the next start.
+- The extension must be installed on each remote machine, and updated there too (the same VSIX).
 - After the window that did the timed fetches closes, the next timed update in another window can be up to half an
   interval late.
 

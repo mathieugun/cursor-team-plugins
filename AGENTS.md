@@ -1,6 +1,6 @@
 # cursor-team-plugins: developer notes
 
-Cursor (VS Code) extension, version in `package.json` (0.3.0). Plain JavaScript, CommonJS, no npm dependency, no
+Cursor (VS Code) extension, version in `package.json` (0.4.0). Plain JavaScript, CommonJS, no npm dependency, no
 build step. User documentation: `README.md`.
 
 ## Layout
@@ -38,6 +38,9 @@ ELECTRON_RUN_AS_NODE=1 "$LOCALAPPDATA/Programs/cursor/Cursor.exe" scripts/make-t
 
 The VSIX is written to `dist/cursor-team-plugins-<version>.vsix`. The runner passes explicit test files to
 `--test`: with Cursor's runtime a directory argument fails.
+
+On a Linux machine with a Cursor server (a Remote-SSH host), the suite runs with the server's node:
+`~/.cursor-server/bin/linux-x64/<commit>/node scripts/test.js`.
 
 ## Why the code is shaped this way (Cursor 3.31)
 
@@ -111,6 +114,22 @@ The VSIX is written to `dist/cursor-team-plugins-<version>.vsix`. The runner pas
 - Timed syncs are skipped when `sync-state.json` records another window's sync younger than half the interval
   (`recentlySynced`); every window touches its registered copies every hour so another window's 7-day cleanup never
   removes them.
+- In a Remote-SSH window the agent host and its plugin registry run in the remote extension host: the extension is
+  `extensionKind: ["workspace"]` and must be installed on the remote. From the UI side `addPlugin` reaches the remote
+  agent host with a local path and fails (ENOENT). On the remote, `globalStorageUri` is under
+  `~/.cursor-server/data/User/globalStorage`, and watchers outside the workspace work.
+- In a remote window `application`-scope settings come from (and are written to) the local user settings,
+  `machine`-scope ones from the remote settings: `localRepoPath` is `machine` (a path), the rest `application`;
+  `git.path` is `machine`.
+- git runs through `spawn`, not `execFile` (which ignores `detached`): on Linux/macOS git gets its own process group
+  and a stop kills the group; killing git alone leaves `git-remote-http`/`ssh` holding the stderr pipe and the command
+  never ends.
+- On a Linux remote (Cursor 3.31 server) a recursive `createFileSystemWatcher` outside the workspace watches a new folder
+  but not the subfolders it already holds when it appears (`mkdir -p a/b`: files in `b` are never reported; a partial
+  copy is built aside and renamed into place, so none of it was watched). `watchTree` restarts the watcher on every new
+  folder (outside `.git`); a restarted watcher covers the whole tree as it is then.
+- Linux git says `repository '<path>' does not exist` for a missing local path (Windows git: `does not appear to be a
+  git repository`).
 
 ## Rules
 

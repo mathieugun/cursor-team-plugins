@@ -53,6 +53,7 @@ const SAMPLES = [
   ],
   ["fatal: unable to access 'https://nonexistent.invalid/x.git/': Could not resolve host: nonexistent.invalid", 'unreachable'],
   ["fatal: 'C:/x/missing.git' does not appear to be a git repository\nfatal: Could not read from remote repository.", 'notFound'],
+  ["fatal: repository '/tmp/missing.git' does not exist", 'notFound'],
   ["remote: Repository not found.\nfatal: repository 'https://github.com/o/r.git/' not found", 'notFound'],
   ['ERROR: Repository not found.\nfatal: Could not read from remote repository.', 'notFound'],
   ["Cloning into 'x'...\nfatal: Remote branch nope not found in upstream origin", 'branchNotFound'],

@@ -3,6 +3,7 @@
 const vscode = require('vscode');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const { readCatalog } = require('./lib/catalog');
 const selection = require('./lib/selection');
 const { buildTree, buildChangesNode, buildConflictsNode } = require('./lib/treeModel');
@@ -256,13 +257,27 @@ const ACTIONS = {
   retryPush: { label: 'Try again', run: () => vscode.commands.executeCommand('teamPlugins.commitAndPush') },
 };
 
+// Failures that depend on the machine git runs on: in a remote window they are the remote machine's.
+const MACHINE_REASONS = ['credentials', 'authFailed', 'sshAuth', 'hostKeyUnknown', 'hostKeyChanged'];
+
+// In a remote window (Remote-SSH, WSL, dev container) the extension runs on the remote machine, with its git, clone
+// and credentials: '' in a local window.
+function remoteMachine() {
+  return vscode.env.remoteName ? os.hostname() : '';
+}
+
 function showRemoteError(result) {
   const ids = (result.actions || []).filter((id) => ACTIONS[id]);
   if (!ids.includes('showLog')) {
     ids.push('showLog');
   }
+  const machine = remoteMachine();
+  const suffix =
+    machine && MACHINE_REASONS.includes(result.reason)
+      ? ` This window is connected to ${machine}: git runs there, with that machine's credentials and SSH keys.`
+      : '';
   vscode.window
-    .showErrorMessage(`Team plugins: ${result.message}`, ...ids.map((id) => ACTIONS[id].label))
+    .showErrorMessage(`Team plugins: ${result.message}${suffix}`, ...ids.map((id) => ACTIONS[id].label))
     .then((choice) => {
       const id = ids.find((i) => ACTIONS[i].label === choice);
       if (id) {
@@ -707,9 +722,6 @@ function resetPartialCopies() {
 function startCopyWatcher() {
   const { filteredRoot } = paths();
   fs.mkdirSync(filteredRoot, { recursive: true });
-  copyWatcher = vscode.workspace.createFileSystemWatcher(
-    new vscode.RelativePattern(vscode.Uri.file(filteredRoot), '**/*'),
-  );
   const onFile = (uri) => {
     if (uri.fsPath.includes('.tmp-')) {
       return;
@@ -729,9 +741,7 @@ function startCopyWatcher() {
       enqueue(syncPartials);
     }, 500);
   };
-  copyWatcher.onDidCreate(onFile);
-  copyWatcher.onDidChange(onFile);
-  copyWatcher.onDidDelete(onFile);
+  copyWatcher = watchTree(filteredRoot, onFile);
 }
 
 function stopCopyWatcher() {
@@ -779,6 +789,9 @@ function updateStatus() {
   statusItem.text = text;
 
   const lines = ['Team plugins'];
+  if (remoteMachine()) {
+    lines.push(`Machine: ${remoteMachine()} (remote window)`);
+  }
   if (m.mode !== 'unconfigured') {
     const source = m.mode === 'local' ? m.localRepoPath : m.repoUrl;
     lines.push(`Repository: ${source} (${m.branch || 'default branch'})`);
@@ -1095,34 +1108,61 @@ function startWatchers() {
 
     // an edit inside the managed clone (an agent's, another window's partial copy, a direct edit) reaches this window's
     // catalog, partial copies and Local changes
-    const c = vscode.workspace.createFileSystemWatcher(
-      new vscode.RelativePattern(vscode.Uri.file(m.repoDir), '**/*'),
-    );
-    const onClone = (uri) => {
-      if (isGitPath(uri.fsPath)) {
-        return;
-      }
-      debouncedApply();
-    };
-    c.onDidCreate(onClone);
-    c.onDidChange(onClone);
-    c.onDidDelete(onClone);
-    watchers.push(c);
+    watchers.push(watchTree(m.repoDir, onRepoFile));
   } else if (m.mode === 'local') {
-    const w = vscode.workspace.createFileSystemWatcher(
-      new vscode.RelativePattern(vscode.Uri.file(m.localRepoPath), '**/*'),
-    );
-    // .git changes (fetch, the editor's own git status) don't change plugin files
-    const onFile = (uri) => {
-      if (!isGitPath(uri.fsPath)) {
-        debouncedApply();
-      }
-    };
-    w.onDidCreate(onFile);
-    w.onDidChange(onFile);
-    w.onDidDelete(onFile);
-    watchers.push(w);
+    watchers.push(watchTree(m.localRepoPath, onRepoFile));
   }
+}
+
+// .git changes (fetch, the editor's own git status) don't change plugin files
+function onRepoFile(uri) {
+  if (!isGitPath(uri.fsPath)) {
+    debouncedApply();
+  }
+}
+
+function isDirectory(fsPath) {
+  try {
+    return fs.statSync(fsPath).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+// Watches every file below dir; returns { dispose }. On a Linux remote the recursive watcher watches a new folder but
+// not the subfolders it already holds when it appears (a partial copy built aside and renamed into place, `mkdir -p`):
+// a new folder restarts the watcher, which then watches the whole tree as it is.
+function watchTree(dir, onFile) {
+  let watcher = null;
+  let restartTimer = null;
+  const start = () => {
+    watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(vscode.Uri.file(dir), '**/*'));
+    watcher.onDidCreate((uri) => {
+      if (!restartTimer && !isGitPath(uri.fsPath) && isDirectory(uri.fsPath)) {
+        restartTimer = setTimeout(() => {
+          restartTimer = null;
+          if (watcher) {
+            watcher.dispose();
+            start();
+          }
+        }, 300);
+      }
+      onFile(uri);
+    });
+    watcher.onDidChange(onFile);
+    watcher.onDidDelete(onFile);
+  };
+  start();
+  return {
+    dispose() {
+      clearTimeout(restartTimer);
+      restartTimer = null;
+      if (watcher) {
+        watcher.dispose();
+        watcher = null;
+      }
+    },
+  };
 }
 
 // ---- activation --------------------------------------------------------------------------------------------------
@@ -1537,6 +1577,9 @@ function activate(context) {
     vscode.window.showErrorMessage(
       'Team plugins: this Cursor cannot register plugins from extensions (vscode.cursor.plugins is missing). Update Cursor.',
     );
+  }
+  if (remoteMachine()) {
+    log(`remote window (${vscode.env.remoteName}): running on ${remoteMachine()}, storage ${storage}`);
   }
 
   context.subscriptions.push(

@@ -47,6 +47,14 @@ assumptions are fine when the user asked for the assumptions to be tested).
   subfolders can be edited and deleted, and after `removePlugin` the parent can be deleted at once (probe, Cursor
   3.31, 2026-11-22). The managed clone and the `filtered/<name>-<hash>` holders are such parents: update them in
   place; delete only unregistered ones.
+- Remote-SSH: the extension runs in the remote extension host (UI-side addPlugin fails with ENOENT on the local
+  path). Remote logs: `~/.cursor-server/data/logs/<session>/exthost<N>/`; the Cursor Plugins log is under
+  `anysphere.cursor-agent-host` there. A remote probe window: `cursor.cmd --new-window --remote ssh-remote+<host>
+  --extensionDevelopmentPath=vscode-remote://ssh-remote+<host>/<probe dir> <remote folder>` (needs the user's OK).
+- File watchers on a Linux remote miss subfolders that appear together with their parent (see `watchTree` in
+  AGENTS.md): test watcher changes there with `mkdir -p a/b` and a write in `b`, not only a write in an existing folder.
+- Run the suite on a Linux remote with the Cursor server's node (`git archive HEAD | ssh <host> 'tar -x -C <dir>'`,
+  then `~/.cursor-server/bin/linux-x64/<commit>/node scripts/test.js`).
 
 - On Windows `revealFileInOS` opens Explorer behind the Cursor window, so the user sees nothing happen: open the
   files in an editor instead (`showTextDocument`).

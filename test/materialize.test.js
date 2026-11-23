@@ -398,7 +398,13 @@ test('a link loop is left out', (t) => {
     assert.deepEqual(r.skipped, [{ rel: 'agents/loop', reason: 'link loop' }]);
     assert.ok(fs.existsSync(path.join(r.copyRoot, 'agents', 'z.md')));
   } finally {
-    fs.rmdirSync(loop); // removes the junction only: the cleanup of the temporary folder can't follow a loop
+    // removes the link only (a junction on Windows, a symlink elsewhere): the cleanup of the temporary folder can't
+    // follow a loop
+    if (process.platform === 'win32') {
+      fs.rmdirSync(loop);
+    } else {
+      fs.unlinkSync(loop);
+    }
   }
 });
 
