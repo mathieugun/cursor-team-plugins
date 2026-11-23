@@ -50,7 +50,6 @@ let copyDebounce = null;
 let copyRetryTimer = null;
 let copyRetries = 0;
 let checkboxChain = Promise.resolve();
-const projectNoticeShown = new Set();
 const conflictShown = new Set();
 const conflictsNotified = new Set(); // `${holder}|${rel}` of the partial-copy conflicts already announced
 const loggedWarnings = new Set();
@@ -770,22 +769,22 @@ function updateStatus() {
   const count = registrar ? registrar.current.size : 0;
   let text;
   if (syncing) {
-    text = '$(sync~spin) Team';
+    text = '$(sync~spin) Team plugins';
   } else if (m.mode === 'unconfigured') {
-    text = '$(plug) Team: not configured';
+    text = '$(plug) Team plugins: not configured';
   } else if (!api) {
-    text = '$(error) Team';
+    text = '$(error) Team plugins';
   } else if (
     (lastResult && ['conflict', 'error'].includes(lastResult.kind)) ||
     lastApplyErrors > 0 ||
     copyConflicts.length > 0 ||
     (changes && changes.error)
   ) {
-    text = `$(warning) Team ${count}`;
+    text = `$(warning) Team plugins: ${count}`;
   } else if (lastResult && lastResult.kind === 'offline') {
-    text = `$(debug-disconnect) Team ${count}`; // after the warnings: being offline is the least of them
+    text = `$(debug-disconnect) Team plugins: ${count}`; // after the warnings: being offline is the least of them
   } else {
-    text = `$(plug) Team ${count}`;
+    text = `$(plug) Team plugins: ${count}`;
   }
   statusItem.text = text;
 
@@ -834,6 +833,52 @@ function updateStatus() {
 
 // Codicons per node kind (shown after the checkbox).
 const TREE_ICONS = { plugin: 'package', skill: 'sparkle', rule: 'law', error: 'warning', changes: 'git-commit', conflicts: 'warning', conflict: 'git-merge' };
+
+// Project items are marked by a file decoration (label colour + badge): plugin, skill and rule rows carry a
+// team-plugins:/<key> resourceUri, which no other decoration provider touches.
+const ITEM_SCHEME = 'team-plugins';
+const decorationEmitter = new vscode.EventEmitter();
+let projectStates = new Map(); // item uri -> 'all' | 'some'
+
+function itemUri(key) {
+  return vscode.Uri.from({ scheme: ITEM_SCHEME, path: `/${key}` });
+}
+
+// Records the project state of the plugin, skill and rule nodes; tells the decoration service only when it changed.
+function updateProjectStates(nodes) {
+  const next = new Map();
+  for (const n of nodes.filter((x) => x.kind === 'plugin')) {
+    for (const m of [n, ...n.children]) {
+      if (m.project) {
+        next.set(itemUri(m.key).toString(), m.project);
+      }
+    }
+  }
+  const flat = (map) => JSON.stringify([...map]);
+  if (flat(next) !== flat(projectStates)) {
+    projectStates = next;
+    decorationEmitter.fire(undefined);
+  }
+}
+
+const projectDecorations = {
+  onDidChangeFileDecorations: decorationEmitter.event,
+  provideFileDecoration(uri) {
+    if (uri.scheme !== ITEM_SCHEME) {
+      return undefined;
+    }
+    const state = projectStates.get(uri.toString());
+    if (state === 'all') {
+      const color = new vscode.ThemeColor('teamPlugins.projectItemForeground');
+      return new vscode.FileDecoration('P', 'Enabled by this project', color);
+    }
+    if (state === 'some') {
+      return new vscode.FileDecoration('P', 'Partly enabled by this project');
+    }
+    return undefined;
+  },
+};
+
 const CHANGE_ICONS = {
   modified: 'diff-modified',
   added: 'diff-added',
@@ -858,9 +903,11 @@ class PluginTree {
     }
     const m = currentMode();
     if (m.mode === 'unconfigured') {
+      updateProjectStates([]);
       return [];
     }
     if (catalog.plugins.length === 0 && lastResult && ['error', 'offline'].includes(lastResult.kind)) {
+      updateProjectStates([]);
       return [
         {
           id: 'sync-error',
@@ -875,9 +922,9 @@ class PluginTree {
     }
     const project = projectList();
     const eff = selection.effective(catalog, userSelection(), project);
-    return [buildConflictsNode(copyConflicts), buildChangesNode(changes)]
-      .filter((n) => n)
-      .concat(buildTree(catalog, eff, project));
+    const tree = buildTree(catalog, eff, project);
+    updateProjectStates(tree);
+    return [buildConflictsNode(copyConflicts), buildChangesNode(changes)].filter((n) => n).concat(tree);
   }
 
   getTreeItem(node) {
@@ -899,7 +946,7 @@ class PluginTree {
       item.iconPath = new vscode.ThemeIcon('warning');
       item.command = { command: 'teamPlugins.showLog', title: 'Show log' };
     } else if (TREE_ICONS[node.kind]) {
-      item.iconPath = new vscode.ThemeIcon(TREE_ICONS[node.kind]);
+      item.iconPath = new vscode.ThemeIcon(node.kind === 'plugin' && node.partial ? 'pie-chart' : TREE_ICONS[node.kind]);
     }
     if (node.kind === 'error') {
       item.command = { command: 'teamPlugins.showLog', title: 'Show log' };
@@ -908,9 +955,9 @@ class PluginTree {
     } else if (node.kind === 'conflict') {
       item.command = { command: 'teamPlugins.openConflict', title: 'Compare', arguments: [node] };
     } else if (node.kind !== 'changes' && node.kind !== 'conflicts') {
-      item.checkboxState = node.checked
-        ? vscode.TreeItemCheckboxState.Checked
-        : vscode.TreeItemCheckboxState.Unchecked;
+      item.resourceUri = itemUri(node.key);
+      const checkState = node.checked ? vscode.TreeItemCheckboxState.Checked : vscode.TreeItemCheckboxState.Unchecked;
+      item.checkboxState = node.checkboxTooltip ? { state: checkState, tooltip: node.checkboxTooltip } : checkState;
       if (node.kind !== 'plugin') {
         item.command = { command: 'teamPlugins.openItem', title: 'Open file', arguments: [node] };
       }
@@ -922,7 +969,6 @@ class PluginTree {
 async function onCheckboxChange(e) {
   const before = userSelection();
   let user = before;
-  const project = projectList();
   const unchecked = [];
   for (const [node, state] of e.items) {
     if (node.kind !== 'plugin' && node.kind !== 'skill' && node.kind !== 'rule') {
@@ -934,38 +980,17 @@ async function onCheckboxChange(e) {
       unchecked.push(node);
     }
   }
-  const eff = selection.effective(catalog, user, project);
   const config = cfg();
   for (const key of ['enabled', 'excluded']) {
     if (JSON.stringify(user[key]) !== JSON.stringify(before[key])) {
       await config.update(key, user[key], vscode.ConfigurationTarget.Global);
     }
   }
-  treeProvider.refresh();
+  // unticking switches an item off, the project's requirement included (the user commits .vscode/settings.json)
   for (const node of unchecked) {
-    const owner = catalog.plugins.find((p) => p.name === node.key || p.children.some((c) => c.id === node.key));
-    const info = owner && eff.get(owner.name);
-    if (!info) {
-      continue;
-    }
-    const stays =
-      node.kind === 'plugin' ? info.projectPlugin || info.fromProject.size > 0 : info.fromProject.has(node.key);
-    if (!stays || projectNoticeShown.has(node.key)) {
-      continue;
-    }
-    projectNoticeShown.add(node.key);
-    vscode.window
-      .showInformationMessage(
-        `"${node.label}" stays enabled: this project requires it (teamPlugins.projectPlugins in .vscode/settings.json).`,
-        'Remove from project',
-      )
-      .then((choice) => {
-        if (choice === 'Remove from project') {
-          return removeFromProjectCommand(node);
-        }
-        return undefined;
-      });
+    await removeFromProjectCommand(node);
   }
+  treeProvider.refresh();
 }
 
 // ---- project commands --------------------------------------------------------------------------------------------
@@ -1531,21 +1556,39 @@ async function pushToBranchCommand() {
   await refresh({ sync: true });
 }
 
-// The extension of the old publisher registers the same plugins: ask to uninstall it (fire and forget).
+// The extension of the old publisher declares the same commands and view and registers the same plugins: while it is
+// installed this one stays inactive (whichever activates second fails on "command already exists") and asks to
+// uninstall it (fire and forget). Returns true when the old extension is installed.
 function warnOldExtension() {
   if (!vscode.extensions.getExtension(OLD_EXTENSION_ID)) {
-    return;
+    return false;
   }
-  const text = `The old Team plugins extension (${OLD_EXTENSION_ID}) is still installed: both register the same plugins. Uninstall it, then reload the window.`;
+  const text = `The old Team plugins extension (${OLD_EXTENSION_ID}) is still installed: both register the same plugins, so the new one stays inactive. Uninstall the old one, then reload the window.`;
   log(text);
-  vscode.window.showWarningMessage(text, 'Show it').then(
-    (choice) => {
-      if (choice === 'Show it') {
-        return vscode.commands.executeCommand('workbench.extensions.search', `@installed ${OLD_EXTENSION_ID}`);
+  // The extensions view's search can't find it by id (it matches names and descriptions): uninstall it from here.
+  vscode.window
+    .showWarningMessage(text, 'Uninstall it')
+    .then(async (choice) => {
+      if (choice !== 'Uninstall it') {
+        return;
       }
-    },
-    (err) => log(`old extension warning error: ${err.message}`),
-  );
+      await vscode.commands.executeCommand('workbench.extensions.uninstallExtension', OLD_EXTENSION_ID);
+      log(`uninstalled ${OLD_EXTENSION_ID}`);
+      const reload = await vscode.window.showInformationMessage(
+        `${OLD_EXTENSION_ID} is uninstalled. Reload the window to finish.`,
+        'Reload window',
+      );
+      if (reload === 'Reload window') {
+        await vscode.commands.executeCommand('workbench.action.reloadWindow');
+      }
+    })
+    .then(undefined, (err) => {
+      log(`old extension uninstall error: ${err.message}`);
+      vscode.window.showErrorMessage(
+        `Could not uninstall ${OLD_EXTENSION_ID}: ${err.message}. Uninstall "Team plugins" by mg from the Extensions view.`,
+      );
+    });
+  return true;
 }
 
 function activate(context) {
@@ -1554,10 +1597,14 @@ function activate(context) {
 
   output = vscode.window.createOutputChannel('Team Plugins');
   context.subscriptions.push(output);
+  if (warnOldExtension()) {
+    return;
+  }
 
-  statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+  statusItem = vscode.window.createStatusBarItem('teamPlugins.status', vscode.StatusBarAlignment.Left, 100);
+  statusItem.name = 'Team plugins';
   statusItem.command = VIEW_COMMAND;
-  statusItem.text = '$(plug) Team';
+  statusItem.text = '$(plug) Team plugins';
   statusItem.show();
   context.subscriptions.push(statusItem);
 
@@ -1568,6 +1615,7 @@ function activate(context) {
     showCollapseAll: true,
   });
   context.subscriptions.push(treeView);
+  context.subscriptions.push(vscode.window.registerFileDecorationProvider(projectDecorations), decorationEmitter);
   context.subscriptions.push(
     treeView.onDidChangeCheckboxState((e) => {
       // one click at a time: each reads the selection after the previous click's settings write
@@ -1578,7 +1626,6 @@ function activate(context) {
   );
 
   registerCommands(context);
-  warnOldExtension();
 
   let cursorApi;
   try {
@@ -1592,7 +1639,7 @@ function activate(context) {
     log(`plugin API: ${api.name}`);
   } else {
     log('vscode.cursor.plugins is missing: plugins cannot be registered');
-    statusItem.text = '$(error) Team';
+    statusItem.text = '$(error) Team plugins';
     vscode.window.showErrorMessage(
       'Team plugins: this Cursor cannot register plugins from extensions (vscode.cursor.plugins is missing). Update Cursor.',
     );

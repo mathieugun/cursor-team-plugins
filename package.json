@@ -2,7 +2,7 @@
   "name": "cursor-team-plugins",
   "displayName": "Team plugins",
   "description": "Keeps a team's Cursor plugins (rules and skills) in sync with the team git repository and registers the ones each user and project selected.",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "publisher": "mathieugun",
   "author": "Mathieu Gunther",
   "license": "MIT",
@@ -90,6 +90,18 @@
         }
       }
     },
+    "colors": [
+      {
+        "id": "teamPlugins.projectItemForeground",
+        "description": "Colour of the plugins, skills and rules that the project enables (teamPlugins.projectPlugins) in the Team Plugins view.",
+        "defaults": {
+          "dark": "charts.purple",
+          "light": "charts.purple",
+          "highContrast": "charts.purple",
+          "highContrastLight": "charts.purple"
+        }
+      }
+    ],
     "commands": [
       {
         "command": "teamPlugins.syncNow",
@@ -200,7 +212,7 @@
       "view/item/context": [
         {
           "command": "teamPlugins.addToProject",
-          "when": "view == teamPlugins.plugins && viewItem =~ /^(plugin|child)$/ && workspaceFolderCount > 0"
+          "when": "view == teamPlugins.plugins && viewItem =~ /^(plugin|child)$/"
         },
         {
           "command": "teamPlugins.removeFromProject",

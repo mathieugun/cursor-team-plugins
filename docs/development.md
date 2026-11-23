@@ -86,6 +86,19 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
   tested).
 - WSL and dev containers are not tested; they should work the same way (install the extension on that side). A dev
   container rebuild loses the clone, which is cloned again at the next start.
+- The view's checkboxes have two states (`TreeItemCheckboxState` is `Unchecked`/`Checked` in Cursor 3.31, VS Code
+  1.128): a partly enabled plugin stays unticked, with a `pie-chart` icon and a checkbox tooltip giving the count.
+- Project items are marked with a file decoration: plugin, skill and rule rows carry a `team-plugins:/<key>`
+  `resourceUri`, and the extension's `FileDecorationProvider` returns the colour (`teamPlugins.projectItemForeground`)
+  and the `P` badge. Custom tree views apply `explorer.decorations.colors`/`badges` to them.
+- A selected row loses the project colour while the view has the keyboard focus. Cursor's stylesheet has
+  `.monaco-list:focus .selected .monaco-icon-label, ...:after { color: inherit !important }` (label and badge take the
+  selection foreground) and `.customview-tree .monaco-list-row.selected ... .custom-view-tree-node-item-icon.codicon
+  { color: currentColor !important }` (icons lose their colour on any selected row, so a coloured icon would not help).
+  An extension can't override either. Checked by hand (Cursor 3.31): a row selected before **Add to this project**
+  stays uncoloured; it turns purple when the focus moves to the editor or another row is selected, and loses the
+  colour when clicked again. A right-click focuses a row without selecting it, so a row not selected beforehand turns
+  purple at once (local and Remote-SSH windows alike). The decoration itself is updated at once.
 
 ## Known limits (details)
 
@@ -109,4 +122,5 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
   interval late.
 - A plugin with the same name installed from a marketplace conflicts with the one this extension registers.
 - The publisher was `mg` before the first public release: `extension.js` warns while `mg.cursor-team-plugins` is
-  installed (both would register the same plugins); its storage is not migrated.
+  installed (both would register the same plugins), stays inactive and offers to uninstall it; its storage is not
+  migrated.

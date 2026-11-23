@@ -1,6 +1,6 @@
 # cursor-team-plugins: developer notes
 
-Cursor (VS Code) extension, version in `package.json` (0.4.1). Plain JavaScript, CommonJS, no npm dependency, no
+Cursor (VS Code) extension, version in `package.json` (0.4.2). Plain JavaScript, CommonJS, no npm dependency, no
 build step. User documentation: `README.md` (for Cursor users: what it does, install, usage; it shows
 only the current version, with no history). Internals, platform notes, detailed limits and the release process:
 `docs/development.md`.
@@ -104,6 +104,12 @@ On a Linux machine with a Cursor server (a Remote-SSH host), the suite runs with
   unchanged since the last sync, otherwise left there and reported.
 - Tree ids are `plugin:<name>` and `item:<id>` (a plugin named `changes` would collide with a built-in node); the
   selection id is the node's `key`.
+- Tree checkboxes have only two states (no mixed state in Cursor 3.31): a partial plugin is unticked and shows a
+  `pie-chart` icon. Project items are coloured through a `FileDecorationProvider` on a `team-plugins:/<key>`
+  `resourceUri` (the label's colour can't be set any other way); unticking an item removes it from the project lists
+  too (`removeFromProjectCommand`). A selected row in the focused view shows no colour (Cursor's
+  `.monaco-list:focus .selected .monaco-icon-label { color: inherit !important }`; details in `docs/development.md`):
+  not a refresh bug.
 - `merge-tree --write-tree` needs git 2.38: `checkConflicts` checks `git version` first.
 - git runs non-interactive: `GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=never` (GCM 2.6 then fails with "Cannot prompt
   because user interactivity has been disabled" instead of opening a window), stdin closed.
@@ -140,8 +146,11 @@ On a Linux machine with a Cursor server (a Remote-SSH host), the suite runs with
 - Cursor's extension gallery (`marketplace.cursorapi.com`) mirrors Open VSX live: publishing there is how the extension
   auto-updates (local and remote). The Open VSX namespace must equal `publisher` (`mathieugun`).
 - A VSIX install is pinned (`installGivenVersion`): Cursor never auto-updates it.
-- The publisher was `mg` up to 0.4.0: `extension.js` warns while `mg.cursor-team-plugins` is installed (both would
-  register the same plugins).
+- The publisher was `mg` up to 0.4.0: while `mg.cursor-team-plugins` is installed, `activate` stops right after
+  creating the output channel and offers to uninstall it (`workbench.extensions.uninstallExtension`). Both declare the
+  same command ids, so whichever activates second throws `command 'teamPlugins.syncNow' already exists` (seen on a
+  Remote-SSH host, where the old one activated first). The extensions view's search matches names and descriptions,
+  so `@installed mg.cursor-team-plugins` finds nothing.
 
 ## Rules
 

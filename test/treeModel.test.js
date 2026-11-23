@@ -38,6 +38,12 @@ test('tree nodes', () => {
   assert.equal(p1.description, 'v1.0.0 · 2/3');
   assert.equal(p1.contextValue, 'plugin');
   assert.equal(p1.tooltip, 'First');
+  assert.equal(p1.partial, true);
+  assert.equal(p1.project, null);
+  assert.equal(p1.checkboxTooltip, 'Partly enabled: 2 of 3 items. Tick to enable all.');
+  assert.equal(p1.children[0].project, null);
+  assert.equal(p1.children[0].partial, false);
+  assert.equal(p1.children[0].checkboxTooltip, '');
   assert.equal(p1.children[0].checked, false);
   assert.equal(p1.children[0].contextValue, 'child');
   assert.equal(p1.children[1].checked, true);
@@ -47,14 +53,66 @@ test('tree nodes', () => {
   assert.equal(p1.children[2].description, 'rule');
 
   assert.equal(p2.checked, true);
-  assert.equal(p2.description, 'project');
+  assert.equal(p2.description, '');
+  assert.equal(p2.project, 'all');
+  assert.equal(p2.partial, false);
+  assert.equal(p2.checkboxTooltip, '');
+  assert.equal(p2.tooltip, 'P2\nEnabled by this project (.vscode/settings.json)');
   assert.equal(p2.contextValue, 'plugin.project');
-  assert.equal(p2.children[0].description, 'skill · project');
+  assert.equal(p2.children[0].description, 'skill');
+  assert.equal(p2.children[0].project, 'all');
+  assert.equal(p2.children[0].tooltip, 's3\nEnabled by this project (.vscode/settings.json)');
   assert.equal(p2.children[0].contextValue, 'child.project');
 
   assert.equal(p3.children.length, 0);
   assert.equal(p3.checked, false);
   assert.equal(p3.description, '');
+  assert.equal(p3.project, null);
+  assert.equal(p3.partial, false);
+});
+
+test('project state of a plugin', () => {
+  const tree = (user, project) => buildTree(catalog, effective(catalog, user, project), project);
+  const PARTLY = 'Partly enabled: 2 of 3 items. Tick to enable all.';
+
+  let [p1] = tree({ enabled: ['P1/skills/s2'], excluded: [] }, ['P1/skills/s1']);
+  assert.equal(p1.project, 'some');
+  assert.equal(p1.partial, true);
+  assert.equal(p1.description, 'v1.0.0 · 2/3');
+  assert.equal(p1.tooltip, 'First\nPartly enabled by this project (.vscode/settings.json)');
+  assert.equal(p1.checkboxTooltip, PARTLY);
+  assert.equal(p1.contextValue, 'plugin.project');
+  assert.deepEqual(p1.children.map((c) => c.project), ['all', null, null]);
+  assert.deepEqual(p1.children.map((c) => c.checked), [true, true, false]);
+
+  // everything enabled comes from the project
+  [p1] = tree({ enabled: [], excluded: [] }, ['P1/skills/s1']);
+  assert.equal(p1.project, 'all');
+  assert.equal(p1.partial, true);
+  assert.equal(p1.checkboxTooltip, 'Partly enabled: 1 of 3 items. Tick to enable all.');
+
+  // enabled by both still counts as the project's
+  [p1] = tree({ enabled: ['P1/skills/s1'], excluded: [] }, ['P1/skills/s1']);
+  assert.equal(p1.project, 'all');
+
+  [p1] = tree({ enabled: ['P1'], excluded: [] }, ['P1']);
+  assert.equal(p1.project, 'all');
+  assert.equal(p1.partial, false);
+  assert.equal(p1.checked, true);
+  assert.equal(p1.checkboxTooltip, '');
+  assert.deepEqual(p1.children.map((c) => c.project), ['all', 'all', 'all']);
+
+  // a leaf plugin listed by the project
+  const p3 = tree({ enabled: [], excluded: [] }, ['P3'])[2];
+  assert.equal(p3.project, 'all');
+  assert.equal(p3.checked, true);
+  assert.equal(p3.partial, false);
+  assert.equal(p3.tooltip, 'P3\nEnabled by this project (.vscode/settings.json)');
+
+  [p1] = tree({ enabled: ['P1'], excluded: [] }, []);
+  assert.equal(p1.project, null);
+  assert.equal(p1.partial, false);
+  assert.equal(p1.checkboxTooltip, '');
 });
 
 test('buildChangesNode', () => {

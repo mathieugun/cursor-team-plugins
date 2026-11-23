@@ -94,8 +94,9 @@ The view lists every plugin of the team repository with a checkbox, and its skil
 sparkle icon, rules a scales icon). Click a skill or rule to open its file.
 
 - Tick a plugin: all its skills and rules are enabled, including the ones added later.
-- Tick single skills or rules: the plugin is enabled partially (the description shows `2/3`), and only the ticked items
-  reach the agent.
+- Tick single skills or rules: the plugin is enabled partially and only the ticked items reach the agent. Its box stays
+  unticked (Cursor's checkboxes have no mixed state), its icon becomes a pie chart and the description shows `2/3`;
+  tick the plugin to enable all of it.
 - Untick one skill of a fully enabled plugin: it is left out, the rest stays enabled.
 
 Your choice is stored in your user settings and applies to every project:
@@ -111,8 +112,8 @@ An item is the plugin `name` (from its `plugin.json`), `<name>/skills/<skill fol
 
 ### Plugins a project needs
 
-A project can require plugins for everyone who opens it. Right-click an item in the view and choose **Add to this
-project** (or **Remove from this project**), then commit `.vscode/settings.json`:
+A project can require plugins for everyone who opens it. With the project's folder open, right-click an item in the view
+and choose **Add to this project** (or **Remove from this project**), then commit `.vscode/settings.json`:
 
 ```json
 {
@@ -120,9 +121,16 @@ project** (or **Remove from this project**), then commit `.vscode/settings.json`
 }
 ```
 
-The project's list is added to your own choice: a project never disables something you enabled, and you can't untick
-what the project requires (the view tells you and offers to remove it from the project). Each Cursor window shows its
-own project's plugins.
+The project's list is added to your own choice: a project never disables something you enabled. Items the project
+enables are drawn in the project colour with a **P** badge; a plugin that the project enables only in part shows the
+badge without the colour. Unticking an item the project enables switches it off and removes it from the project's list
+too: commit `.vscode/settings.json` to share that. Each Cursor window shows its own project's plugins.
+
+The colour is the theme colour `teamPlugins.projectItemForeground` (purple by default; change it with
+`workbench.colorCustomizations`). Colour and badge follow the `explorer.decorations.colors` and
+`explorer.decorations.badges` settings; the item's tooltip always says when the project enables it. Like coloured files
+in the Explorer, a selected row shows the selection colour while the view has the focus: the colour comes back when you
+select another row or click elsewhere, and the **P** badge stays visible meanwhile.
 
 ## Improving a team skill
 
@@ -193,9 +201,9 @@ terminal where git and SSH can ask their questions; then click **Sync now**.
 
 - **Output > Team Plugins** shows every git command and every plugin registration. **Output > Cursor Plugins** is
   Cursor's own log (look for `Registered extension plugin: <name>`).
-- The status bar item (`Team <count>`) shows how many plugins this window registered; its tooltip lists them with the
-  last commit and the last sync. A warning icon means a paused update, a failed sync or a failed registration; a
-  plug-off icon means the server couldn't be reached.
+- The status bar item (`Team plugins: <count>`) shows how many plugins this window registered; its tooltip lists them
+  with the last commit and the last sync. A warning icon means a paused update, a failed sync or a failed registration;
+  a plug-off icon means the server couldn't be reached.
 - "vscode.cursor.plugins is missing": this Cursor is too old for extension plugins; update Cursor.
 
 | Message | What to do |
