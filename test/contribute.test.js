@@ -44,7 +44,7 @@ async function setup(t) {
     repoUrl: fwd(origin),
     branch: '',
     lockFile: path.join(store, 'sync.lock'),
-    stateFile: path.join(store, 'sync-state.json'),
+    stateFile: path.join(store, 'state.json'),
   };
   assert.equal((await sync.syncManaged(sargs)).kind, 'cloned');
   const clone = sargs.managedRepo;

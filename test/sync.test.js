@@ -44,7 +44,7 @@ function setup(t) {
     repoUrl: o.origin,
     branch: '',
     lockFile: path.join(store, 'sync.lock'),
-    stateFile: path.join(store, 'sync-state.json'),
+    stateFile: path.join(store, 'state.json'),
   };
   return { root, store, ...o, args };
 }

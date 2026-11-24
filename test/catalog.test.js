@@ -180,3 +180,43 @@ test('frontmatterDescription reads folded, literal and continued values', () => 
   assert.equal(d("---\ndescription: 'Quoted'\n---\n"), 'Quoted');
   assert.equal(d('---\ndescription: Does X.\nname: x\n---\n'), 'Does X.');
 });
+
+test('the marketplace name is the repository name', (t) => {
+  const root = fixture(t);
+  writeFile(
+    root,
+    '.cursor-plugin/marketplace.json',
+    JSON.stringify({ name: ' team-test ', plugins: [{ name: 'a', source: './a' }] }),
+  );
+  makePlugin(root, 'a', {});
+  assert.equal(readCatalog(root).name, 'team-test');
+
+  const bare = fixture(t);
+  makePlugin(bare, 'a', {});
+  assert.equal(readCatalog(bare).name, '');
+
+  const broken = fixture(t);
+  writeFile(broken, '.cursor-plugin/marketplace.json', '{');
+  assert.equal(readCatalog(broken).name, '');
+  assert.equal(readCatalog(path.join(broken, 'missing')).name, '');
+});
+
+test('a marketplace with only a name finds the plugins by folder', (t) => {
+  const root = fixture(t);
+  writeFile(root, '.cursor-plugin/marketplace.json', JSON.stringify({ name: 'only-name' }));
+  makePlugin(root, 'one', {});
+  makePlugin(root, 'two', {});
+  const { name, plugins, warnings } = readCatalog(root);
+  assert.equal(name, 'only-name');
+  assert.deepEqual(plugins.map((p) => p.name), ['one', 'two']);
+  assert.deepEqual(warnings, []);
+});
+
+test('a plugins value that is not an array still warns', (t) => {
+  const root = fixture(t);
+  writeFile(root, '.cursor-plugin/marketplace.json', JSON.stringify({ plugins: 3 }));
+  makePlugin(root, 'one', {});
+  const { plugins, warnings } = readCatalog(root);
+  assert.equal(plugins.length, 0);
+  assert.deepEqual(warnings, ['marketplace.json: "plugins" is not an array']);
+});

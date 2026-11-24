@@ -9,9 +9,10 @@ const { makeTestRepo, FIXTURE } = require('../scripts/make-test-repo');
 const { tmpDir, rmDir, git, gitAvailable } = require('./helpers');
 
 // The baseline the live tests rely on: change it together with test/fixtures/team-repo.
-function assertBaseline(repoDir) {
-  const { plugins, warnings } = readCatalog(repoDir);
+function assertBaseline(repoDir, name = 'team-test') {
+  const { name: repoName, plugins, warnings } = readCatalog(repoDir);
   assert.deepEqual(warnings, []);
+  assert.equal(repoName, name);
   assert.deepEqual(
     plugins.map((p) => [p.name, p.displayName, p.version]),
     [
@@ -53,4 +54,16 @@ test('makeTestRepo builds a bare repository of the fixture', (t) => {
   assertBaseline(clone);
   assert.throws(() => makeTestRepo(bare), /already exists/);
   assert.deepEqual(fs.readdirSync(root).sort(), ['clone', 'nested']);
+});
+
+test('makeTestRepo with a name gives the copy another repository name', (t) => {
+  if (!gitAvailable()) {
+    return t.skip('git is not available');
+  }
+  const root = tmpDir();
+  t.after(() => rmDir(root));
+  const bare = makeTestRepo(path.join(root, 'two.git'), { name: 'team-two' });
+  const clone = path.join(root, 'clone');
+  git(['clone', '-q', bare, clone], root);
+  assertBaseline(clone, 'team-two');
 });

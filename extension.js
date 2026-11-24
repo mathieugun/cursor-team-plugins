@@ -6,13 +6,40 @@ const path = require('path');
 const os = require('os');
 const { readCatalog } = require('./lib/catalog');
 const selection = require('./lib/selection');
-const { buildTree, buildChangesNode, buildConflictsNode } = require('./lib/treeModel');
+const {
+  buildTree,
+  buildChangesNode,
+  buildConflictsNode,
+  repoStatus,
+  buildRepoNode,
+  buildMissingNodes,
+} = require('./lib/treeModel');
 const { holderName, copyRootOf, syncCopy, markCopySynced, resolveConflict, gcFiltered } = require('./lib/materialize');
 const { makeGit } = require('./lib/git');
 const sync = require('./lib/sync');
 const contribute = require('./lib/contribute');
 const { pluginApi } = require('./lib/cursorApi');
 const { Registrar } = require('./lib/registrar');
+const {
+  normalizeUrl,
+  baseName,
+  repoName,
+  originUrl,
+  parseRepositories,
+  parseLocalRepositories,
+  parseProjectRepositories,
+  migratedSettings,
+  listRepos,
+  assignNames,
+  mergeCatalogs,
+  normalizeIds,
+  repoOfId,
+  missingRepos,
+  unlocatedRepos,
+  projectRepoEntry,
+  withProjectRepo,
+  withoutProjectRepo,
+} = require('./lib/repos');
 
 const SECTION = 'teamPlugins';
 const VIEW_COMMAND = 'workbench.view.extension.teamPlugins';
@@ -30,19 +57,23 @@ let treeProvider;
 let treeView;
 let registrar = null;
 let api = null;
-let catalog = { plugins: [], warnings: [] };
-let lastResult = null; // result of the last sync (this window's or, from the state file, another window's)
-let lastCheck = null;
+let catalog = { plugins: [], warnings: [] }; // the merged catalog of the repositories that are loaded
+let descs = []; // assignNames(listRepos(...)) of the last apply: every configured repository
+let catalogs = new Map(); // repo key -> readCatalog result (kept for repositories that are syncing)
+// repo key -> { lastResult, lastCheck, syncing, changes, errorShown }. lastResult is the last sync (this window's or,
+// from the state file, another window's); changes: { files, ahead } of a managed clone, null for a local one.
+const repoStates = new Map();
+let missing = []; // repositories this project uses and the user doesn't follow (with where they are)
+let unlocated = []; // names of repositories this project uses and its settings don't locate
+const missingNotified = new Set(); // normalized urls already announced in this window
+let knownSources = null; // Set of `${key}|${branch}` of the managed repositories, null until activation finished
 let lastApplyErrors = 0;
-let syncing = false;
 let timer = null;
 let offlineTimer = null;
 let watchers = [];
 let debounceTimer = null;
 let queue = Promise.resolve();
 let storage = '';
-let errorShown = false;
-let changes = null; // { files, ahead } of the managed clone, null outside managed mode
 let partialCopies = new Map(); // plugin name -> { plugin, ids, holder, copyRoot, conflicts: [{ rel, source, copy }] }
 let copyConflicts = []; // the conflicts of all partial copies, as given to buildConflictsNode
 let copyWatcher = null;
@@ -60,17 +91,20 @@ function log(message) {
   }
 }
 
+function stateOf(key) {
+  let s = repoStates.get(key);
+  if (!s) {
+    s = { lastResult: null, lastCheck: null, syncing: false, changes: null, errorShown: false };
+    repoStates.set(key, s);
+  }
+  return s;
+}
+
 // ---- paths and settings ------------------------------------------------------------------------------------------
 
 function paths() {
   const pluginsRoot = path.join(storage, '.cursor', 'plugins');
-  return {
-    pluginsRoot,
-    managedRepo: path.join(pluginsRoot, 'repo'),
-    filteredRoot: path.join(pluginsRoot, 'filtered'),
-    lockFile: path.join(storage, 'sync.lock'),
-    stateFile: path.join(storage, 'sync-state.json'),
-  };
+  return { pluginsRoot, filteredRoot: path.join(pluginsRoot, 'filtered') };
 }
 
 function cfg() {
@@ -81,14 +115,8 @@ function stringList(value) {
   return Array.isArray(value) ? value.filter((v) => typeof v === 'string') : [];
 }
 
-function settings() {
-  const c = cfg();
-  return {
-    repoUrl: String(c.get('repoUrl') || '').trim(),
-    branch: String(c.get('branch') || '').trim(),
-    localRepoPath: String(c.get('localRepoPath') || '').trim(),
-    intervalMinutes: Number(c.get('updateIntervalMinutes')) || 0,
-  };
+function intervalMinutes() {
+  return Number(cfg().get('updateIntervalMinutes')) || 0;
 }
 
 function gitPath() {
@@ -105,27 +133,79 @@ function gitPath() {
   return 'git';
 }
 
-// { mode: 'local' | 'managed' | 'unconfigured', repoDir }
-function currentMode() {
-  const s = settings();
-  if (s.localRepoPath) {
-    return { mode: 'local', repoDir: s.localRepoPath, ...s };
+// Every configured repository, before it has a name (locals first, then managed).
+function rawRepos() {
+  const { pluginsRoot } = paths();
+  let config = '';
+  try {
+    config = fs.readFileSync(path.join(pluginsRoot, 'repo', '.git', 'config'), 'utf8');
+  } catch {
+    // no clone of 0.4
   }
-  if (s.repoUrl) {
-    return { mode: 'managed', repoDir: paths().managedRepo, ...s };
+  return listRepos({
+    repositories: parseRepositories(cfg().get('repositories')),
+    localRepositories: parseLocalRepositories(cfg().get('localRepositories')),
+    pluginsRoot,
+    storage,
+    legacyOrigin: originUrl(config),
+  });
+}
+
+function catalogNames(list) {
+  const names = new Map();
+  for (const d of list) {
+    const c = catalogs.get(d.key);
+    if (c) {
+      names.set(d.key, c.name);
+    }
   }
-  return { mode: 'unconfigured', repoDir: null, ...s };
+  return names;
+}
+
+// Every configured repository with its name (known from the last catalogs).
+function listConfigured() {
+  const list = rawRepos();
+  return assignNames(list, catalogNames(list));
+}
+
+// A repository whose plugins are loaded (not listed twice, not replaced by another of the same name).
+function isActive(d) {
+  return !d.duplicateOf && !d.hiddenBy;
+}
+
+function isManaged(d) {
+  return d.kind === 'managed' && !d.duplicateOf;
+}
+
+// What the view and the messages call a repository (a repository listed twice has no name of its own).
+function labelOf(d) {
+  return d.name || baseName(d.source);
+}
+
+// VS Code's fsPath has a lower-case drive letter; Windows paths compare without case.
+function samePath(a, b) {
+  const norm = (p) => (process.platform === 'win32' ? path.resolve(p).toLowerCase() : path.resolve(p));
+  return norm(a) === norm(b);
+}
+
+function managedSources() {
+  return new Set(listConfigured().filter(isManaged).map((d) => `${d.key}|${d.branch}`));
+}
+
+function lockOf(repoKey) {
+  const d = descs.find((x) => x.key === repoKey);
+  return d ? d.lockFile : null;
 }
 
 function userSelection() {
   const c = cfg();
-  return { enabled: stringList(c.get('enabled')), excluded: stringList(c.get('excluded')) };
+  return {
+    enabled: normalizeIds(catalog, stringList(c.get('enabled'))),
+    excluded: normalizeIds(catalog, stringList(c.get('excluded'))),
+  };
 }
 
-function uniqSorted(list) {
-  return [...new Set(list)].sort();
-}
-
+// The ids the workspace and folder settings list (0.4 ids read as <repository>:<id>; never written back by themselves).
 function projectList() {
   const all = [];
   const top = cfg().inspect('projectPlugins');
@@ -134,7 +214,55 @@ function projectList() {
     const inspected = vscode.workspace.getConfiguration(SECTION, folder.uri).inspect('projectPlugins');
     all.push(...stringList(inspected && inspected.workspaceFolderValue));
   }
-  return uniqSorted(all);
+  return normalizeIds(catalog, all);
+}
+
+// The repositories the project says it uses (workspace value and every folder's value of projectRepositories).
+function projectRepositories() {
+  const all = [];
+  const top = cfg().inspect('projectRepositories');
+  all.push(...parseProjectRepositories(top && top.workspaceValue));
+  for (const folder of vscode.workspace.workspaceFolders || []) {
+    const inspected = vscode.workspace.getConfiguration(SECTION, folder.uri).inspect('projectRepositories');
+    all.push(...parseProjectRepositories(inspected && inspected.workspaceFolderValue));
+  }
+  return all;
+}
+
+// 0.4 settings: teamPlugins.repoUrl + branch and localRepoPath move to repositories and localRepositories (user level).
+async function migrateSettings() {
+  const c = cfg();
+  const globalValue = (key) => {
+    const inspected = c.inspect(key);
+    return inspected ? inspected.globalValue : undefined;
+  };
+  const moved = migratedSettings({
+    repoUrl: globalValue('repoUrl'),
+    branch: globalValue('branch'),
+    localRepoPath: globalValue('localRepoPath'),
+    repositories: globalValue('repositories'),
+    localRepositories: globalValue('localRepositories'),
+  });
+  const target = vscode.ConfigurationTarget.Global;
+  if (moved.repositories) {
+    try {
+      await c.update('repositories', moved.repositories, target);
+      await c.update('repoUrl', undefined, target);
+      await c.update('branch', undefined, target);
+      log('moved teamPlugins.repoUrl to teamPlugins.repositories');
+    } catch (err) {
+      log(`cannot move teamPlugins.repoUrl to teamPlugins.repositories: ${err.message}`);
+    }
+  }
+  if (moved.localRepositories) {
+    try {
+      await c.update('localRepositories', moved.localRepositories, target);
+      await c.update('localRepoPath', undefined, target);
+      log('moved teamPlugins.localRepoPath to teamPlugins.localRepositories');
+    } catch (err) {
+      log(`cannot move teamPlugins.localRepoPath to teamPlugins.localRepositories: ${err.message}`);
+    }
+  }
 }
 
 // ---- serialised refresh / apply ----------------------------------------------------------------------------------
@@ -156,105 +284,134 @@ function apply() {
   return enqueue(doApply);
 }
 
-function refresh({ sync: doSync, userInitiated = false, check = false } = {}) {
-  return enqueue(() => doRefresh(doSync, userInitiated, check));
+// keys: the repositories to sync (null: all); check: the keys whose URL or branch is new (say at once whether the
+// server answers).
+function refresh({ sync: doSync, userInitiated = false, check = null, keys = null } = {}) {
+  return enqueue(() => doRefresh(doSync, userInitiated, check, keys));
 }
 
-async function doRefresh(doSync, userInitiated, check) {
-  const m = currentMode();
-  if (m.mode === 'unconfigured') {
+async function doRefresh(doSync, userInitiated, check, keys) {
+  const list = listConfigured();
+  if (list.length === 0) {
     await vscode.commands.executeCommand('setContext', 'teamPlugins.state', 'unconfigured');
-    lastResult = null;
     scheduleOfflineRetry();
     await doApply();
     return;
   }
   await vscode.commands.executeCommand('setContext', 'teamPlugins.state', 'ready');
-  if (doSync) {
-    const run = makeGit(gitPath());
-    if (m.mode === 'managed') {
-      const p = paths();
-      const hadClone = fs.existsSync(path.join(p.managedRepo, '.git'));
-      let checkFailed = false;
-      syncing = true;
-      updateStatus();
-      try {
-        if (check) {
-          // a new URL or branch: say at once whether the server answers, before the (possibly long) clone or fetch
-          const c = await sync.checkRemote({
-            run,
-            cwd: storage,
-            repoUrl: m.repoUrl,
-            branch: m.branch,
-            idleMs: sync.CHECK_IDLE_MS,
-          });
-          if (c.kind !== 'reachable') {
-            lastResult = c;
-            checkFailed = true;
-          } else if (vscode.window.state.focused) {
-            vscode.window.showInformationMessage(
-              `Team plugins: ${m.repoUrl} is reachable${c.empty ? ' (empty repository)' : ''}. ${
-                hadClone ? 'Updating' : 'Cloning it'
-              } in the background.`,
-            );
-          }
-        }
-        if (!checkFailed) {
-          lastResult = await sync.syncManaged({
-            run,
-            managedRepo: p.managedRepo,
-            repoUrl: m.repoUrl,
-            branch: m.branch,
-            lockFile: p.lockFile,
-            stateFile: p.stateFile,
-            log,
-          });
-        }
-      } finally {
-        syncing = false;
-      }
-      lastCheck = new Date();
-      if (checkFailed) {
-        // only the window the user is looking at answers a settings change
-        if (vscode.window.state.focused) {
-          notifyAfterSync(lastResult, { hadClone, userInitiated: true, run, repoDir: p.managedRepo });
-        } else {
-          log(`repository check failed: ${lastResult.message}`);
-        }
-      } else {
-        if (lastResult.kind === 'busy') {
-          readStateFile(); // another window is syncing: show what it recorded last; its next write re-applies here
-        }
-        if (lastResult.kind === 'cloned') {
-          startWatchers(); // the clone watcher was created before the folder existed
-        }
-        notifyAfterSync(lastResult, { hadClone, userInitiated, run, repoDir: p.managedRepo });
-        if (lastResult.kind === 'switched') {
-          log(`managed clone now follows ${m.repoUrl} (${lastResult.branch})`);
-        }
-      }
-      scheduleOfflineRetry();
-    } else {
-      lastResult = await sync.localStatus({ run, repoDir: m.repoDir });
-      lastCheck = new Date();
-      scheduleOfflineRetry();
-    }
+  if (!doSync) {
+    await doApply();
+    return;
   }
-  await doApply();
+  const run = makeGit(gitPath());
+  const targets = list.filter((d) => !d.duplicateOf && (!keys || keys.has(d.key)));
+  if (targets.length === 0) {
+    await doApply();
+    return;
+  }
+  // the repositories sync in parallel; each is applied as soon as its own sync ends (the applies never overlap)
+  let chain = Promise.resolve();
+  await Promise.all(
+    targets.map(async (d) => {
+      try {
+        await syncRepo(d, run, { userInitiated, check: !!(check && check.has(d.key)) });
+      } catch (err) {
+        log(`error: sync of ${labelOf(d)}: ${err && err.stack ? err.stack : err}`);
+      }
+      chain = chain.then(() => doApply()).catch((err) => log(`error: ${err && err.stack ? err.stack : err}`));
+      await chain;
+    }),
+  );
+  scheduleOfflineRetry();
 }
 
-// The buttons of a classified remote error (lib/remoteErrors.js `actions`).
+// Syncs one repository: a managed clone is cloned or updated, a local one is only looked at.
+async function syncRepo(d, run, { userInitiated, check }) {
+  const s = stateOf(d.key);
+  if (d.kind === 'local') {
+    s.lastResult = await sync.localStatus({ run, repoDir: d.dir });
+    s.lastCheck = new Date();
+    return;
+  }
+  const hadClone = fs.existsSync(path.join(d.dir, '.git'));
+  let checkFailed = false;
+  s.syncing = true;
+  updateStatus();
+  treeProvider.refresh();
+  try {
+    if (check) {
+      // a new URL or branch: say at once whether the server answers, before the (possibly long) clone or fetch
+      const c = await sync.checkRemote({
+        run,
+        cwd: storage,
+        repoUrl: d.url,
+        branch: d.branch,
+        idleMs: sync.CHECK_IDLE_MS,
+      });
+      if (c.kind !== 'reachable') {
+        s.lastResult = c;
+        checkFailed = true;
+      } else if (vscode.window.state.focused) {
+        vscode.window.showInformationMessage(
+          `Team plugins: ${d.url} is reachable${c.empty ? ' (empty repository)' : ''}. ${
+            hadClone ? 'Updating' : 'Cloning'
+          } it in the background.`,
+        );
+      }
+    }
+    if (!checkFailed) {
+      s.lastResult = await sync.syncManaged({
+        run,
+        managedRepo: d.dir,
+        repoUrl: d.url,
+        branch: d.branch,
+        lockFile: d.lockFile,
+        stateFile: d.stateFile,
+        log,
+      });
+    }
+  } finally {
+    s.syncing = false;
+  }
+  s.lastCheck = new Date();
+  if (checkFailed) {
+    // only the window the user is looking at answers a settings change
+    if (vscode.window.state.focused) {
+      notifyAfterSync(s.lastResult, d, { hadClone, userInitiated: true, run });
+    } else {
+      log(`repository check failed for ${d.url}: ${s.lastResult.message}`);
+    }
+  } else {
+    if (s.lastResult.kind === 'busy') {
+      readStateFile(d); // another window is syncing: show what it recorded last; its next write re-applies here
+    }
+    if (s.lastResult.kind === 'cloned') {
+      startWatchers(); // the clone watcher was created before the folder existed
+    }
+    notifyAfterSync(s.lastResult, d, { hadClone, userInitiated, run });
+    if (s.lastResult.kind === 'switched') {
+      log(`managed clone of ${labelOf(d)} now follows ${d.url} (${s.lastResult.branch})`);
+    }
+  }
+}
+
+// The buttons of a classified remote error (lib/remoteErrors.js `actions`); d: the repository.
 const ACTIONS = {
-  terminal: { label: 'Open terminal', run: () => openGitTerminal() },
+  terminal: { label: 'Open terminal', run: (d) => openGitTerminal(d.url) },
   retry: { label: 'Sync now', run: () => vscode.commands.executeCommand('teamPlugins.syncNow') },
   showLog: { label: 'Show log', run: () => output.show() },
-  setUrl: { label: 'Set repository URL', run: () => vscode.commands.executeCommand('teamPlugins.setRepoUrl') },
-  branchSetting: {
+  repositories: {
     label: 'Open settings',
-    run: () => vscode.commands.executeCommand('workbench.action.openSettings', 'teamPlugins.branch'),
+    run: () => vscode.commands.executeCommand('workbench.action.openSettings', 'teamPlugins.repositories'),
   },
-  pushToBranch: { label: 'Push to a branch', run: () => vscode.commands.executeCommand('teamPlugins.pushToBranch') },
-  retryPush: { label: 'Try again', run: () => vscode.commands.executeCommand('teamPlugins.commitAndPush') },
+  pushToBranch: {
+    label: 'Push to a branch',
+    run: (d) => vscode.commands.executeCommand('teamPlugins.pushToBranch', { repo: d.key }),
+  },
+  retryPush: {
+    label: 'Try again',
+    run: (d) => vscode.commands.executeCommand('teamPlugins.commitAndPush', { repo: d.key }),
+  },
 };
 
 // Failures that depend on the machine git runs on: in a remote window they are the remote machine's.
@@ -266,7 +423,7 @@ function remoteMachine() {
   return vscode.env.remoteName ? os.hostname() : '';
 }
 
-function showRemoteError(result) {
+function showRemoteError(result, d) {
   const ids = (result.actions || []).filter((id) => ACTIONS[id]);
   if (!ids.includes('showLog')) {
     ids.push('showLog');
@@ -277,11 +434,11 @@ function showRemoteError(result) {
       ? ` This window is connected to ${machine}: git runs there, with that machine's credentials and SSH keys.`
       : '';
   vscode.window
-    .showErrorMessage(`Team plugins: ${result.message}${suffix}`, ...ids.map((id) => ACTIONS[id].label))
+    .showErrorMessage(`Team plugins (${labelOf(d)}): ${result.message}${suffix}`, ...ids.map((id) => ACTIONS[id].label))
     .then((choice) => {
       const id = ids.find((i) => ACTIONS[i].label === choice);
       if (id) {
-        return ACTIONS[id].run();
+        return ACTIONS[id].run(d);
       }
       return undefined;
     });
@@ -289,8 +446,7 @@ function showRemoteError(result) {
 
 // A terminal where git can ask what it can't ask in the background (SSH host key or passphrase, credential manager
 // sign-in). No shell: git is the terminal's process, so the URL needs no quoting.
-function openGitTerminal() {
-  const url = settings().repoUrl;
+function openGitTerminal(url) {
   if (!url) {
     return;
   }
@@ -308,26 +464,34 @@ function scheduleOfflineRetry() {
     clearTimeout(offlineTimer);
     offlineTimer = null;
   }
-  const m = currentMode();
-  if (m.mode === 'managed' && m.intervalMinutes > 0 && lastResult && lastResult.kind === 'offline') {
+  const minutes = intervalMinutes();
+  const offline = listConfigured().some((d) => {
+    const r = isManaged(d) ? stateOf(d.key).lastResult : null;
+    return !!r && r.kind === 'offline';
+  });
+  if (minutes > 0 && offline) {
     offlineTimer = setTimeout(() => {
       offlineTimer = null;
-      timedSync(Math.max(5, m.intervalMinutes) * 60000);
+      timedSync(Math.max(5, minutes) * 60000);
     }, OFFLINE_RETRY_MS);
   }
 }
 
-function notifyAfterSync(result, { hadClone, userInitiated, run, repoDir }) {
+function notifyAfterSync(result, d, { hadClone, userInitiated, run }) {
+  const s = stateOf(d.key);
   if (!['error', 'busy', 'offline'].includes(result.kind)) {
-    errorShown = false; // a recovery re-arms the error notice
+    s.errorShown = false; // a recovery re-arms the error notice
   }
+  const name = labelOf(d);
   const ask = (kind, message, ...buttons) => vscode.window[kind](message, ...buttons);
   switch (result.kind) {
     case 'cloned':
       if (!hadClone) {
+        // the catalog of this clone is not read yet: its marketplace name is what the view will show
+        const clonedName = repoName(readCatalog(d.dir).name) || name;
         ask(
           'showInformationMessage',
-          'Team plugins: repository cloned. Pick your plugins in the Team Plugins view.',
+          `Team plugins: ${clonedName} cloned. Pick your plugins in the Team Plugins view.`,
           'Open view',
         ).then((choice) => {
           if (choice === 'Open view') {
@@ -339,20 +503,20 @@ function notifyAfterSync(result, { hadClone, userInitiated, run, repoDir }) {
     case 'updated':
       ask(
         'showInformationMessage',
-        `Team plugins updated (${result.commits} new commit(s)). Start a new chat to use the changes.${
+        `Team plugins: ${name} updated (${result.commits} new commit(s)). Start a new chat to use the changes.${
           result.kept > 0 ? ' Your local changes were kept.' : ''
         }`,
         'What changed',
       ).then(async (choice) => {
         if (choice === 'What changed') {
-          const text = await sync.changesBetween({ run, repoDir, from: result.from, to: result.to });
-          output.appendLine(text);
+          const text = await sync.changesBetween({ run, repoDir: d.dir, from: result.from, to: result.to });
+          output.appendLine(`${name}:\n${text}`);
           output.show();
         }
       });
       break;
     case 'conflict': {
-      const key = `conflict:${result.head}|${result.upstream || ''}|${result.files.join(',')}`;
+      const key = `${d.key}|conflict:${result.head}|${result.upstream || ''}|${result.files.join(',')}`;
       if (conflictShown.has(key)) {
         break;
       }
@@ -361,34 +525,34 @@ function notifyAfterSync(result, { hadClone, userInitiated, run, repoDir }) {
       const more = result.files.length > 3 ? ` and ${result.files.length - 3} more` : '';
       ask(
         'showWarningMessage',
-        `Team plugins: ${result.behind} new team commit(s) conflict with your changes in ${shown}${more}, so updates are paused. Push your changes to a branch to merge them in your own clone, or discard them.`,
+        `Team plugins: ${result.behind} new commit(s) of ${name} conflict with your changes in ${shown}${more}, so its updates are paused. Push your changes to a branch to merge them in your own clone, or discard them.`,
         'Push to a branch',
         'Show changes',
         'Discard local changes',
       ).then((choice) => {
         if (choice === 'Push to a branch') {
-          vscode.commands.executeCommand('teamPlugins.pushToBranch');
+          vscode.commands.executeCommand('teamPlugins.pushToBranch', { repo: d.key });
         } else if (choice === 'Show changes') {
           vscode.commands.executeCommand(VIEW_COMMAND);
         } else if (choice === 'Discard local changes') {
-          vscode.commands.executeCommand('teamPlugins.discardLocalChanges');
+          vscode.commands.executeCommand('teamPlugins.discardLocalChanges', { repo: d.key });
         }
       });
       break;
     }
     case 'offline':
       // a server that doesn't answer is quiet when a clone exists: the plugins keep working and the next update retries
-      if (userInitiated || (!hadClone && !errorShown)) {
-        errorShown = true;
-        showRemoteError(result);
+      if (userInitiated || (!hadClone && !s.errorShown)) {
+        s.errorShown = true;
+        showRemoteError(result, d);
       } else {
-        log(`update skipped: ${result.message}`);
+        log(`update of ${name} skipped: ${result.message}`);
       }
       break;
     case 'error':
-      if (userInitiated || !errorShown) {
-        errorShown = true;
-        showRemoteError(result);
+      if (userInitiated || !s.errorShown) {
+        s.errorShown = true;
+        showRemoteError(result, d);
       }
       break;
     default:
@@ -419,18 +583,31 @@ function touchFiltered(holders) {
 }
 
 async function doApply() {
-  const m = currentMode();
-  if (m.mode === 'unconfigured') {
-    catalog = { plugins: [], warnings: [] };
-  } else {
-    catalog = readCatalog(m.repoDir);
-    for (const w of catalog.warnings) {
-      if (!loggedWarnings.has(w)) {
-        loggedWarnings.add(w);
-        log(`catalog warning: ${w}`);
-      }
+  // read the catalog of every repository, except one that is syncing here: its folder is changing under git, so the
+  // last catalog read stays in use until its sync ends
+  const list = rawRepos();
+  const keys = new Set(list.map((d) => d.key));
+  for (const d of list) {
+    if (d.duplicateOf || (stateOf(d.key).syncing && catalogs.has(d.key))) {
+      continue;
+    }
+    catalogs.set(d.key, readCatalog(d.dir));
+  }
+  for (const key of [...catalogs.keys()]) {
+    if (!keys.has(key)) {
+      catalogs.delete(key);
     }
   }
+  descs = assignNames(list, catalogNames(list));
+  const active = descs.filter(isActive);
+  catalog = mergeCatalogs(active.map((d) => ({ desc: d, catalog: catalogs.get(d.key) })));
+  for (const w of catalog.warnings) {
+    if (!loggedWarnings.has(w)) {
+      loggedWarnings.add(w);
+      log(`catalog warning: ${w}`);
+    }
+  }
+  await migrateIds();
   const user = userSelection();
   const project = projectList();
   const eff = selection.effective(catalog, user, project);
@@ -438,39 +615,43 @@ async function doApply() {
   const copies = new Map();
   const previous = partialCopies;
   let retry = '';
-  const build = (synced) =>
-    selection.desiredRegistrations(catalog, eff, (plugin, ids) => {
-      const holder = path.join(filteredRoot, holderName(plugin, ids));
-      const copyRoot = copyRootOf(plugin, holder);
-      const keep = () => {
-        const old = [...previous.values()].find((e) => e.holder === holder);
-        copies.set(plugin.name, { plugin, ids, holder, copyRoot, conflicts: old ? old.conflicts : [] });
-        return copyRoot;
-      };
-      if (!synced && fs.existsSync(copyRoot)) {
+  const desired = selection.desiredRegistrations(catalog, eff, (plugin, ids) => {
+    const d = active.find((x) => x.key === plugin.repoKey);
+    const holder = path.join(filteredRoot, holderName(plugin, ids));
+    const copyRoot = copyRootOf(plugin, holder);
+    const keep = () => {
+      const old = [...previous.values()].find((e) => e.holder === holder);
+      copies.set(plugin.name, { plugin, ids, holder, copyRoot, conflicts: old ? old.conflicts : [] });
+      return copyRoot;
+    };
+    const syncOne = () => {
+      const { actions, conflicts, skipped } = syncCopy(plugin, ids, holder);
+      logCopyActions(plugin, actions);
+      logSkipped(plugin, skipped);
+      copies.set(plugin.name, { plugin, ids, holder, copyRoot, conflicts });
+      return copyRoot;
+    };
+    try {
+      const locked = sync.withLockSync(d.lockFile, syncOne);
+      if (locked.kind === 'done') {
+        return locked.value;
+      }
+      if (fs.existsSync(copyRoot)) {
         retry = 'another window holds the sync lock';
         return keep();
       }
-      try {
-        const { actions, conflicts, skipped } = syncCopy(plugin, ids, holder);
-        logCopyActions(plugin, actions);
-        logSkipped(plugin, skipped);
-        copies.set(plugin.name, { plugin, ids, holder, copyRoot, conflicts });
-        return copyRoot;
-      } catch (err) {
-        log(`cannot build the filtered copy of ${plugin.name}: ${err.message}`);
-        if (!fs.existsSync(copyRoot)) {
-          return null;
-        }
-        if (LOCKED_CODES.includes(err.code)) {
-          retry = err.code;
-        }
-        return keep(); // an existing copy stays registered
+      return syncOne(); // a missing copy is built without the lock: building writes only under filtered/
+    } catch (err) {
+      log(`cannot build the filtered copy of ${plugin.name}: ${err.message}`);
+      if (!fs.existsSync(copyRoot)) {
+        return null;
       }
-    });
-  // a missing copy is still built when the lock is busy: building writes only under filtered/
-  const locked = withCopyLock(() => build(true));
-  const desired = locked.kind === 'busy' ? build(false) : locked.value;
+      if (LOCKED_CODES.includes(err.code)) {
+        retry = err.code;
+      }
+      return keep(); // an existing copy stays registered
+    }
+  });
   if (retry) {
     scheduleCopyRetry(retry);
   }
@@ -482,6 +663,7 @@ async function doApply() {
       desired.delete(name);
     }
   }
+  checkProjectRepositories(project);
   lastApplyErrors = 0;
   if (registrar) {
     const result = await registrar.apply(desired);
@@ -492,6 +674,51 @@ async function doApply() {
   }
   await refreshChanges();
   updateStatus();
+}
+
+// 0.4 ids in the user's lists (`review`, `review/skills/x`) become `<repository>:<id>`, once the catalog knows them.
+async function migrateIds() {
+  const c = cfg();
+  for (const key of ['enabled', 'excluded']) {
+    const raw = stringList(c.get(key));
+    const next = normalizeIds(catalog, raw);
+    if (next.join('\n') !== [...new Set(raw)].sort().join('\n')) {
+      try {
+        await c.update(key, next, vscode.ConfigurationTarget.Global);
+        log(`teamPlugins.${key}: ids moved to <repository>:<plugin> ids`);
+      } catch (err) {
+        log(`cannot move the ids of teamPlugins.${key}: ${err.message}`);
+      }
+    }
+  }
+}
+
+// The repositories the project uses and the user doesn't follow: offered once per window, shown in the view.
+function checkProjectRepositories(project) {
+  const projRepos = projectRepositories();
+  missing = missingRepos(projRepos, descs);
+  unlocated = unlocatedRepos(project, projRepos, descs);
+  for (const e of missing) {
+    if (missingNotified.has(e.normalized)) {
+      continue;
+    }
+    missingNotified.add(e.normalized);
+    vscode.window
+      .showInformationMessage(
+        `Team plugins: this project uses plugins from ${e.name || baseName(e.url)} (${e.url}), which you don't follow.`,
+        'Add repository',
+        'Not now',
+      )
+      .then((choice) => (choice === 'Add repository' ? addRepositoryEntry({ url: e.url, branch: e.branch }) : undefined))
+      .then(undefined, (err) => log(`cannot add ${e.url}: ${err.message}`));
+  }
+  for (const name of unlocated) {
+    const key = `unlocated:${name}`;
+    if (!loggedWarnings.has(key)) {
+      loggedWarnings.add(key);
+      log(`this project uses repository ${name}, which you don't follow and its settings don't locate`);
+    }
+  }
 }
 
 function logCopyActions(plugin, actions) {
@@ -509,12 +736,6 @@ function logSkipped(plugin, skipped) {
       log(`${plugin.name}/${s.rel} left out of the partial copy: ${s.reason}`);
     }
   }
-}
-
-// Partial-copy syncs and conflict choices hold the sync lock in every mode: windows with the same selection share a
-// copy (in managed mode they also write into the clone).
-function withCopyLock(fn) {
-  return sync.withLockSync(paths().lockFile, fn);
 }
 
 // A partial-copy sync that met a locked file or a busy lock is retried shortly, so a copy edit reaches the clone
@@ -535,34 +756,46 @@ function scheduleCopyRetry(reason) {
   }, COPY_RETRY_MS);
 }
 
-// Reads the local changes of the managed clone (shown as a group in the view; they enable Commit and push).
+// Reads the local changes of every managed clone (shown as a group in each repository; they enable Commit and push).
 async function refreshChanges() {
-  const m = currentMode();
-  changes = null;
-  if (m.mode === 'managed' && fs.existsSync(path.join(m.repoDir, '.git'))) {
-    try {
-      changes = await sync.localChanges({ run: makeGit(gitPath()), repo: m.repoDir });
-    } catch (err) {
-      changes = { files: [], ahead: 0, error: err.message };
-      const key = `changes:${err.message}`;
-      if (!loggedWarnings.has(key)) {
-        loggedWarnings.add(key);
-        log(`cannot read the local changes: ${err.message}`);
+  const run = makeGit(gitPath());
+  for (const d of descs) {
+    const s = stateOf(d.key);
+    if (s.syncing) {
+      continue; // git is busy in that clone: the view keeps what it showed
+    }
+    s.changes = null;
+    if (isManaged(d) && fs.existsSync(path.join(d.dir, '.git'))) {
+      try {
+        s.changes = await sync.localChanges({ run, repo: d.dir });
+      } catch (err) {
+        s.changes = { files: [], ahead: 0, error: err.message };
+        const key = `changes:${d.key}:${err.message}`;
+        if (!loggedWarnings.has(key)) {
+          loggedWarnings.add(key);
+          log(`cannot read the local changes of ${labelOf(d)}: ${err.message}`);
+        }
       }
     }
   }
-  await vscode.commands.executeCommand('setContext', 'teamPlugins.hasChanges', hasChanges());
+  await vscode.commands.executeCommand(
+    'setContext',
+    'teamPlugins.hasChanges',
+    descs.some((d) => isManaged(d) && hasChanges(stateOf(d.key))),
+  );
   treeProvider.refresh();
 }
 
-function hasChanges() {
+function hasChanges(state) {
+  const changes = state && state.changes;
   return !!changes && (changes.files.length > 0 || changes.ahead > 0);
 }
 
 // Reports a local-changes read failure (true) so a command never says "nothing to commit" when git failed.
-function changesUnreadable() {
-  if (changes && changes.error) {
-    vscode.window.showErrorMessage(`Team plugins: cannot read the local changes: ${changes.error}`, 'Show log')
+function changesUnreadable(state, d) {
+  if (state.changes && state.changes.error) {
+    vscode.window
+      .showErrorMessage(`Team plugins: cannot read the local changes of ${labelOf(d)}: ${state.changes.error}`, 'Show log')
       .then((choice) => (choice === 'Show log' ? output.show() : undefined));
     return true;
   }
@@ -610,7 +843,14 @@ function updateConflicts() {
   const list = [];
   for (const entry of partialCopies.values()) {
     for (const c of entry.conflicts || []) {
-      list.push({ plugin: entry.plugin.name, rel: c.rel, source: c.source, copy: c.copy, holder: entry.holder });
+      list.push({
+        plugin: entry.plugin.name,
+        rel: c.rel,
+        source: c.source,
+        copy: c.copy,
+        holder: entry.holder,
+        repo: entry.plugin.repoKey,
+      });
     }
   }
   list.sort((a, b) => (a.plugin < b.plugin ? -1 : a.plugin > b.plugin ? 1 : a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0));
@@ -627,7 +867,7 @@ function updateConflicts() {
   }
   if (fresh.length === 1) {
     const c = fresh[0];
-    const node = buildConflictsNode([c]).children[0];
+    const node = buildConflictsNode([c], c.repo).children[0];
     vscode.window
       .showWarningMessage(
         `Team plugins: ${c.plugin}/${c.rel} was changed both in the repository and in a partial copy since the last sync. Both versions are kept until you choose one.`,
@@ -662,8 +902,12 @@ function updateConflicts() {
 function syncPartials() {
   let toSource = false;
   let retry = '';
-  const locked = withCopyLock(() => {
-    for (const entry of partialCopies.values()) {
+  for (const entry of partialCopies.values()) {
+    const lockFile = lockOf(entry.plugin.repoKey);
+    if (!lockFile) {
+      continue; // its repository is no longer configured
+    }
+    const locked = sync.withLockSync(lockFile, () => {
       try {
         const { actions, conflicts, skipped } = syncCopy(entry.plugin, entry.ids, entry.holder);
         logCopyActions(entry.plugin, actions);
@@ -676,10 +920,10 @@ function syncPartials() {
           retry = err.code;
         }
       }
+    });
+    if (locked.kind === 'busy') {
+      retry = 'another window holds the sync lock';
     }
-  });
-  if (locked.kind === 'busy') {
-    retry = 'another window holds the sync lock';
   }
   if (retry) {
     scheduleCopyRetry(retry);
@@ -706,11 +950,14 @@ async function flushPartials() {
   await enqueue(syncPartials);
 }
 
-// After the clone was reset to the team version (discard, push to a branch), the partial copies take the clone's side
-// at the next apply: left as they are, their edits (newer than the last sync) would be copied back into the clone.
-// They are updated in place (markCopySynced), not deleted: Windows refuses to delete a folder Cursor watches.
-function resetPartialCopies() {
+// After a clone was reset to the team version (discard, push to a branch), the partial copies of its plugins take the
+// clone's side at the next apply: left as they are, their edits (newer than the last sync) would be copied back into the
+// clone. They are updated in place (markCopySynced), not deleted: Windows refuses to delete a folder Cursor watches.
+function resetPartialCopies(repoKey) {
   for (const entry of partialCopies.values()) {
+    if (entry.plugin.repoKey !== repoKey) {
+      continue;
+    }
     try {
       markCopySynced(entry.holder);
     } catch (err) {
@@ -765,23 +1012,23 @@ function updateStatus() {
   if (!statusItem) {
     return;
   }
-  const m = currentMode();
   const count = registrar ? registrar.current.size : 0;
+  const states = descs.map((d) => [d, stateOf(d.key)]);
   let text;
-  if (syncing) {
+  if (states.some(([, s]) => s.syncing)) {
     text = '$(sync~spin) Team plugins';
-  } else if (m.mode === 'unconfigured') {
+  } else if (descs.length === 0) {
     text = '$(plug) Team plugins: not configured';
   } else if (!api) {
     text = '$(error) Team plugins';
   } else if (
-    (lastResult && ['conflict', 'error'].includes(lastResult.kind)) ||
+    states.some(([d, s]) => repoStatus(d, s).problem) ||
     lastApplyErrors > 0 ||
     copyConflicts.length > 0 ||
-    (changes && changes.error)
+    states.some(([, s]) => s.changes && s.changes.error)
   ) {
     text = `$(warning) Team plugins: ${count}`;
-  } else if (lastResult && lastResult.kind === 'offline') {
+  } else if (states.some(([d, s]) => isManaged(d) && s.lastResult && s.lastResult.kind === 'offline')) {
     text = `$(debug-disconnect) Team plugins: ${count}`; // after the warnings: being offline is the least of them
   } else {
     text = `$(plug) Team plugins: ${count}`;
@@ -792,29 +1039,26 @@ function updateStatus() {
   if (remoteMachine()) {
     lines.push(`Machine: ${remoteMachine()} (remote window)`);
   }
-  if (m.mode !== 'unconfigured') {
-    const source = m.mode === 'local' ? m.localRepoPath : m.repoUrl;
-    lines.push(`Repository: ${source} (${m.branch || 'default branch'})`);
-  }
-  if (lastResult && lastResult.head) {
-    lines.push(`Commit: ${String(lastResult.head).slice(0, 7)}`);
-  }
-  if (lastCheck) {
-    lines.push(`Last check: ${lastCheck.toTimeString().slice(0, 5)}`);
+  for (const [d, s] of states) {
+    let line = `${labelOf(d)}: ${repoStatus(d, s).text}`;
+    if (s.lastResult && s.lastResult.head) {
+      line += ` · ${String(s.lastResult.head).slice(0, 7)}`;
+    }
+    if (hasChanges(s)) {
+      line += ` · ${s.changes.files.length} file(s), ${s.changes.ahead} unpushed commit(s)`;
+    } else if (s.changes && s.changes.error) {
+      line += ' · local changes cannot be read';
+    }
+    if (s.lastCheck) {
+      line += ` · last check ${s.lastCheck.toTimeString().slice(0, 5)}`;
+    }
+    lines.push(line);
   }
   if (!api) {
-    lines.push('State: vscode.cursor.plugins is missing in this Cursor');
-  } else if (lastResult) {
-    lines.push(`State: ${lastResult.kind}${lastResult.message ? ` - ${lastResult.message}` : ''}`);
-  }
-  if (hasChanges()) {
-    lines.push(`Local changes: ${changes.files.length} file(s), ${changes.ahead} unpushed commit(s)`);
-  }
-  if (changes && changes.error) {
-    lines.push('Local changes: cannot be read (see the log)');
+    lines.push('vscode.cursor.plugins is missing in this Cursor');
   }
   if (copyConflicts.length > 0) {
-    lines.push(`Partial copy conflicts: ${copyConflicts.length} (see the Conflicts group)`);
+    lines.push(`Partial copy conflicts: ${copyConflicts.length} (see the Conflicts groups)`);
   }
   if (lastApplyErrors > 0) {
     lines.push(`Registration errors: ${lastApplyErrors} (see the log)`);
@@ -901,37 +1145,50 @@ class PluginTree {
     if (node) {
       return node.children;
     }
-    const m = currentMode();
-    if (m.mode === 'unconfigured') {
+    if (descs.length === 0) {
       updateProjectStates([]);
       return [];
     }
-    if (catalog.plugins.length === 0 && lastResult && ['error', 'offline'].includes(lastResult.kind)) {
-      updateProjectStates([]);
-      return [
-        {
-          id: 'sync-error',
-          kind: 'error',
-          label: `Sync failed: ${lastResult.message}`,
-          description: '',
-          tooltip: lastResult.message,
-          contextValue: 'error',
-          children: [],
-        },
-      ];
-    }
     const project = projectList();
     const eff = selection.effective(catalog, userSelection(), project);
-    const tree = buildTree(catalog, eff, project);
-    updateProjectStates(tree);
-    return [buildConflictsNode(copyConflicts), buildChangesNode(changes)].filter((n) => n).concat(tree);
+    const pluginNodes = [];
+    const repoNodes = descs.map((d) => {
+      const s = stateOf(d.key);
+      const children = [
+        buildConflictsNode(
+          copyConflicts.filter((c) => c.repo === d.key),
+          d.key,
+        ),
+        buildChangesNode(s.changes, d.key),
+      ].filter((n) => n);
+      let plugins = [];
+      if (isActive(d)) {
+        plugins = buildTree({ plugins: catalog.plugins.filter((p) => p.repoKey === d.key) }, eff, project);
+        pluginNodes.push(...plugins);
+        children.push(...plugins);
+      }
+      if (plugins.length === 0 && s.lastResult && ['error', 'offline'].includes(s.lastResult.kind)) {
+        children.push({
+          id: `sync-error:${d.key}`,
+          kind: 'error',
+          label: `Sync failed: ${s.lastResult.message}`,
+          description: '',
+          tooltip: s.lastResult.message,
+          contextValue: 'error',
+          children: [],
+        });
+      }
+      return buildRepoNode({ ...d, name: labelOf(d) }, s, children);
+    });
+    updateProjectStates(pluginNodes);
+    return [...buildMissingNodes(missing, unlocated), ...repoNodes];
   }
 
   getTreeItem(node) {
     let state = vscode.TreeItemCollapsibleState.None;
     if (node.children.length) {
       state =
-        node.kind === 'changes' || node.kind === 'conflicts'
+        node.kind === 'changes' || node.kind === 'conflicts' || node.kind === 'repo'
           ? vscode.TreeItemCollapsibleState.Expanded
           : vscode.TreeItemCollapsibleState.Collapsed;
     }
@@ -940,6 +1197,14 @@ class PluginTree {
     item.description = node.description;
     item.tooltip = node.tooltip;
     item.contextValue = node.contextValue;
+    if (node.kind === 'repo') {
+      item.iconPath = new vscode.ThemeIcon(node.icon);
+      return item;
+    }
+    if (node.kind === 'missing') {
+      item.iconPath = new vscode.ThemeIcon('warning');
+      return item;
+    }
     if (node.kind === 'change') {
       item.iconPath = new vscode.ThemeIcon(CHANGE_ICONS[node.status] || 'diff-modified');
     } else if (node.kind === 'changes' && node.error) {
@@ -964,6 +1229,7 @@ class PluginTree {
     }
     return item;
   }
+
 }
 
 async function onCheckboxChange(e) {
@@ -1010,36 +1276,69 @@ async function addToProjectCommand(node) {
   }
   const config = vscode.workspace.getConfiguration(SECTION, folder.uri);
   const inspected = config.inspect('projectPlugins');
-  const list = stringList(inspected && inspected.workspaceFolderValue);
+  const list = normalizeIds(catalog, stringList(inspected && inspected.workspaceFolderValue));
   await config.update(
     'projectPlugins',
     selection.addToProject(catalog, list, node.key),
     vscode.ConfigurationTarget.WorkspaceFolder,
   );
+  // say where the repository is, so a teammate who doesn't follow it can be offered to add it
+  const d = descs.find((x) => isActive(x) && x.name === repoOfId(node.key));
+  if (!d) {
+    return;
+  }
+  let origin = '';
+  if (d.kind === 'local') {
+    try {
+      origin = originUrl(fs.readFileSync(path.join(d.dir, '.git', 'config'), 'utf8'));
+    } catch {
+      // not a git clone
+    }
+  }
+  const entry = projectRepoEntry(d, origin);
+  if (!entry) {
+    log(`cannot record where ${d.name} is: its clone has no origin URL`);
+    return;
+  }
+  const current = config.inspect('projectRepositories');
+  const before = current && current.workspaceFolderValue;
+  const next = withProjectRepo(before, entry);
+  if (JSON.stringify(next) !== JSON.stringify(before || [])) {
+    await config.update('projectRepositories', next, vscode.ConfigurationTarget.WorkspaceFolder);
+  }
 }
 
 async function removeFromProjectCommand(node) {
   const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-  for (const folder of vscode.workspace.workspaceFolders || []) {
-    const config = vscode.workspace.getConfiguration(SECTION, folder.uri);
+  const name = repoOfId(node.key);
+  // one level (a folder's settings or the workspace's): its list, then its record of where the repository is
+  const forLevel = async (config, valueKey, target) => {
     const inspected = config.inspect('projectPlugins');
-    if (inspected && Array.isArray(inspected.workspaceFolderValue)) {
-      const list = stringList(inspected.workspaceFolderValue);
-      const next = selection.removeFromProject(catalog, list, node.key);
-      if (!same(list, next)) {
-        await config.update('projectPlugins', next, vscode.ConfigurationTarget.WorkspaceFolder);
+    if (!inspected || !Array.isArray(inspected[valueKey])) {
+      return;
+    }
+    const list = normalizeIds(catalog, stringList(inspected[valueKey]));
+    const next = selection.removeFromProject(catalog, list, node.key);
+    if (same(list, next)) {
+      return; // this level never listed the item: its record of the repository is none of this command's business
+    }
+    await config.update('projectPlugins', next, target);
+    const repoInspected = config.inspect('projectRepositories');
+    if (repoInspected && Array.isArray(repoInspected[valueKey])) {
+      const nextRepos = withoutProjectRepo(repoInspected[valueKey], name, next);
+      if (!same(repoInspected[valueKey], nextRepos)) {
+        await config.update('projectRepositories', nextRepos, target);
       }
     }
+  };
+  for (const folder of vscode.workspace.workspaceFolders || []) {
+    await forLevel(
+      vscode.workspace.getConfiguration(SECTION, folder.uri),
+      'workspaceFolderValue',
+      vscode.ConfigurationTarget.WorkspaceFolder,
+    );
   }
-  const config = cfg();
-  const inspected = config.inspect('projectPlugins');
-  if (inspected && Array.isArray(inspected.workspaceValue)) {
-    const list = stringList(inspected.workspaceValue);
-    const next = selection.removeFromProject(catalog, list, node.key);
-    if (!same(list, next)) {
-      await config.update('projectPlugins', next, vscode.ConfigurationTarget.Workspace);
-    }
-  }
+  await forLevel(cfg(), 'workspaceValue', vscode.ConfigurationTarget.Workspace);
 }
 
 // ---- timer and watchers ------------------------------------------------------------------------------------------
@@ -1053,28 +1352,36 @@ function stopTimer() {
 
 function startTimer() {
   stopTimer();
-  const m = currentMode();
-  if (m.mode !== 'managed' || m.intervalMinutes <= 0) {
+  const minutes = intervalMinutes();
+  if (minutes <= 0 || !listConfigured().some(isManaged)) {
     return;
   }
-  const minutes = Math.max(5, m.intervalMinutes);
-  timer = setInterval(() => timedSync(minutes * 60000), minutes * 60000);
+  const every = Math.max(5, minutes);
+  timer = setInterval(() => timedSync(every * 60000), every * 60000);
 }
 
-// A timed sync is skipped when another window synced less than half an interval ago (one fetch per interval, not one
-// per window); the other window's state write reaches this window through the sync-state.json watcher.
-function timedSync(intervalMs) {
-  let state = null;
+function readState(stateFile) {
   try {
-    state = JSON.parse(fs.readFileSync(paths().stateFile, 'utf8'));
+    return JSON.parse(fs.readFileSync(stateFile, 'utf8'));
   } catch {
-    // none yet
+    return null; // none yet
   }
-  if (sync.recentlySynced(state, intervalMs)) {
-    log(`timed sync skipped: another window synced at ${state.at}`);
+}
+
+// A timed sync leaves out a repository another window synced less than half an interval ago (one fetch per interval,
+// not one per window); the other window's state write reaches this window through the state/ watcher.
+function timedSync(intervalMs) {
+  const keys = new Set(
+    listConfigured()
+      .filter(isManaged)
+      .filter((d) => !sync.recentlySynced(readState(d.stateFile), intervalMs))
+      .map((d) => d.key),
+  );
+  if (keys.size === 0) {
+    log('timed sync skipped: other windows synced every repository recently');
     return;
   }
-  refresh({ sync: true });
+  refresh({ sync: true, keys });
 }
 
 function debouncedApply() {
@@ -1103,40 +1410,37 @@ function stopWatchers() {
   }
 }
 
-function readStateFile() {
-  try {
-    const state = JSON.parse(fs.readFileSync(paths().stateFile, 'utf8'));
-    if (state && state.kind && state.kind !== 'busy') {
-      lastResult = state;
-      lastCheck = state.at ? new Date(state.at) : lastCheck;
-    }
-  } catch {
-    // no state yet
+function readStateFile(d) {
+  const state = readState(d.stateFile);
+  if (state && state.kind && state.kind !== 'busy') {
+    const s = stateOf(d.key);
+    s.lastResult = state;
+    s.lastCheck = state.at ? new Date(state.at) : s.lastCheck;
   }
 }
 
 function startWatchers() {
   stopWatchers();
-  const m = currentMode();
-  if (m.mode === 'managed') {
-    const w = vscode.workspace.createFileSystemWatcher(
-      new vscode.RelativePattern(vscode.Uri.file(storage), 'sync-state.json'),
-    );
-    const onState = () => {
-      if (!syncing) {
-        readStateFile();
-        debouncedApply();
-      }
-    };
-    w.onDidCreate(onState);
-    w.onDidChange(onState);
-    watchers.push(w);
+  const stateDir = path.join(storage, 'state');
+  fs.mkdirSync(stateDir, { recursive: true });
+  const w = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(vscode.Uri.file(stateDir), '*.json'));
+  const onState = (uri) => {
+    const d = listConfigured().find((x) => samePath(x.stateFile, uri.fsPath));
+    if (d && !stateOf(d.key).syncing) {
+      readStateFile(d);
+      debouncedApply();
+    }
+  };
+  w.onDidCreate(onState);
+  w.onDidChange(onState);
+  watchers.push(w);
 
-    // an edit inside the managed clone (an agent's, another window's partial copy, a direct edit) reaches this window's
-    // catalog, partial copies and Local changes
-    watchers.push(watchTree(m.repoDir, onRepoFile));
-  } else if (m.mode === 'local') {
-    watchers.push(watchTree(m.localRepoPath, onRepoFile));
+  // an edit inside a clone (an agent's, another window's partial copy, a direct edit) reaches this window's catalog,
+  // partial copies and Local changes
+  for (const d of listConfigured()) {
+    if (!d.duplicateOf) {
+      watchers.push(watchTree(d.dir, onRepoFile));
+    }
   }
 }
 
@@ -1193,35 +1497,143 @@ function watchTree(dir, onFile) {
 
 // ---- activation --------------------------------------------------------------------------------------------------
 
+// The repository a command was invoked on: a repository node, one of its groups, a change or a conflict node, or an
+// object { repo: key } (what the notifications pass).
+function repoFromArg(arg) {
+  if (!arg) {
+    return undefined;
+  }
+  const key = arg.kind === 'repo' ? arg.key : arg.repo;
+  return key ? listConfigured().find((d) => d.key === key) : undefined;
+}
+
+// The repository a command acts on: the one it was invoked on, else the only one that passes filter, else the user's
+// pick; undefined when there is none (or the pick was cancelled).
+async function pickRepo(arg, { filter = () => true, placeHolder } = {}) {
+  const given = repoFromArg(arg);
+  if (given) {
+    return given;
+  }
+  const list = listConfigured().filter(filter);
+  if (list.length === 0) {
+    return undefined;
+  }
+  if (list.length === 1) {
+    return list[0];
+  }
+  const picked = await vscode.window.showQuickPick(
+    list.map((d) => ({ label: labelOf(d), description: d.source, d })),
+    { placeHolder },
+  );
+  return picked ? picked.d : undefined;
+}
+
+// A managed clone with local changes, or whose changes could not be read (the commands then say why).
+function hasWork(d) {
+  const s = stateOf(d.key);
+  return isManaged(d) && (hasChanges(s) || !!(s.changes && s.changes.error));
+}
+
+// The user-level value of a list setting, kept as it is written.
+function globalList(config, key) {
+  const inspected = config.inspect(key);
+  return Array.isArray(inspected && inspected.globalValue) ? [...inspected.globalValue] : [];
+}
+
+async function addRepositoryEntry({ url, branch }) {
+  const config = cfg();
+  const normalized = normalizeUrl(url);
+  if (parseRepositories(config.get('repositories')).some((e) => normalizeUrl(e.url) === normalized)) {
+    vscode.window.showInformationMessage(`Team plugins: ${url} is already in teamPlugins.repositories.`);
+    return;
+  }
+  const next = [...globalList(config, 'repositories'), branch ? { url, branch } : { url }];
+  await config.update('repositories', next, vscode.ConfigurationTarget.Global);
+}
+
+async function addLocalRepositoryCommand() {
+  const picked = await vscode.window.showOpenDialog({ canSelectFolders: true, canSelectFiles: false, canSelectMany: false });
+  if (!picked || picked.length === 0) {
+    return;
+  }
+  const folder = picked[0].fsPath;
+  const config = cfg();
+  const normalized = normalizeUrl(folder);
+  if (parseLocalRepositories(config.get('localRepositories')).some((p) => normalizeUrl(p) === normalized)) {
+    vscode.window.showInformationMessage(`Team plugins: ${folder} is already in teamPlugins.localRepositories.`);
+    return;
+  }
+  await config.update(
+    'localRepositories',
+    [...globalList(config, 'localRepositories'), folder],
+    vscode.ConfigurationTarget.Global,
+  );
+}
+
+async function removeRepositoryCommand(arg) {
+  const d = await pickRepo(arg, { placeHolder: 'Repository to stop following' });
+  if (!d) {
+    return;
+  }
+  const detail =
+    d.kind === 'managed'
+      ? `Its plugins are unregistered. Its clone stays in ${d.dir}${hasChanges(stateOf(d.key)) ? ', with your local changes' : ''}.`
+      : 'Its plugins are unregistered. Your clone is not touched.';
+  const choice = await vscode.window.showWarningMessage(`Stop following ${labelOf(d)}?`, { modal: true, detail }, 'Remove');
+  if (choice !== 'Remove') {
+    return;
+  }
+  const key = d.kind === 'managed' ? 'repositories' : 'localRepositories';
+  const config = cfg();
+  const list = globalList(config, key);
+  const urlOf = (item) => (typeof item === 'string' ? item : item && typeof item.url === 'string' ? item.url : '');
+  const matches = (item) => urlOf(item).trim() !== '' && normalizeUrl(urlOf(item)) === d.normalized;
+  let next;
+  if (d.duplicateOf) {
+    // the entry that is listed twice: the later one goes, the first keeps following
+    let last = -1;
+    list.forEach((item, i) => {
+      if (matches(item)) {
+        last = i;
+      }
+    });
+    next = list.filter((item, i) => i !== last);
+  } else {
+    next = list.filter((item) => !matches(item));
+  }
+  await config.update(key, next, vscode.ConfigurationTarget.Global);
+}
+
 function registerCommands(context) {
   const reg = (id, fn) => context.subscriptions.push(vscode.commands.registerCommand(id, fn));
 
   reg('teamPlugins.syncNow', () => refresh({ sync: true, userInitiated: true }));
-  reg('teamPlugins.openRepo', async () => {
-    const m = currentMode();
-    if (m.mode === 'unconfigured') {
+  reg('teamPlugins.openRepo', async (arg) => {
+    if (listConfigured().length === 0) {
       vscode.window.showInformationMessage('No repository configured.');
       return;
     }
-    await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(m.repoDir), { forceNewWindow: true });
+    const d = await pickRepo(arg, { filter: (x) => !x.duplicateOf, placeHolder: 'Repository to open' });
+    if (d) {
+      await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(d.dir), { forceNewWindow: true });
+    }
   });
   reg('teamPlugins.showLog', () => output.show());
-  reg('teamPlugins.setRepoUrl', async () => {
+  reg('teamPlugins.addRepository', async () => {
     const value = await vscode.window.showInputBox({
-      prompt: 'Git URL of the team plugins repository',
-      value: settings().repoUrl,
+      prompt: 'Git URL of a team plugins repository',
       ignoreFocusOut: true,
+      validateInput: (v) => (v.trim() ? null : 'Enter a Git URL'),
     });
-    if (value !== undefined) {
-      await cfg().update('repoUrl', value.trim(), vscode.ConfigurationTarget.Global);
+    if (value !== undefined && value.trim()) {
+      await addRepositoryEntry({ url: value.trim() });
     }
   });
-  reg('teamPlugins.setLocalRepoPath', async () => {
-    const picked = await vscode.window.showOpenDialog({ canSelectFolders: true, canSelectFiles: false, canSelectMany: false });
-    if (picked && picked.length > 0) {
-      await cfg().update('localRepoPath', picked[0].fsPath, vscode.ConfigurationTarget.Global);
-    }
-  });
+  reg('teamPlugins.addLocalRepository', addLocalRepositoryCommand);
+  reg('teamPlugins.removeRepository', removeRepositoryCommand);
+  reg('teamPlugins.addProjectRepository', (node) =>
+    node && node.url ? addRepositoryEntry({ url: node.url, branch: node.branch }) : undefined,
+  );
   reg('teamPlugins.addToProject', (node) => addToProjectCommand(node));
   reg('teamPlugins.removeFromProject', (node) => removeFromProjectCommand(node));
   reg('teamPlugins.openItem', (node) => {
@@ -1230,57 +1642,67 @@ function registerCommands(context) {
     }
     return undefined;
   });
-  reg('teamPlugins.discardLocalChanges', async () => {
-    if (currentMode().mode !== 'managed') {
-      vscode.window.showInformationMessage('There is no managed clone: a local clone is never changed by this extension.');
+  reg('teamPlugins.discardLocalChanges', async (arg) => {
+    if (!listConfigured().some(isManaged)) {
+      vscode.window.showInformationMessage(NO_CLONE);
       return;
     }
     await flushPartials();
     await refreshChanges();
-    if (changesUnreadable()) {
-      return;
-    }
-    if (!hasChanges()) {
+    const d = await pickRepo(arg, { filter: hasWork, placeHolder: 'Repository whose local changes to discard' });
+    if (!d) {
       vscode.window.showInformationMessage('Nothing to discard.');
       return;
     }
+    if (d.kind !== 'managed') {
+      vscode.window.showInformationMessage(NO_CLONE);
+      return;
+    }
+    const s = stateOf(d.key);
+    if (changesUnreadable(s, d)) {
+      return;
+    }
+    if (!hasChanges(s)) {
+      vscode.window.showInformationMessage('Nothing to discard.');
+      return;
+    }
+    const { changes } = s;
     const listed = changes.files.slice(0, 10).map((f) => `${f.status} ${f.path}`);
     let detail = `These are deleted:\n${listed.join('\n')}`;
     if (changes.files.length > 10) {
-      detail += `\n\u2026 and ${changes.files.length - 10} more`;
+      detail += `\n… and ${changes.files.length - 10} more`;
     }
     if (changes.ahead > 0) {
       detail += `\n${changes.ahead} unpushed commit(s)`;
     }
     const choice = await vscode.window.showWarningMessage(
-      'Discard all local changes in the managed clone?',
+      `Discard all local changes in the managed clone of ${labelOf(d)}?`,
       { modal: true, detail },
       'Discard',
     );
     if (choice !== 'Discard') {
       return;
     }
-    const p = paths();
     let result;
     await enqueue(async () => {
       result = await sync.discardLocalChanges({
         run: makeGit(gitPath()),
-        managedRepo: p.managedRepo,
-        lockFile: p.lockFile,
+        managedRepo: d.dir,
+        lockFile: d.lockFile,
         log,
       });
       if (result.ok) {
-        resetPartialCopies();
+        resetPartialCopies(d.key);
       }
     });
     result = result || { ok: false, message: UNEXPECTED.message };
-    log(`discard local changes: ${result.message}`);
+    log(`discard local changes of ${labelOf(d)}: ${result.message}`);
     if (result.busy) {
       vscode.window.showWarningMessage(BUSY_TEXT);
     } else if (!result.ok) {
       vscode.window.showErrorMessage(`Team plugins: ${result.message}`);
     }
-    await refresh({ sync: true, userInitiated: true });
+    await refresh({ sync: true, userInitiated: true, keys: new Set([d.key]) });
   });
   reg('teamPlugins.commitAndPush', commitAndPushCommand);
   reg('teamPlugins.pushToBranch', pushToBranchCommand);
@@ -1293,14 +1715,18 @@ function registerCommands(context) {
       async provideTextDocumentContent(uri) {
         try {
           const request = JSON.parse(decodeURIComponent(uri.query));
-          if (currentMode().mode !== 'managed') {
+          const d =
+            request && typeof request.repo === 'string' && request.repo
+              ? listConfigured().find((x) => isManaged(x) && samePath(x.dir, request.repo))
+              : undefined;
+          if (!d) {
             return '';
           }
-          const args = sync.headFileArgs(request, paths().managedRepo);
+          const args = sync.headFileArgs(request, d.dir);
           if (!args) {
             return '';
           }
-          const r = await makeGit(gitPath())(args, paths().managedRepo, undefined, { trim: false });
+          const r = await makeGit(gitPath())(args, d.dir, undefined, { trim: false });
           return r.code === 0 ? r.stdout : '';
         } catch {
           return '';
@@ -1314,6 +1740,7 @@ function registerCommands(context) {
 
 const GIT_SCHEME = 'team-plugins-git';
 const NOT_MANAGED = 'With a local clone, commit and push with your own git tools.';
+const NO_CLONE = 'There is no managed clone: a local clone is never changed by this extension.';
 
 function gitUri(repo, rev, file) {
   return vscode.Uri.from({
@@ -1324,15 +1751,14 @@ function gitUri(repo, rev, file) {
 }
 
 async function openChangeCommand(node) {
-  const m = currentMode();
-  if (!node || !node.path || m.mode !== 'managed') {
+  const d = repoFromArg(node);
+  if (!node || !node.path || !d || d.kind !== 'managed') {
     return;
   }
   const isNew = node.status === 'added' || node.status === 'untracked';
-  const left = gitUri(m.repoDir, isNew ? '' : 'HEAD', node.from || node.path);
-  const right =
-    node.status === 'deleted' ? gitUri(m.repoDir, '', node.path) : vscode.Uri.file(path.join(m.repoDir, node.path));
-  await vscode.commands.executeCommand('vscode.diff', left, right, `${path.basename(node.path)} (team \u2194 yours)`);
+  const left = gitUri(d.dir, isNew ? '' : 'HEAD', node.from || node.path);
+  const right = node.status === 'deleted' ? gitUri(d.dir, '', node.path) : vscode.Uri.file(path.join(d.dir, node.path));
+  await vscode.commands.executeCommand('vscode.diff', left, right, `${path.basename(node.path)} (team ↔ yours)`);
 }
 
 // ---- partial-copy conflicts --------------------------------------------------------------------------------------------
@@ -1373,7 +1799,12 @@ async function resolveConflictCommand(node, keep) {
         vscode.window.showInformationMessage(`${node.plugin}/${node.rel} is no longer in conflict.`);
         return;
       }
-      const locked = withCopyLock(() => resolveConflict(entry.plugin, entry.ids, entry.holder, node.rel, keep));
+      const lockFile = lockOf(entry.plugin.repoKey);
+      if (!lockFile) {
+        log(`conflict of a repository that is no longer configured: ${node.rel}`);
+        return;
+      }
+      const locked = sync.withLockSync(lockFile, () => resolveConflict(entry.plugin, entry.ids, entry.holder, node.rel, keep));
       if (locked.kind === 'busy') {
         vscode.window.showWarningMessage(BUSY_TEXT);
         return;
@@ -1390,17 +1821,17 @@ async function resolveConflictCommand(node, keep) {
   });
 }
 
-function askCommitMessage() {
+function askCommitMessage(d) {
   return vscode.window.showInputBox({
-    prompt: 'Commit message for your changes to the team plugins',
+    prompt: `Commit message for your changes to ${labelOf(d)}`,
     placeHolder: 'Update the review skill',
     ignoreFocusOut: true,
     validateInput: (v) => (v.trim() ? null : 'Enter a commit message'),
   });
 }
 
-// Shows the outcome of commitAndPush / pushToBranch.
-function reportContribution(result, nothingText) {
+// Shows the outcome of commitAndPush / pushToBranch on the repository d.
+function reportContribution(result, nothingText, d) {
   switch (result.kind) {
     case 'pushed':
       vscode.window.showInformationMessage(
@@ -1432,42 +1863,66 @@ function reportContribution(result, nothingText) {
         )
         .then((choice) => {
           if (choice === 'Push to a branch') {
-            vscode.commands.executeCommand('teamPlugins.pushToBranch');
+            vscode.commands.executeCommand('teamPlugins.pushToBranch', { repo: d.key });
           } else if (choice === 'Open repository folder') {
-            vscode.commands.executeCommand('teamPlugins.openRepo');
+            vscode.commands.executeCommand('teamPlugins.openRepo', { repo: d.key });
           }
         });
       break;
     default:
-      showRemoteError(result);
+      showRemoteError(result, d);
       break;
   }
 }
 
-async function commitAndPushCommand() {
-  if (currentMode().mode !== 'managed') {
+// The managed repository a commit or push is for: the one invoked on, the only one with changes, or the user's pick.
+// Flushes the partial copies first, so that the changes include the edits still waiting for the watcher.
+async function pickToContribute(arg, { placeHolder, nothingText }) {
+  if (!listConfigured().some(isManaged)) {
     vscode.window.showInformationMessage(NOT_MANAGED);
-    return;
+    return undefined;
   }
   await flushPartials();
   await refreshChanges();
-  if (changesUnreadable()) {
+  const d = await pickRepo(arg, { filter: hasWork, placeHolder });
+  if (!d) {
+    vscode.window.showInformationMessage(nothingText);
+    return undefined;
+  }
+  if (d.kind !== 'managed') {
+    vscode.window.showInformationMessage(NOT_MANAGED);
+    return undefined;
+  }
+  const s = stateOf(d.key);
+  if (changesUnreadable(s, d)) {
+    return undefined;
+  }
+  if (!hasChanges(s)) {
+    vscode.window.showInformationMessage(nothingText);
+    return undefined;
+  }
+  return d;
+}
+
+async function commitAndPushCommand(arg) {
+  const d = await pickToContribute(arg, {
+    placeHolder: 'Repository to commit and push',
+    nothingText: 'Nothing to commit or push.',
+  });
+  if (!d) {
     return;
   }
-  if (!hasChanges()) {
-    vscode.window.showInformationMessage('Nothing to commit or push.');
-    return;
-  }
+  const { changes } = stateOf(d.key);
   let message = '';
   if (changes.files.length > 0) {
-    const typed = await askCommitMessage();
+    const typed = await askCommitMessage(d);
     if (typed === undefined) {
       return;
     }
     message = typed.trim();
   } else {
     const choice = await vscode.window.showWarningMessage(
-      `Push ${changes.ahead} unpushed commit(s) to the team?`,
+      `Push ${changes.ahead} unpushed commit(s) of ${labelOf(d)} to the team?`,
       { modal: true },
       'Push',
     );
@@ -1475,44 +1930,34 @@ async function commitAndPushCommand() {
       return;
     }
   }
-  const p = paths();
   const result =
     (await enqueue(() =>
       vscode.window.withProgress(
-        { location: vscode.ProgressLocation.Notification, title: 'Team plugins: committing and pushing\u2026' },
+        { location: vscode.ProgressLocation.Notification, title: 'Team plugins: committing and pushing…' },
         () =>
           contribute.commitAndPush({
             run: makeGit(gitPath()),
-            repo: p.managedRepo,
+            repo: d.dir,
             message,
-            lockFile: p.lockFile,
-            stateFile: p.stateFile,
-            repoUrl: currentMode().repoUrl,
+            lockFile: d.lockFile,
+            stateFile: d.stateFile,
+            repoUrl: d.url,
             log,
           }),
       ),
     )) || UNEXPECTED;
-  reportContribution(result, 'Nothing to commit or push.');
+  reportContribution(result, 'Nothing to commit or push.', d);
   await refresh({ sync: false });
 }
 
-async function pushToBranchCommand() {
-  if (currentMode().mode !== 'managed') {
-    vscode.window.showInformationMessage(NOT_MANAGED);
+async function pushToBranchCommand(arg) {
+  const d = await pickToContribute(arg, { placeHolder: 'Repository to push', nothingText: 'Nothing to push.' });
+  if (!d) {
     return;
   }
-  await flushPartials();
-  await refreshChanges();
-  if (changesUnreadable()) {
-    return;
-  }
-  if (!hasChanges()) {
-    vscode.window.showInformationMessage('Nothing to push.');
-    return;
-  }
-  const p = paths();
+  const { changes } = stateOf(d.key);
   const run = makeGit(gitPath());
-  const name = await run(['config', 'user.name'], p.managedRepo);
+  const name = await run(['config', 'user.name'], d.dir);
   const branch = await vscode.window.showInputBox({
     prompt: 'Branch to push your changes to (merge it later from your own clone)',
     value: contribute.defaultBranchName(name.stdout, new Date()),
@@ -1524,7 +1969,7 @@ async function pushToBranchCommand() {
   }
   let message = '';
   if (changes.files.length > 0) {
-    const typed = await askCommitMessage();
+    const typed = await askCommitMessage(d);
     if (typed === undefined) {
       return;
     }
@@ -1533,27 +1978,27 @@ async function pushToBranchCommand() {
   const result =
     (await enqueue(() =>
       vscode.window.withProgress(
-        { location: vscode.ProgressLocation.Notification, title: 'Team plugins: pushing to a branch\u2026' },
+        { location: vscode.ProgressLocation.Notification, title: 'Team plugins: pushing to a branch…' },
         async () => {
           const r = await contribute.pushToBranch({
             run,
-            repo: p.managedRepo,
+            repo: d.dir,
             message,
             branch: branch.trim(),
-            lockFile: p.lockFile,
-            stateFile: p.stateFile,
-            repoUrl: currentMode().repoUrl,
+            lockFile: d.lockFile,
+            stateFile: d.stateFile,
+            repoUrl: d.url,
             log,
           });
           if (r.kind === 'pushedBranch') {
-            resetPartialCopies();
+            resetPartialCopies(d.key);
           }
           return r;
         },
       ),
     )) || UNEXPECTED;
-  reportContribution(result, 'Nothing to push.');
-  await refresh({ sync: true });
+  reportContribution(result, 'Nothing to push.', d);
+  await refresh({ sync: true, keys: new Set([d.key]) });
 }
 
 // The extension of the old publisher declares the same commands and view and registers the same plugins: while it is
@@ -1650,18 +2095,30 @@ function activate(context) {
 
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
-      if (e.affectsConfiguration('teamPlugins.repoUrl') || e.affectsConfiguration('teamPlugins.branch')) {
+      if (knownSources === null) {
+        return; // activation is still moving the 0.4 settings: it ends with a full refresh
+      }
+      if (
+        e.affectsConfiguration('teamPlugins.repositories') ||
+        e.affectsConfiguration('teamPlugins.localRepositories') ||
+        e.affectsConfiguration('git.path')
+      ) {
+        // a repository or branch that is new answers at once whether its server is reachable
+        const now = managedSources();
+        const check = new Set(
+          listConfigured()
+            .filter((d) => isManaged(d) && !knownSources.has(`${d.key}|${d.branch}`))
+            .map((d) => d.key),
+        );
+        knownSources = now;
         startWatchers();
         startTimer();
-        refresh({ sync: true, check: true });
-      } else if (e.affectsConfiguration('teamPlugins.localRepoPath') || e.affectsConfiguration('git.path')) {
-        startWatchers();
-        startTimer();
-        refresh({ sync: true });
+        refresh({ sync: true, check });
       } else if (
         e.affectsConfiguration('teamPlugins.enabled') ||
         e.affectsConfiguration('teamPlugins.excluded') ||
-        e.affectsConfiguration('teamPlugins.projectPlugins')
+        e.affectsConfiguration('teamPlugins.projectPlugins') ||
+        e.affectsConfiguration('teamPlugins.projectRepositories')
       ) {
         apply();
       } else if (e.affectsConfiguration('teamPlugins.updateIntervalMinutes')) {
@@ -1671,9 +2128,14 @@ function activate(context) {
     vscode.workspace.onDidChangeWorkspaceFolders(() => apply()),
   );
 
-  refresh({ sync: true });
-  startTimer();
-  startWatchers();
+  migrateSettings()
+    .catch((err) => log(`cannot move the settings of 0.4: ${err.message}`))
+    .then(() => {
+      knownSources = managedSources();
+      refresh({ sync: true });
+      startTimer();
+      startWatchers();
+    });
   if (registrar) {
     startCopyWatcher();
     keepAliveTimer = setInterval(

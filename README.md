@@ -1,17 +1,18 @@
 # Team plugins
 
-**Share your team's Cursor rules and skills from one git repository, always up to date, in every project.**
+**Share your team's Cursor rules and skills from git repositories, always up to date, in every project.**
 
 Your team has good rules and skills for Cursor's agent: a code-review checklist, the house style, how to write a
 migration, how to release. Without a shared home, they end up copied from project to project, slowly drift apart, and
 the improvement someone made last week never reaches the rest of the team.
 
-Team plugins keeps them in one git repository and brings them into Cursor for everyone:
+Team plugins keeps them in git repositories, one per team, and brings them into Cursor for everyone:
 
 - **One source of truth.** The team's plugins live in a normal git repository. The extension clones it and registers
-  the plugins in Cursor: the agent uses them in every chat, in every project.
-- **Always current.** The repository is pulled in the background (every hour by default). A skill fixed by a teammate
-  reaches you without you doing anything; start a new chat to use it.
+  the plugins in Cursor: the agent uses them in every chat, in every project. Follow one repository per team: you can
+  follow several.
+- **Always current.** The repositories are pulled in the background (every hour by default). A skill fixed by a
+  teammate reaches you without you doing anything; start a new chat to use it.
 - **Only what you need.** Tick whole plugins or single skills and rules in the **Team Plugins** view, so the agent's
   context holds only what is useful to you.
 - **Per-project requirements.** A project can require plugins for everyone who opens it, through its committed
@@ -48,16 +49,16 @@ marketplace to get updates automatically.
 
 In a window connected to a remote machine, Cursor's agent runs on that machine, and so must the extension. In the
 Extensions view of the remote window, Team plugins shows **Install in SSH: \<host\>**: click it once per machine, then
-reload the window. The team repository is cloned on the remote machine, with that machine's git credentials.
+reload the window. The team repositories are cloned on the remote machine, with that machine's git credentials.
 
 ## Getting started
 
 1. **Check that git can reach the team repository.** In a terminal, `git clone <team repository url>` must work
    without asking anything: the extension runs git in the background with your own credentials and never asks for a
    password (see "Repository access" below). Git 2.38 or later is needed.
-2. **Point the extension at the repository.** Open the **Team Plugins** view in the activity bar and click **Set
-   repository URL** (or set `teamPlugins.repoUrl`). The URL is checked at once, then the repository is cloned in the
-   background.
+2. **Add the repository.** Open the **Team Plugins** view in the activity bar and click **Add repository** (the `+` of
+   the view's title bar, or add the URL to `teamPlugins.repositories`). The URL is checked at once, then the repository
+   is cloned in the background. You can add several repositories (see "Several repositories").
 3. **Pick your plugins.** Tick the plugins, skills or rules you want. They are available to the agent right away, in
    new chats.
 
@@ -70,9 +71,13 @@ A plugin repository as Cursor knows it. The extension finds the plugins in `.cur
 root (entries whose `source` is a folder of the repository), or, without that file, in every top-level folder holding a
 `.cursor-plugin/plugin.json`.
 
+Give the repository a `name` in `marketplace.json`: it names the repository in the view and in every id
+(`<repository>:<plugin>`). The file may hold only that `name`: the plugins are then found by folder. Without a name,
+the last part of the URL is used (`team-plugins` for `https://example.com/org/team-plugins.git`).
+
 ```
 team-plugins/
-├── .cursor-plugin/marketplace.json     optional: lists the plugins and their folders
+├── .cursor-plugin/marketplace.json     optional: { "name": "team-test", "plugins": [...] }
 ├── review/
 │   ├── .cursor-plugin/plugin.json      { "name": "review", "description": "..." }
 │   ├── skills/
@@ -88,9 +93,38 @@ Skills (`skills/<folder>/SKILL.md`) and rules (`rules/*.mdc` or `rules/*.md`) ca
 `description` of their frontmatter is shown in the view. Anything else in a plugin (agents, commands, hooks,
 `mcp.json`) always comes with its plugin.
 
+## Several repositories
+
+Follow one repository per team, or as many as you need: click **Add repository** again, or list them in the user
+setting `teamPlugins.repositories` (a URL, or `{ "url": "...", "branch": "..." }` for a branch other than the
+repository's default one):
+
+```json
+{
+  "teamPlugins.repositories": [
+    "https://example.com/org/team-plugins.git",
+    { "url": "git@example.com:org/other-team.git", "branch": "next" }
+  ]
+}
+```
+
+- The view groups the plugins by repository. Each repository row shows its state (up to date, updating, offline, an
+  error...); its tooltip gives the URL, the folder of the clone, the last commit and the last check.
+- A repository is told apart by its name (see above). With two repositories of the same name, the first one in the
+  list wins; a local clone (see "Working on the plugins in your own clone") always wins over a repository you follow
+  by URL. The other one shows `same name as ...: not loaded` (rename it in its `marketplace.json`) or `replaced by
+  your local clone`. The same repository listed twice, even written two ways (`https://...` and `git@...`), is loaded
+  once; the second entry shows `listed twice: not loaded`.
+- Cursor names a plugin after its folder. When two repositories have a plugin in a folder of the same name, the
+  second plugin is registered from a copy in a folder called `<folder>-<repository>`, so that both load.
+- A repository that fails (no access, offline) never blocks the others: each one is synced on its own, and its row
+  shows the error.
+- **Remove repository** (right-click a repository) stops following it: its plugins are unregistered. Its clone stays on
+  disk, and so do your local changes in it.
+
 ## Choosing plugins
 
-The view lists every plugin of the team repository with a checkbox, and its skills and rules below it (skills have a
+The view lists every plugin of each repository with a checkbox, and its skills and rules below it (skills have a
 sparkle icon, rules a scales icon). Click a skill or rule to open its file.
 
 - Tick a plugin: all its skills and rules are enabled, including the ones added later.
@@ -103,12 +137,14 @@ Your choice is stored in your user settings and applies to every project:
 
 ```json
 {
-  "teamPlugins.enabled": ["review", "docs/skills/write-readme"],
-  "teamPlugins.excluded": ["review/skills/security-check"]
+  "teamPlugins.enabled": ["team-test:review", "team-test:docs/skills/write-readme"],
+  "teamPlugins.excluded": ["team-test:review/skills/security-check"]
 }
 ```
 
-An item is the plugin `name` (from its `plugin.json`), `<name>/skills/<skill folder>` or `<name>/rules/<file name>`.
+An item is `<repository>:<plugin>`, `<repository>:<plugin>/skills/<skill folder>` or
+`<repository>:<plugin>/rules/<file name>`: the repository is its name (see "The team repository") and the plugin is
+the `name` from its `plugin.json`.
 
 ### Plugins a project needs
 
@@ -117,14 +153,23 @@ and choose **Add to this project** (or **Remove from this project**), then commi
 
 ```json
 {
-  "teamPlugins.projectPlugins": ["review", "docs/skills/write-readme"]
+  "teamPlugins.projectPlugins": ["team-test:review", "team-test:docs/skills/write-readme"],
+  "teamPlugins.projectRepositories": [{ "name": "team-test", "url": "https://example.com/org/team-plugins.git" }]
 }
 ```
+
+**Add to this project** also records where the repository is (`teamPlugins.projectRepositories`, with the URL and
+branch you follow it with; a user name or token in an HTTPS URL is left out). A teammate who does not
+follow that repository yet is told: a notification and an entry at the top of the view say that the project uses
+plugins from it, with an **Add repository** button. Nothing is added until they click it.
 
 The project's list is added to your own choice: a project never disables something you enabled. Items the project
 enables are drawn in the project colour with a **P** badge; a plugin that the project enables only in part shows the
 badge without the colour. Unticking an item the project enables switches it off and removes it from the project's list
 too: commit `.vscode/settings.json` to share that. Each Cursor window shows its own project's plugins.
+
+Project lists written by 0.4 (ids without a repository, such as `review`) keep working: they are read as
+`<repository>:<id>`.
 
 The colour is the theme colour `teamPlugins.projectItemForeground` (purple by default; change it with
 `workbench.colorCustomizations`). Colour and badge follow the `explorer.decorations.colors` and
@@ -137,10 +182,13 @@ select another row or click elsewhere, and the **P** badge stays visible meanwhi
 Ask the agent to change a team skill, as you would any file. The edit always reaches the extension's clone of the team
 repository.
 
-The changes appear in a **Local changes** group at the top of the view; click a file to see the diff. To share them:
+The changes appear in a **Local changes** group of the repository they belong to (each repository has its own); click
+a file to see the diff. The commands below act on the repository you click; from the title bar or the command palette,
+Cursor asks which one when several have changes. To share them:
 
-- **Commit and push** (the cloud icon in the view's title bar) asks for a message, commits every local change, rebases
-  it on the team's latest commits and pushes it with your git credentials. Your teammates get it at their next sync.
+- **Commit and push** (the cloud icon in the view's title bar, or the icon of the group) asks for a message, commits
+  every local change of that repository, rebases it on the team's latest commits and pushes it with your git
+  credentials. Your teammates get it at their next sync.
 - **Push to a branch** pushes your changes to a new branch instead (for a protected branch, or to open a pull request)
   and puts the clone back on the team version.
 - **Discard local changes** throws them away, after a confirmation that lists what would be lost.
@@ -150,7 +198,7 @@ teammate changed the same lines, pauses the updates until you push your changes 
 
 For a partly enabled plugin, the agent edits a copy that holds only your selection, kept in step with the clone both
 ways. If the same file changed on both sides (a team update and an edit of yours), nothing is overwritten: the file
-shows in a **Conflicts** group at the top of the view; click it to compare, then choose **Keep repository version** or
+shows in a **Conflicts** group of its repository; click it to compare, then choose **Keep repository version** or
 **Keep copy version**.
 
 A commit records your name and email from git's settings; if they were never set, the message gives the two
@@ -158,15 +206,17 @@ A commit records your name and email from git's settings; if they were never set
 
 ### Working on the plugins in your own clone
 
-If you maintain the team's plugins, set `teamPlugins.localRepoPath` (or run **Use a local clone**) to your own clone
-of the repository. The extension then reads your clone live and never runs a git command that changes it: edit,
-commit and push with your usual tools.
+If you maintain the team's plugins, add your own clone of the repository to `teamPlugins.localRepositories` (or run
+**Add a local clone**). The extension then reads your clone live and never runs a git command that changes it: edit,
+commit and push with your usual tools. The clone replaces the repository you follow by URL that has the same name (the
+`name` of its `marketplace.json`), so you keep working on your version of the plugins while the others follow the
+team's.
 
 ## Staying up to date
 
-The repository is checked at startup, every `teamPlugins.updateIntervalMinutes` (60 by default, at least 5; `0` means
-only at startup) and when you click **Sync now** (the sync icon of the view). After an update, **What changed** in the
-notification lists the new commits. Start a new chat to use the new versions.
+The repositories are checked at startup, every `teamPlugins.updateIntervalMinutes` (60 by default, at least 5; `0`
+means only at startup) and when you click **Sync now** (the sync icon of the view). After an update, **What changed**
+in the notification lists the new commits. Start a new chat to use the new versions.
 
 When the server can't be reached (offline, VPN down), the plugins already cloned keep working and the update is
 retried a few minutes later.
@@ -189,21 +239,22 @@ terminal where git and SSH can ask their questions; then click **Sync now**.
 
 | Setting | Default | Description |
 | --- | --- | --- |
-| `teamPlugins.repoUrl` | | Git URL of the team repository (HTTPS, `git@host:path` or `ssh://`). |
-| `teamPlugins.branch` | | Branch to follow; empty means the repository's default branch. |
+| `teamPlugins.repositories` | `[]` | The repositories to follow: Git URLs (HTTPS, `git@host:path` or `ssh://`) or `{ "url", "branch" }` objects (no branch: the default branch). |
+| `teamPlugins.localRepositories` | `[]` | Your own clones of plugin repositories; each replaces the followed repository of the same name. |
 | `teamPlugins.updateIntervalMinutes` | `60` | Minutes between update checks; `0`: only at startup and with Sync now. |
-| `teamPlugins.enabled` | `[]` | Plugins, skills and rules enabled in every project (edited by the view). |
+| `teamPlugins.enabled` | `[]` | Plugins, skills and rules (`<repository>:<plugin>...`) enabled in every project (edited by the view). |
 | `teamPlugins.excluded` | `[]` | Skills and rules left out of plugins listed in `enabled` (edited by the view). |
 | `teamPlugins.projectPlugins` | `[]` | Plugins, skills or rules a project requires (workspace or folder settings). |
-| `teamPlugins.localRepoPath` | | Your own clone of the team repository, used instead of the managed one. |
+| `teamPlugins.projectRepositories` | `[]` | Where a project's repositories are, so a teammate can add them (written by Add to this project). |
 
 ## Troubleshooting
 
 - **Output > Team Plugins** shows every git command and every plugin registration. **Output > Cursor Plugins** is
   Cursor's own log (look for `Registered extension plugin: <name>`).
-- The status bar item (`Team plugins: <count>`) shows how many plugins this window registered; its tooltip lists them
-  with the last commit and the last sync. A warning icon means a paused update, a failed sync or a failed registration;
-  a plug-off icon means the server couldn't be reached.
+- The status bar item (`Team plugins: <count>`) shows how many plugins this window registered; its tooltip has one line
+  per repository (state, last commit, last check) and lists the registered plugins. A warning icon means a paused
+  update, a failed sync, a repository that is not loaded or a failed registration; a plug-off icon means a server
+  couldn't be reached.
 - "vscode.cursor.plugins is missing": this Cursor is too old for extension plugins; update Cursor.
 
 | Message | What to do |
@@ -212,10 +263,21 @@ terminal where git and SSH can ask their questions; then click **Sync now**.
 | The SSH host key has changed | Don't accept it: ask the server's admin, then `ssh-keygen -R <host>` and connect again. |
 | SSH could not log in | The server doesn't know your key, or the key has a passphrase. Open terminal to see why. |
 | No stored credentials / credentials refused | Open terminal, sign in again, Sync now. |
-| No access to, or repository not found | Check the repository URL (**Set repository URL**) and ask for access. |
-| Branch not found | Check `teamPlugins.branch` (empty: the default branch). |
+| No access to, or repository not found | Check its URL in `teamPlugins.repositories` and ask for access. |
+| Branch not found | Check its `branch` in `teamPlugins.repositories` (none: the default branch). |
 | No answer for 2 minutes | git was waiting for a question: Open terminal, answer it, Sync now. |
 | The server refused the push | A protected branch or no write access: **Push to a branch**, then open a pull request. |
+
+## Upgrading from 0.4
+
+- Your settings move on their own: `teamPlugins.repoUrl` and `teamPlugins.branch` become an entry of
+  `teamPlugins.repositories`, and `teamPlugins.localRepoPath` an entry of `teamPlugins.localRepositories`.
+- The clone of 0.4 is reused for the entry with the same URL, local changes included.
+- Your selections (`enabled`, `excluded`) are rewritten to ids with the repository name (`review` becomes
+  `<repository>:review`) once the repository is read.
+- A project's `projectPlugins` written by 0.4 keeps working; it is rewritten the next time you add or remove an item of
+  the project.
+- The partial copies of partly enabled plugins are built again in new folders, once.
 
 ## Known limitations
 
@@ -224,6 +286,12 @@ terminal where git and SSH can ask their questions; then click **Sync now**.
   skipped.
 - Conflicts are never merged by the extension: you choose to push your changes to a branch, or discard them.
 - Commit and push includes every local change; there is no per-file choice.
+- Renaming a repository (the `name` of its `marketplace.json`) changes the ids of all its plugins: you pick them again,
+  and the projects' lists are updated.
+- Two branches of one repository can't be followed at the same time.
+- Two plugins in folders of the same name (in different repositories): the second is registered as
+  `<folder>-<repository>`, and the agent knows it under that name.
+- **Remove repository** keeps the clone in the extension's storage.
 
 ## Contributing
 

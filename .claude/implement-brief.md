@@ -26,9 +26,9 @@ Needs the user's OK (it changes the Cursor they use): package
 (`ELECTRON_RUN_AS_NODE=1 "$LOCALAPPDATA/Programs/cursor/Cursor.exe" scripts/package.js`), then
 `cursor --install-extension dist/cursor-team-plugins-<version>.vsix` and a window reload; check the Cursor Plugins
 log and the Team Plugins view. The team repository is the fixture: build it with
-`scripts/make-test-repo.js <scratchpad>/team-plugins.git` (plugins `review` and `docs`) and point `teamPlugins.repoUrl`
-at the path it prints (a URL change switches the managed clone in place). Test names stay generic: no company or
-team names in fixtures, settings or test data.
+`scripts/make-test-repo.js <scratchpad>/team-plugins.git` (plugins `review` and `docs`) and add the path it prints to
+`teamPlugins.repositories` (a second one built with `--name team-two`). Test names stay generic: no company or team
+names in fixtures, settings or test data.
 
 ## Don't
 Never install the extension or launch Cursor windows without the user asking (probe windows for checking
@@ -37,6 +37,8 @@ assumptions are fine when the user asked for the assumptions to be tested).
 ## Facts for plans
 - Cursor names an extension plugin after its folder, not `plugin.json`'s `name` (a probe whose folder and name are
   equal can't tell them apart: give them different values).
+- Two extension plugins in folders of the same name (`a/same`, `b/same`) both load and are both named `same`: Cursor
+  keys registrations by path (probe, Cursor 3.31.15, 2026-11-24). Never register two plugins with one folder name.
 - With Cursor's runtime on Windows, `fs.rmSync` throws EPERM on git's read-only object files: use `sync.removeTree`.
 - `git reset --hard @{u}` resets to the upstream as of the last fetch: a test expecting `updated` afterwards needs a
   new remote commit.

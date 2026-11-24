@@ -1,8 +1,8 @@
 {
   "name": "cursor-team-plugins",
   "displayName": "Team plugins",
-  "description": "Keeps a team's Cursor plugins (rules and skills) in sync with the team git repository and registers the ones each user and project selected.",
-  "version": "0.4.2",
+  "description": "Keeps a team's Cursor plugins (rules and skills) in sync with the team's git repositories and registers the ones each user and project selected.",
+  "version": "0.5.0",
   "publisher": "mathieugun",
   "author": "Mathieu Gunther",
   "license": "MIT",
@@ -36,30 +36,48 @@
     "configuration": {
       "title": "Team plugins",
       "properties": {
-        "teamPlugins.repoUrl": {
-          "type": "string",
-          "default": "",
+        "teamPlugins.repositories": {
+          "type": "array",
+          "items": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "url": {
+                    "type": "string"
+                  },
+                  "branch": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "url"
+                ]
+              }
+            ]
+          },
+          "default": [],
           "scope": "application",
-          "description": "Git URL of the team plugins repository (HTTPS, git@host:path or ssh://). Cloned with your own git credentials (credential helper or SSH key; in a remote window, the remote machine's); the extension never asks for them: sign in once in a terminal."
+          "description": "Team plugin repositories to follow: Git URLs (HTTPS, git@host:path or ssh://) or { \"url\", \"branch\" } objects (no branch: the repository's default branch). Each is cloned with your own git credentials (credential helper or SSH key; in a remote window, the remote machine's); the extension never asks for them: sign in once in a terminal."
         },
-        "teamPlugins.branch": {
-          "type": "string",
-          "default": "",
-          "scope": "application",
-          "description": "Branch to follow. Empty: the repository's default branch."
-        },
-        "teamPlugins.localRepoPath": {
-          "type": "string",
-          "default": "",
+        "teamPlugins.localRepositories": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
           "scope": "machine",
-          "description": "Use this existing clone instead of the managed one (for plugin authors): edits are picked up live and the extension never runs a git command that changes it. Set per machine: in a remote window, a path on the remote machine."
+          "description": "Your own clones of plugin repositories (for plugin authors): edits are picked up live and the extension never runs a git command that changes them. A clone replaces the repository of teamPlugins.repositories that has the same name. Set per machine: in a remote window, paths on the remote machine."
         },
         "teamPlugins.updateIntervalMinutes": {
           "type": "number",
           "default": 60,
           "minimum": 0,
           "scope": "application",
-          "description": "How often to check the repository for updates. 0: only at startup and with \"Sync now\"."
+          "description": "How often to check the repositories for updates. 0: only at startup and with \"Sync now\"."
         },
         "teamPlugins.enabled": {
           "type": "array",
@@ -68,7 +86,7 @@
           },
           "default": [],
           "scope": "application",
-          "description": "Plugins (`name`) and single skills or rules (`name/skills/<folder>`, `name/rules/<file>`) enabled in every project. Edited by the Team Plugins view."
+          "description": "Plugins (`<repository>:<plugin>`) and single skills or rules (`<repository>:<plugin>/skills/<folder>`, `<repository>:<plugin>/rules/<file>`) enabled in every project. Edited by the Team Plugins view."
         },
         "teamPlugins.excluded": {
           "type": "array",
@@ -86,7 +104,51 @@
           },
           "default": [],
           "scope": "resource",
-          "description": "Plugins, skills or rules this project needs: enabled for everyone who opens it (commit `.vscode/settings.json`). Read from workspace and folder settings only."
+          "description": "Plugins, skills or rules (`<repository>:<plugin>`, ...) this project needs: enabled for everyone who opens it (commit `.vscode/settings.json`). Read from workspace and folder settings only."
+        },
+        "teamPlugins.projectRepositories": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              },
+              "branch": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "url"
+            ]
+          },
+          "default": [],
+          "scope": "resource",
+          "description": "Where the repositories used by teamPlugins.projectPlugins are: someone who opens the project without following one is offered to add it. Written by \"Add to this project\" (commit .vscode/settings.json). Read from workspace and folder settings only."
+        },
+        "teamPlugins.repoUrl": {
+          "type": "string",
+          "default": "",
+          "scope": "application",
+          "deprecationMessage": "Replaced by teamPlugins.repositories (moved there automatically).",
+          "description": "Git URL of the team plugins repository (HTTPS, git@host:path or ssh://). Cloned with your own git credentials (credential helper or SSH key; in a remote window, the remote machine's); the extension never asks for them: sign in once in a terminal."
+        },
+        "teamPlugins.branch": {
+          "type": "string",
+          "default": "",
+          "scope": "application",
+          "deprecationMessage": "Replaced by teamPlugins.repositories (moved there automatically).",
+          "description": "Branch to follow. Empty: the repository's default branch."
+        },
+        "teamPlugins.localRepoPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "deprecationMessage": "Replaced by teamPlugins.localRepositories (moved there automatically).",
+          "description": "Use this existing clone instead of the managed one (for plugin authors): edits are picked up live and the extension never runs a git command that changes it. Set per machine: in a remote window, a path on the remote machine."
         }
       }
     },
@@ -122,14 +184,26 @@
         "icon": "$(output)"
       },
       {
-        "command": "teamPlugins.setRepoUrl",
-        "title": "Set repository URL",
+        "command": "teamPlugins.addRepository",
+        "title": "Add repository",
+        "category": "Team Plugins",
+        "icon": "$(add)"
+      },
+      {
+        "command": "teamPlugins.addLocalRepository",
+        "title": "Add a local clone",
         "category": "Team Plugins"
       },
       {
-        "command": "teamPlugins.setLocalRepoPath",
-        "title": "Use a local clone",
+        "command": "teamPlugins.removeRepository",
+        "title": "Remove repository",
         "category": "Team Plugins"
+      },
+      {
+        "command": "teamPlugins.addProjectRepository",
+        "title": "Add repository",
+        "category": "Team Plugins",
+        "icon": "$(add)"
       },
       {
         "command": "teamPlugins.addToProject",
@@ -199,14 +273,19 @@
           "group": "navigation@1"
         },
         {
-          "command": "teamPlugins.openRepo",
+          "command": "teamPlugins.addRepository",
           "when": "view == teamPlugins.plugins",
           "group": "navigation@2"
         },
         {
-          "command": "teamPlugins.showLog",
+          "command": "teamPlugins.openRepo",
           "when": "view == teamPlugins.plugins",
           "group": "navigation@3"
+        },
+        {
+          "command": "teamPlugins.showLog",
+          "when": "view == teamPlugins.plugins",
+          "group": "navigation@4"
         }
       ],
       "view/item/context": [
@@ -257,6 +336,26 @@
           "command": "teamPlugins.keepCopyVersion",
           "when": "view == teamPlugins.plugins && viewItem == conflict",
           "group": "1_conflict@2"
+        },
+        {
+          "command": "teamPlugins.openRepo",
+          "when": "view == teamPlugins.plugins && viewItem =~ /^repo\\./",
+          "group": "1_repo@1"
+        },
+        {
+          "command": "teamPlugins.removeRepository",
+          "when": "view == teamPlugins.plugins && viewItem =~ /^repo\\./",
+          "group": "1_repo@2"
+        },
+        {
+          "command": "teamPlugins.addProjectRepository",
+          "when": "view == teamPlugins.plugins && viewItem == missing",
+          "group": "inline"
+        },
+        {
+          "command": "teamPlugins.addProjectRepository",
+          "when": "view == teamPlugins.plugins && viewItem == missing",
+          "group": "1_missing@1"
         }
       ],
       "commandPalette": [
@@ -287,6 +386,10 @@
         {
           "command": "teamPlugins.keepCopyVersion",
           "when": "false"
+        },
+        {
+          "command": "teamPlugins.addProjectRepository",
+          "when": "false"
         }
       ]
     },
@@ -311,7 +414,7 @@
       {
         "view": "teamPlugins.plugins",
         "when": "teamPlugins.state == unconfigured",
-        "contents": "No team plugin repository is configured.\n[Set repository URL](command:teamPlugins.setRepoUrl)\nPlugin authors can use their own clone instead:\n[Use a local clone](command:teamPlugins.setLocalRepoPath)"
+        "contents": "No team plugin repository is configured.\n[Add repository](command:teamPlugins.addRepository)\nPlugin authors can use their own clone instead:\n[Add a local clone](command:teamPlugins.addLocalRepository)"
       }
     ]
   }

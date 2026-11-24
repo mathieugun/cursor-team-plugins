@@ -3,7 +3,14 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { effective } = require('../lib/selection');
-const { buildTree, buildChangesNode, buildConflictsNode } = require('../lib/treeModel');
+const {
+  buildTree,
+  buildChangesNode,
+  buildConflictsNode,
+  repoStatus,
+  buildRepoNode,
+  buildMissingNodes,
+} = require('../lib/treeModel');
 
 const child = (id, kind) => ({ id, kind, name: id.split('/').pop(), file: `/x/${id}`, description: '' });
 const catalog = {
@@ -122,21 +129,25 @@ test('buildChangesNode', () => {
       { path: 'top.md', status: 'untracked' },
     ],
     ahead: 2,
-  });
+  }, 'k');
   assert.equal(node.description, '2 file(s) · 2 unpushed commit(s)');
   assert.equal(node.contextValue, 'changes');
+  assert.equal(node.id, 'changes:k');
+  assert.equal(node.repo, 'k');
+  assert.deepEqual(node.children.map((c) => c.id), ['change:k|p/skills/a/SKILL.md', 'change:k|top.md']);
+  assert.ok(node.children.every((c) => c.repo === 'k'));
   assert.deepEqual(node.children.map((c) => c.label), ['SKILL.md', 'top.md']);
   assert.deepEqual(node.children.map((c) => c.description), ['p/skills/a · modified', 'untracked']);
 
-  const onlyCommits = buildChangesNode({ files: [], ahead: 1 });
+  const onlyCommits = buildChangesNode({ files: [], ahead: 1 }, 'k');
   assert.equal(onlyCommits.description, '1 unpushed commit(s)');
   assert.equal(onlyCommits.children.length, 0);
-  assert.equal(buildChangesNode({ files: [], ahead: 0 }), null);
-  assert.equal(buildChangesNode(null), null);
+  assert.equal(buildChangesNode({ files: [], ahead: 0 }, 'k'), null);
+  assert.equal(buildChangesNode(null, 'k'), null);
 });
 
 test('plugin ids never collide with the built-in nodes', () => {
-  const names = ['changes', 'conflicts', 'sync-error'];
+  const names = ['changes', 'conflicts', 'sync-error', 'repo', 'missing'];
   const cat = {
     plugins: names.map((name) => ({
       name,
@@ -149,13 +160,14 @@ test('plugin ids never collide with the built-in nodes', () => {
     warnings: [],
   };
   const tree = buildTree(cat, effective(cat, { enabled: [], excluded: [] }, []), []);
-  const changesNode = buildChangesNode({ files: [{ path: 'a', status: 'modified' }], ahead: 0 });
-  const conflictsNode = buildConflictsNode([{ plugin: 'changes', rel: 'x', source: '/s', copy: '/c', holder: 'H' }]);
+  const changesNode = buildChangesNode({ files: [{ path: 'a', status: 'modified' }], ahead: 0 }, 'k');
+  const conflictsNode = buildConflictsNode([{ plugin: 'changes', rel: 'x', source: '/s', copy: '/c', holder: 'H' }], 'k');
   const top = [changesNode, conflictsNode, ...tree];
   const ids = [...top, ...top.flatMap((n) => n.children)].map((n) => n.id);
   assert.equal(new Set(ids).size, ids.length);
   for (const n of tree) {
     assert.ok(!['changes', 'conflicts', 'sync-error'].includes(n.id));
+    assert.ok(!n.id.startsWith('repo:'));
     assert.equal(n.id, `plugin:${n.key}`);
   }
 });
@@ -167,7 +179,7 @@ test('a renamed change keeps its old path', () => {
       { path: 'a.md', status: 'modified' },
     ],
     ahead: 0,
-  });
+  }, 'k');
   assert.equal(node.children[0].from, 'skills/old.md');
   assert.equal(node.children[0].tooltip, 'skills/old.md \u2192 skills/new.md');
   assert.ok(!('from' in node.children[1]));
@@ -175,12 +187,14 @@ test('a renamed change keeps its old path', () => {
 });
 
 test('buildConflictsNode', () => {
-  assert.equal(buildConflictsNode([]), null);
+  assert.equal(buildConflictsNode([], 'k'), null);
   const node = buildConflictsNode([
     { plugin: 'p', rel: 'skills/a/SKILL.md', source: 'S', copy: 'C', holder: 'H' },
     { plugin: 'p', rel: 'x.md', source: 'S2', copy: 'C2', holder: 'H' },
-  ]);
-  assert.equal(node.id, 'conflicts');
+  ], 'k');
+  assert.equal(node.id, 'conflicts:k');
+  assert.equal(node.repo, 'k');
+  assert.ok(node.children.every((c) => c.repo === 'k'));
   assert.equal(node.description, '2 file(s)');
   assert.deepEqual(node.children.map((c) => c.id), ['conflict:H|skills/a/SKILL.md', 'conflict:H|x.md']);
   assert.deepEqual(node.children.map((c) => c.label), ['SKILL.md', 'x.md']);
@@ -196,12 +210,90 @@ test('buildConflictsNode', () => {
 });
 
 test('buildChangesNode with a read error', () => {
-  const node = buildChangesNode({ files: [], ahead: 0, error: 'git status failed: boom' });
-  assert.equal(node.id, 'changes');
+  const node = buildChangesNode({ files: [], ahead: 0, error: 'git status failed: boom' }, 'k');
+  assert.equal(node.id, 'changes:k');
+  assert.equal(node.repo, 'k');
   assert.equal(node.kind, 'changes');
   assert.equal(node.contextValue, 'changes.error');
   assert.deepEqual(node.children, []);
   assert.equal(node.tooltip, 'git status failed: boom');
   assert.equal(node.error, 'git status failed: boom');
   assert.equal(node.description, 'cannot be read: see the log');
+});
+
+const MANAGED = { key: 'k', name: 'team', kind: 'managed', source: 'u', branch: '', dir: 'D', duplicateOf: null, hiddenBy: null };
+const LOCAL = { key: 'l', name: 'mine', kind: 'local', source: '/p/mine', branch: '', dir: '/p/mine', duplicateOf: null, hiddenBy: null };
+
+test('repoStatus', () => {
+  const idle = { syncing: false, lastResult: { kind: 'upToDate' } };
+  const status = (desc, state) => {
+    const s = repoStatus(desc, state);
+    return [s.text, s.icon, s.problem];
+  };
+  assert.deepEqual(status({ ...MANAGED, duplicateOf: 'x' }, idle), ['listed twice: not loaded', 'warning', true]);
+  // the first rule wins over a sync in progress
+  assert.deepEqual(status({ ...MANAGED, duplicateOf: 'x' }, { ...idle, syncing: true }), [
+    'listed twice: not loaded',
+    'warning',
+    true,
+  ]);
+  const hiddenLocal = { ...MANAGED, hiddenBy: { key: 'l', source: '/p/mine', reason: 'local' } };
+  assert.deepEqual(status(hiddenLocal, idle), ['replaced by your local clone', 'circle-slash', false]);
+  const hiddenName = { ...MANAGED, hiddenBy: { key: 'o', source: 'https://h/o.git', reason: 'name' } };
+  assert.deepEqual(status(hiddenName, idle), ['same name as https://h/o.git: not loaded', 'warning', true]);
+  assert.deepEqual(status(MANAGED, { syncing: true, lastResult: null }), ['updating…', 'sync~spin', false]);
+  assert.deepEqual(status(LOCAL, idle), ['local clone', 'folder', false]);
+  assert.deepEqual(status(LOCAL, { syncing: true }), ['updating…', 'sync~spin', false]);
+  assert.deepEqual(status(MANAGED, { syncing: false, lastResult: null }), ['not synced yet', 'repo', false]);
+  assert.deepEqual(status(MANAGED, { lastResult: { kind: 'conflict' } }), ['updates paused: conflict', 'warning', true]);
+  assert.deepEqual(status(MANAGED, { lastResult: { kind: 'error', message: 'boom' } }), ['error: boom', 'warning', true]);
+  assert.deepEqual(status(MANAGED, { lastResult: { kind: 'offline' } }), ['offline', 'debug-disconnect', false]);
+  assert.deepEqual(status(MANAGED, { lastResult: { kind: 'busy' } }), ['another window is updating it', 'sync', false]);
+  for (const kind of ['upToDate', 'updated', 'cloned', 'switched']) {
+    assert.deepEqual(status(MANAGED, { lastResult: { kind } }), ['up to date', 'repo', false]);
+  }
+});
+
+test('buildRepoNode', () => {
+  const state = { lastResult: { kind: 'upToDate', head: 'abcdef1234' } };
+  const node = buildRepoNode(MANAGED, state, [{ id: 'x' }]);
+  assert.equal(node.id, 'repo:k');
+  assert.equal(node.kind, 'repo');
+  assert.equal(node.key, 'k');
+  assert.equal(node.label, 'team');
+  assert.equal(node.description, 'up to date');
+  assert.equal(node.icon, 'repo');
+  assert.equal(node.contextValue, 'repo.managed');
+  assert.deepEqual(node.children, [{ id: 'x' }]);
+  assert.ok(node.tooltip.includes('Repository: u (default branch)'), node.tooltip);
+  assert.ok(node.tooltip.includes('Folder: D'), node.tooltip);
+  assert.ok(node.tooltip.includes('Commit: abcdef1'), node.tooltip);
+  assert.ok(!node.tooltip.includes('Commit: abcdef12'), node.tooltip);
+  assert.ok(node.tooltip.includes('State: up to date'), node.tooltip);
+  assert.ok(!node.tooltip.includes('Last check'), node.tooltip);
+
+  const checked = buildRepoNode({ ...MANAGED, branch: 'dev' }, { ...state, lastCheck: new Date(2026, 0, 2, 9, 5) }, []);
+  assert.ok(checked.tooltip.includes('Repository: u (dev)'), checked.tooltip);
+  assert.ok(checked.tooltip.includes('Last check: 09:05'), checked.tooltip);
+
+  const local = buildRepoNode(LOCAL, {}, []);
+  assert.equal(local.contextValue, 'repo.local');
+  assert.ok(local.tooltip.includes('Repository: /p/mine\n'), local.tooltip);
+  assert.ok(!local.tooltip.includes('default branch'), local.tooltip);
+});
+
+test('buildMissingNodes', () => {
+  const nodes = buildMissingNodes(
+    [{ name: '', url: 'https://h/org/b.git', branch: '', normalized: 'h/org/b' }],
+    ['c'],
+  );
+  assert.deepEqual(nodes.map((n) => n.id), ['missing:h/org/b', 'unlocated:c']);
+  assert.deepEqual(nodes.map((n) => n.label), ['b', 'c']);
+  assert.deepEqual(nodes.map((n) => n.contextValue), ['missing', 'missing.unknown']);
+  assert.ok(nodes.every((n) => n.kind === 'missing'));
+  assert.equal(nodes[0].url, 'https://h/org/b.git');
+  assert.ok(nodes[0].description.includes('not followed'));
+  assert.ok(nodes[1].description.includes('location unknown'));
+  assert.equal(buildMissingNodes([{ name: 'named', url: 'u', branch: 'dev', normalized: 'x/u' }], [])[0].label, 'named');
+  assert.deepEqual(buildMissingNodes([], []), []);
 });

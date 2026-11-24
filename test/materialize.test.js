@@ -583,3 +583,30 @@ test('a source changed while a copy is built goes to the copy, never back to the
   assert.equal(fs.readFileSync(srcA, 'utf8'), 'team update');
   assert.equal(fs.readFileSync(path.join(second.copyRoot, SKILL_A), 'utf8'), 'team update');
 });
+
+test('a renamed plugin keeps its copy under its new folder name, both ways', (t) => {
+  const f = setup(t);
+  const plugin = { ...f.plugin, folder: 'p-two' };
+  const ids = ['p/skills/a', 'p/rules/x.mdc'];
+  const holder = path.join(f.root, 'filtered', holderName(plugin, ids));
+  const first = syncCopy(plugin, ids, holder);
+  assert.equal(first.copyRoot, path.join(holder, 'p-two'));
+  assert.equal(copyRootOf(plugin, holder), first.copyRoot);
+  assert.ok(fs.existsSync(path.join(holder, 'p-two', SKILL_A)));
+  assert.ok(!fs.existsSync(path.join(holder, 'p')));
+  assert.deepEqual(fs.readdirSync(holder).filter((n) => n.includes('.tmp-')), []);
+
+  fs.writeFileSync(path.join(first.copyRoot, SKILL_A), 'edited in the copy');
+  const second = syncCopy(plugin, ids, holder);
+  assert.deepEqual(second.actions, [{ action: 'toSource', rel: SKILL_A }]);
+  assert.equal(fs.readFileSync(path.join(plugin.dir, SKILL_A), 'utf8'), 'edited in the copy');
+  fs.writeFileSync(path.join(plugin.dir, SKILL_A), 'edited in the repository');
+  assert.deepEqual(syncCopy(plugin, ids, holder).actions, [{ action: 'toCopy', rel: SKILL_A }]);
+  assert.equal(fs.readFileSync(path.join(first.copyRoot, SKILL_A), 'utf8'), 'edited in the repository');
+});
+
+test('copyRootOf uses the renamed folder', () => {
+  const H = path.join(path.sep, 'h');
+  assert.equal(copyRootOf({ dir: '/x/review', folder: 'review-two' }, H), path.join(H, 'review-two'));
+  assert.equal(copyRootOf({ dir: '/x/review' }, H), path.join(H, 'review'));
+});

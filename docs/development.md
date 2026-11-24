@@ -19,14 +19,41 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
 
 ## How it works
 
-- The managed clone lives in the extension's global storage, in `.cursor/plugins/repo`. The `.cursor/plugins` part of
-  the path matters: Cursor lists a `SKILL.md` as a skill only below such a folder.
+- Every repository of `teamPlugins.repositories` has a managed clone in the extension's global storage, in
+  `.cursor/plugins/repos/<key>` where the key is `<base>-<sha1:8>` (`<base>`: the last part of the URL, characters other
+  than letters, digits, `.`, `_` and `-` replaced by `_`, at most 40; `<sha1:8>`: the first 8 hex digits of the SHA-1 of
+  the normalised URL). The `.cursor/plugins` part of the path matters: Cursor lists a `SKILL.md` as a skill only below
+  such a folder. The clone of 0.4 (`.cursor/plugins/repo`, key `repo`) is reused by the entry whose normalised URL
+  equals the `origin` URL in its `.git/config` (git writes a Windows path there with doubled backslashes).
+- URLs are compared after normalisation (`lib/repos.js` `normalizeUrl`): scheme, user, port and a final `.git` are
+  dropped and the host is lower-cased, so `https://h/org/a.git` and `git@h:org/a` are one repository; a local path
+  becomes `file:<resolved path>` (lower-cased on Windows). Two entries with the same normalised URL are one repository
+  (the later one is `listed twice`, key `dup-<index>`, never cloned).
+- Each repository has its own lock (`locks/<key>.lock`) and its own state file (`state/<key>.json`), so repositories
+  sync in parallel and a long clone of one never blocks another. Local repositories have a lock too (the partial copies
+  of their plugins are synced under it).
+- The names: a repository is named by the `name` of its `marketplace.json`, else the last part of its URL. The catalogs
+  of the repositories that are loaded are merged (`mergeCatalogs`) into one: a plugin is `<repository>:<plugin>`, its
+  skills and rules `<repository>:<plugin>/skills/<folder>` and `<repository>:<plugin>/rules/<file>`, so the selection
+  code works on the merged catalog unchanged. Of two repositories with the same name the first loads (locals come
+  first, then the list's order) and the other is `hiddenBy` it. A 0.4 id (no `:`) is resolved to the first plugin that
+  matches (`normalizeIds`): the user's lists are rewritten at the next apply, the project's lists only when the user
+  adds or removes an item (a committed file is never rewritten by itself).
 - For each selected plugin the extension calls `vscode.cursor.plugins.addPlugin({ path })` in every window, at startup
-  and whenever the selection or the repository changes. Cursor does not persist these registrations.
+  and whenever the selection or a repository changes. Cursor does not persist these registrations.
+- Cursor keys registrations by path but names a plugin after its folder (measured on Cursor 3.31.15: two plugins in
+  folders of the same name, `a/same` and `b/same`, both load and both are named `same` for the agent). So no two
+  registered plugins may have the same folder name: when a plugin's folder name is taken (compared without case) by an
+  earlier plugin of the merged catalog, it gets the folder `<folder>-<repository>` (then `-2`, `-3`...) and is always
+  registered from a partial copy under that name, even when fully selected.
 - A fully selected plugin is registered from the clone itself, so Cursor sees `git pull` changes directly. A partial
   plugin is registered from a partial copy (`.cursor/plugins/filtered/<name>-<hash>/<plugin folder>`: the folder is
   named by the plugin and the selection, and Cursor names an extension plugin after its folder, so the copy keeps the
-  same name) that holds only the selected skills and rules.
+  same name) that holds only the selected skills and rules. The name hashed is `<repository>:<plugin>`, so the copies
+  of 0.4 are built again under new holders once, at the upgrade.
+- Syncs run in parallel, one per repository; an apply (catalog, partial copies, registrations) follows each one as soon
+  as it ends, and applies never overlap. While a repository is syncing, applies keep using the catalog read before its
+  sync (its folder is changing under git), and its local changes are not read.
 - The copy and the clone are kept in sync both ways, with a `.team-plugins-sync.json` record next to the copy (the
   content hash of each file at the last sync): a change on one side only, new files and deletions included, is carried
   to the other side; a file changed on both sides is a conflict that waits for the user's choice. A sync reads a file
@@ -40,18 +67,24 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
   digits, `.`, `_` and `-` replaced by `_` (the plugin's own folder name, which Cursor uses, is unchanged).
 - Several windows share one clone: a lock file serialises every operation that changes it (sync, commit and push, push
   to a branch, discard, partial-copy syncs, which take the lock in local mode too since windows with the same selection
-  share a copy), and the other windows notice the new state through `sync-state.json`. An edit in the managed clone
+  share a copy), and the other windows notice the new state through the files of `state/`. An edit in a managed clone
   (another window's partial copy, or by hand) reaches this window's partial copies and view within a second.
 - Updates: the team's new commits are rebased under the local changes. Conflicts are found first with
   `git merge-tree --write-tree` (hence git 2.38). With several windows open, only one fetches per interval (a timed
-  update is skipped when another window synced less than half an interval ago). The update interval has a floor of 5
-  minutes.
-- A URL or branch change switches the managed clone in place (an error if it has local changes). An empty branch
-  setting follows the repository's default branch, resolved at each sync, also when the team changes it.
+  update leaves out each repository that another window synced less than half an interval ago, by its state file).
+  The update interval has a floor of 5 minutes.
+- A branch change of an entry switches its managed clone in place (an error if it has local changes). A URL change is
+  another repository: a new clone, and the old one stays in the storage. An entry without a branch follows the
+  repository's default branch, resolved at each sync, also when the team changes it.
+- Projects: **Add to this project** also writes the repository's `{ name, url, branch }` to the project's
+  `teamPlugins.projectRepositories` (a local clone: the URL of its `origin`; none: only logged). A window whose project
+  lists a repository the user doesn't follow (`missingRepos`, by normalised URL or by name) shows a notification once
+  per window and a `missing` node in the view; ids whose repository the project doesn't locate are only logged
+  (`unlocatedRepos`). Nothing is ever added without a click.
 - git runs without prompts (`GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=never`); a network command is stopped (with the
   processes it started) only after 2 minutes without output, so a long first clone works while data arrives. A
   `.git/index.lock` older than a minute (left by a killed git) is removed before the next operation, and leftover
-  `repo.tmp-*` folders of a failed clone at the next sync.
+  `<key>.tmp-*` folders of a failed clone at the next sync.
 - An unreachable server (offline) is quiet while a clone exists, never counts as a sync, and is retried after 5
   minutes. A background sync error is shown once, and again only after a sync succeeded (Sync now always shows it).
 
@@ -62,11 +95,11 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
 - The managed clone and the partial copies are in the remote extension storage
   (`~/.cursor-server/data/User/globalStorage/mathieugun.cursor-team-plugins`). git runs on that machine (2.38 or later,
   on its PATH or `git.path` in the remote settings), with that machine's credentials and SSH keys.
-- Settings: the repository URL, the branch, the update interval and the selection (`enabled`, `excluded`) are
-  `application` settings, the same in local and remote windows. `teamPlugins.localRepoPath` is a `machine` setting: in
-  a remote window it is a path on the remote machine (stored in its remote settings). A project's `projectPlugins` is
-  read from the remote project's `.vscode/settings.json`.
-- Each machine has its own clone: an agent's edit in a remote window lands in that machine's clone and shows in its
+- Settings: the repositories (`repositories`, URLs and branches), the update interval and the selection (`enabled`,
+  `excluded`) are `application` settings, the same in local and remote windows. `teamPlugins.localRepositories` is a
+  `machine` setting: in a remote window it holds paths on the remote machine (stored in its remote settings). A
+  project's `projectPlugins` and `projectRepositories` are read from the remote project's `.vscode/settings.json`.
+- Each machine has its own clones: an agent's edit in a remote window lands in that machine's clone and shows in its
   Local changes; it is committed and pushed from a window on that machine. Several windows on the same remote machine
   share its clone, as local windows do.
 - The status bar tooltip shows `Machine: <host> (remote window)`, and the error messages name the machine. In a remote
@@ -105,22 +138,32 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
 - Marketplace entries whose source is not a folder of the repository (GitHub or URL sources) are skipped.
 - Custom component paths declared in `plugin.json` are not read: only `skills/` and `rules/` are selectable; anything
   else (agents, commands, hooks, mcp.json, assets) always comes with its plugin.
-- With `localRepoPath` outside a `.cursor/plugins` folder, Cursor may list the skills among the rules; the agent still
-  gets them.
+- With a local repository outside a `.cursor/plugins` folder, Cursor may list the skills among the rules; the agent
+  still gets them.
 - Enterprise teams whose admin turned off "Allow Local Plugin Imports": not tested whether it also blocks extension
   plugins.
 - A conflict between a partial copy and the repository is not merged line by line: the user keeps one of the two
   versions. A real conflict with the team's commits is never merged by the extension.
 - The commit includes every change of the managed clone (`git add -A`); there is no per-file choice.
 - A clone of a local or network-share path that copies for more than 2 minutes without output is stopped.
-- After a change of the repository URL, the tags and git objects of the previous repository stay in the managed clone
-  (harmless).
-- Switching the managed clone to an empty repository (no branch yet) is an error.
+- Switching a managed clone to an empty repository (no branch yet) is an error.
 - A symlink or junction created inside a partial copy is left out of the sync (see the log), never followed.
 - A frontmatter description written as a quoted string over several lines shows only as written on the first line.
 - After the window that did the timed fetches closes, the next timed update in another window can be up to half an
   interval late.
 - A plugin with the same name installed from a marketplace conflicts with the one this extension registers.
+- A company index repository (one entry that lists the team repositories) and per-repository update intervals are not
+  done: follow-ups.
+- Following two branches of one repository is not possible: the second entry is `listed twice`.
+- The clone of a repository removed from the list is not deleted (it stays in the extension's storage).
+- Two URLs of one repository that differ only in the case of the path are two repositories (two clones).
+- Renaming a repository (its `marketplace.json` `name`) changes every id of its plugins: users pick again, projects
+  update their lists.
+- Upgrade from 0.4: the clone of 0.4 (`.cursor/plugins/repo`) is reused by the entry whose URL equals its origin URL,
+  with its local changes. A clone that 0.4 left half-switched (origin still the old URL) is not reused: the entry is
+  cloned again under `repos/` and the old folder stays. The partial copies move to new holder folders once (the hash
+  input now holds the repository name): an edit made in an old copy while no window was running is not carried over
+  (the old copy stays a week).
 - The publisher was `mg` before the first public release: `extension.js` warns while `mg.cursor-team-plugins` is
   installed (both would register the same plugins), stays inactive and offers to uninstall it; its storage is not
   migrated.

@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { classify, remoteHost, remoteResult } = require('../lib/remoteErrors');
+const { classify, remoteHost, describeRemote, remoteResult } = require('../lib/remoteErrors');
 
 const CHANGED_KEY = [
   '@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@',
@@ -117,7 +117,7 @@ test('remoteResult', () => {
 
   const ctx = { url: 'https://github.com/o/r.git', branch: 'main' };
   assert.deepEqual(remoteResult({ stderr: DENIED_403 }, { ...ctx, op: 'push' }, 'fb').actions, ['pushToBranch', 'showLog']);
-  assert.deepEqual(remoteResult({ stderr: DENIED_403 }, { ...ctx, op: 'read' }, 'fb').actions, ['setUrl', 'showLog']);
+  assert.deepEqual(remoteResult({ stderr: DENIED_403 }, { ...ctx, op: 'read' }, 'fb').actions, ['repositories', 'showLog']);
 
   const stalled = remoteResult(
     { stderr: 'git stopped: no output for 120 s', timedOut: 'idle', limitMs: 120000 },
@@ -154,4 +154,25 @@ test('a push refused by a GitHub ruleset quotes the server, not the progress', (
     r.message,
     'the server refused the push to main (error: GH013: Repository rule violations found for refs/heads/main.): a protected branch or a server rule. Push your changes to a branch instead, and open a pull request from it.',
   );
+});
+
+test('the messages that point at a setting name teamPlugins.repositories', () => {
+  const denied = describeRemote('denied', { url: 'https://h/o/r.git', op: 'read' });
+  assert.equal(
+    denied.message,
+    'you have no access to https://h/o/r.git. Ask for access, or check its URL in teamPlugins.repositories.',
+  );
+  assert.deepEqual(denied.actions, ['repositories', 'showLog']);
+  const branch = describeRemote('branchNotFound', { url: 'https://h/o/r.git', branch: 'nope' });
+  assert.equal(
+    branch.message,
+    "branch nope not found on https://h/o/r.git. Check its branch in teamPlugins.repositories (none: the repository's default branch).",
+  );
+  assert.deepEqual(branch.actions, ['repositories']);
+  const missing = describeRemote('notFound', { url: 'https://h/o/r.git' });
+  assert.equal(
+    missing.message,
+    'repository https://h/o/r.git not found, or you have no access to it. Check its URL in teamPlugins.repositories.',
+  );
+  assert.deepEqual(missing.actions, ['repositories', 'showLog']);
 });

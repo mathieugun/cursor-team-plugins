@@ -118,3 +118,16 @@ test('desiredRegistrations', () => {
     ['P2', '/repo/P2'],
   ]);
 });
+
+test('desiredRegistrations registers a renamed plugin from a copy even when it is full', () => {
+  const renamed = { plugins: [{ ...catalog.plugins[1], folder: 'review-two' }, catalog.plugins[2]], warnings: [] };
+  const eff = effective(renamed, { enabled: ['P2', 'P3'], excluded: [] }, []);
+  const desired = desiredRegistrations(renamed, eff, (p, ids) => `/f/${p.folder || p.name}:${ids.join(',')}`);
+  assert.deepEqual([...desired], [
+    ['P2', '/f/review-two:P2/skills/s3'],
+    ['P3', '/repo/P3'],
+  ]);
+  const same = { plugins: [catalog.plugins[1]], warnings: [] };
+  const sameDesired = desiredRegistrations(same, effective(same, { enabled: ['P2'], excluded: [] }, []), () => 'copy');
+  assert.deepEqual([...sameDesired], [['P2', '/repo/P2']]);
+});
