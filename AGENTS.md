@@ -1,6 +1,6 @@
 # cursor-team-plugins: developer notes
 
-Cursor (VS Code) extension, version in `package.json` (0.5.0). Plain JavaScript, CommonJS, no npm dependency, no
+Cursor (VS Code) extension, version in `package.json` (0.6.0). Plain JavaScript, CommonJS, no npm dependency, no
 build step. User documentation: `README.md` (for Cursor users: what it does, install, usage; it shows
 only the current version, with no history). Internals, platform notes, detailed limits and the release process:
 `docs/development.md`.
@@ -9,10 +9,10 @@ only the current version, with no history). Internals, platform notes, detailed 
 
 - `extension.js`: the only file that requires `vscode` (activation, tree view, status bar, commands, timers,
   watchers). Not covered by the tests: check its syntax with the command below.
-- `lib/`: pure logic, never requires `vscode`, tested with node: `catalog` (read one repository: `name`, `plugins`),
-  `repos` (the list of repositories: `normalizeUrl`, `listRepos`, `assignNames`, `mergeCatalogs`, `normalizeIds`,
-  `originUrl`, `migratedSettings`, `missingRepos`, `unlocatedRepos`, `projectRepoEntry`, `withProjectRepo`,
-  `withoutProjectRepo`), `selection` (selection model, on the merged catalog), `treeModel` (`buildTree`,
+- `lib/`: pure logic, never requires `vscode`, tested with node: `catalog` (read one repository: `name`, `plugins`,
+  `mcpServerNames`, `filterMcpJson`), `repos` (the list of repositories: `normalizeUrl`, `listRepos`, `assignNames`,
+  `mergeCatalogs`, `normalizeIds`, `originUrl`, `migratedSettings`, `missingRepos`, `unlocatedRepos`, `projectRepoEntry`,
+  `withProjectRepo`, `withoutProjectRepo`), `selection` (selection model, on the merged catalog), `treeModel` (`buildTree`,
   `buildChangesNode`, `buildConflictsNode`, `repoStatus`, `buildRepoNode`, `buildMissingNodes`), `materialize`
   (`holderName`, `copyRootOf`, `syncCopy`, `markCopySynced`, `resolveConflict`, `hashCache`: partial plugin copies kept
   in sync both ways), `git`, `sync` (managed clone: `syncManaged`, `localChanges`, `checkConflicts`, `gitVersionOf`, `parseStatusZ`,
@@ -25,7 +25,8 @@ only the current version, with no history). Internals, platform notes, detailed 
   may require `vscode`.
 - `test/`: one test file per module (`*.test.js`, `node:test`), `helpers.js` for fixtures. Tests use only local bare
   git repositories, no network. `fixtures/team-repo/` is the test team repository (plugins `review`: skills
-  `code-review`, `security-check`, rule `style.mdc`; `docs`: skill `write-readme`, with a folded description);
+  `code-review`, `security-check`, rule `style.mdc`, command `review-pr`, agent `reviewer` and `mcp.json` with servers
+  `lint` and `tickets`; `docs`: skill `write-readme`, with a folded description);
   `make-test-repo.test.js` checks its catalog, so change the two together. `manual-remote-checks.md` is the hand
   checklist for the SSH and credential cases that tests can't cover.
 - `.github/workflows/release.yml`: on a `v*` tag, checks the tag against `package.json`, runs the tests, packages,
@@ -64,6 +65,11 @@ On a Linux machine with a Cursor server (a Remote-SSH host), the suite runs with
   selection per window.
 - A `SKILL.md` is a skill only below a `.cursor/plugins` path: the managed clone and the filtered copies live under
   the extension's global storage in `.cursor/plugins`.
+- Cursor reads a plugin's MCP servers from `.mcp.json` then `mcp.json` (first file wins per name; `plugin.json`'s
+  `mcpServers` overrides) and drops a server as soon as it leaves the registered folder's file (probe, Cursor 3.31): a
+  partial copy holds a generated MCP file without the servers left out; it only goes repository -> copy (`syncCopy`'s
+  filtered branch); a kind whose paths `plugin.json` declares is not selectable (Cursor reads those paths instead of
+  the default folder).
 - Other `vscode.cursor.*` functions throw for a non-built-in extension: use nothing but `plugins`.
 - The exit code of `git rebase --autostash` can't be trusted (a stash that conflicts when re-applied exits 0, with
   conflict markers left in the files): `sync.checkConflicts` runs first.

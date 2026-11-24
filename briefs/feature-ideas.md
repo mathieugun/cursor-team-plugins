@@ -19,7 +19,6 @@ have briefs. Each idea below becomes a brief when it's picked.
 
 ## Selection and discovery
 
-- Make commands, agents and MCP servers selectable, not only skills and rules.
 - Search and filter in the view.
 - Project suggestions: a plugin declares file patterns (for example `**/*.py`), and the extension suggests it when a
   matching project is opened.

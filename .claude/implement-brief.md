@@ -68,5 +68,16 @@ assumptions are fine when the user asked for the assumptions to be tested).
 - A VSIX rebuilt without a version change may not replace the installed one: check
   `%USERPROFILE%\.cursor\extensions\mathieugun.cursor-team-plugins-<version>\extension.js` after installing (`--force`).
 
+- MCP servers of a registered plugin can be observed without a probe extension: add a local repository to
+  `teamPlugins.localRepositories` of the user's Cursor (with their OK; back up and restore `settings.json`), give the
+  plugin stdio servers that are tiny node scripts run by `Cursor.exe` with `ELECTRON_RUN_AS_NODE=1` (answer
+  `initialize` and `tools/list` with one tool named after an argument), then read
+  `~/.cursor/projects/<workspace>/mcps/plugin-<plugin>-<server>/tools/` and the agent host's
+  `Mcp FileSystem Writer.log` (`... left the lease` when a server goes). An edit of the registered folder's
+  `mcp.json` takes effect within a few seconds for added or removed servers (a removed or unregistered server's
+  process is killed a fixed 30 s after it leaves the lease: poll `Win32_Process` for `server.js` to time it); a server that keeps its name keeps its old
+  config (new `args` are used only after a window reload), so test server changes by name, not by argument (probe,
+  Cursor 3.31, 2026-11-25). Opening a probe window from an agent was refused by the auto-mode classifier: ask the user.
+
 ## Implementer lessons
 <!-- One line per project-specific mistake seen in review. -->

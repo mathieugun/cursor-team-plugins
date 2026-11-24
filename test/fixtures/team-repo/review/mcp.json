@@ -1,0 +1,6 @@
+{
+  "mcpServers": {
+    "lint": { "url": "http://127.0.0.1:9/lint" },
+    "tickets": { "url": "http://127.0.0.1:9/tickets" }
+  }
+}

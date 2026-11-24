@@ -26,14 +26,14 @@ function setup(t) {
     name: 'p',
     skills: ['a', 'b'],
     rules: ['x.mdc', 'y.mdc'],
-    extra: { 'agents/z.md': 'agent', '.git/HEAD': 'ref: x' },
+    extra: { 'hooks/z.md': 'agent', '.git/HEAD': 'ref: x' },
   });
   const plugin = readCatalog(repo).plugins[0];
   return { root, plugin };
 }
 
 const SKILL_A = 'skills/a/SKILL.md';
-const FOUR = ['.cursor-plugin/plugin.json', 'rules/x.mdc', 'agents/z.md', SKILL_A].sort();
+const FOUR = ['.cursor-plugin/plugin.json', 'rules/x.mdc', 'hooks/z.md', SKILL_A].sort();
 
 function setupCopy(t) {
   const f = setup(t);
@@ -102,19 +102,19 @@ test('new files go both ways', (t) => {
   let r = syncCopy(f.plugin, f.ids, f.holder);
   assert.deepEqual(r.actions, [{ action: 'toSource', rel: 'skills/a/notes.md' }]);
   assert.equal(fs.readFileSync(f.src('skills/a/notes.md'), 'utf8'), 'notes');
-  writeFile(f.plugin.dir, 'agents/new.md', 'new');
+  writeFile(f.plugin.dir, 'hooks/new.md', 'new');
   r = syncCopy(f.plugin, f.ids, f.holder);
-  assert.deepEqual(r.actions, [{ action: 'toCopy', rel: 'agents/new.md' }]);
-  assert.equal(fs.readFileSync(f.cp('agents/new.md'), 'utf8'), 'new');
+  assert.deepEqual(r.actions, [{ action: 'toCopy', rel: 'hooks/new.md' }]);
+  assert.equal(fs.readFileSync(f.cp('hooks/new.md'), 'utf8'), 'new');
 });
 
 test('deletions go both ways', (t) => {
   const f = setupCopy(t);
-  fs.rmSync(f.cp('agents/z.md'));
+  fs.rmSync(f.cp('hooks/z.md'));
   let r = syncCopy(f.plugin, f.ids, f.holder);
-  assert.deepEqual(r.actions, [{ action: 'deletedInSource', rel: 'agents/z.md' }]);
-  assert.ok(!fs.existsSync(f.src('agents/z.md')));
-  assert.ok(!fs.existsSync(f.src('agents')), 'the emptied folder is removed');
+  assert.deepEqual(r.actions, [{ action: 'deletedInSource', rel: 'hooks/z.md' }]);
+  assert.ok(!fs.existsSync(f.src('hooks/z.md')));
+  assert.ok(!fs.existsSync(f.src('hooks')), 'the emptied folder is removed');
   fs.rmSync(f.src('rules/x.mdc'));
   r = syncCopy(f.plugin, f.ids, f.holder);
   assert.deepEqual(r.actions, [{ action: 'deletedInCopy', rel: 'rules/x.mdc' }]);
@@ -190,12 +190,12 @@ test('both sides changed the same way is not a conflict', (t) => {
 
 test('a deletion against an edit is a conflict', (t) => {
   const f = setupCopy(t);
-  fs.rmSync(f.cp('agents/z.md'));
-  fs.writeFileSync(f.src('agents/z.md'), 'team');
+  fs.rmSync(f.cp('hooks/z.md'));
+  fs.writeFileSync(f.src('hooks/z.md'), 'team');
   const r = syncCopy(f.plugin, f.ids, f.holder);
   assert.deepEqual(r.actions, []);
-  assert.deepEqual(r.conflicts.map((c) => c.rel), ['agents/z.md']);
-  assert.equal(S(f, 'agents/z.md'), 'team');
+  assert.deepEqual(r.conflicts.map((c) => c.rel), ['hooks/z.md']);
+  assert.equal(S(f, 'hooks/z.md'), 'team');
 });
 
 test('resolveConflict keeps the repository version', (t) => {
@@ -222,14 +222,14 @@ test('resolveConflict keeps the copy version', (t) => {
 
 test('resolveConflict with the kept side deleted deletes the other', (t) => {
   const f = setupCopy(t);
-  fs.rmSync(f.cp('agents/z.md'));
-  fs.writeFileSync(f.src('agents/z.md'), 'team');
+  fs.rmSync(f.cp('hooks/z.md'));
+  fs.writeFileSync(f.src('hooks/z.md'), 'team');
   syncCopy(f.plugin, f.ids, f.holder);
-  assert.deepEqual(resolveConflict(f.plugin, f.ids, f.holder, 'agents/z.md', 'copy'), {
+  assert.deepEqual(resolveConflict(f.plugin, f.ids, f.holder, 'hooks/z.md', 'copy'), {
     action: 'deletedInSource',
-    rel: 'agents/z.md',
+    rel: 'hooks/z.md',
   });
-  assert.ok(!fs.existsSync(f.src('agents/z.md')));
+  assert.ok(!fs.existsSync(f.src('hooks/z.md')));
   assert.throws(() => resolveConflict(f.plugin, f.ids, f.holder, '../x', 'copy'));
   assert.throws(() => resolveConflict(f.plugin, f.ids, f.holder, SKILL_A, 'both'));
 });
@@ -238,11 +238,11 @@ test('an unreadable record never deletes unsynced edits', (t) => {
   const f = setupCopy(t);
   fs.writeFileSync(f.cp(SKILL_A), 'agent');
   writeFile(f.copyRoot, 'skills/a/notes.md', 'notes');
-  writeFile(f.plugin.dir, 'agents/new.md', 'new');
+  writeFile(f.plugin.dir, 'hooks/new.md', 'new');
   fs.writeFileSync(path.join(f.holder, '.team-plugins-sync.json'), '{"syncedAt":17');
   const r = syncCopy(f.plugin, f.ids, f.holder);
   assert.deepEqual(r.actions, [
-    { action: 'toCopy', rel: 'agents/new.md' },
+    { action: 'toCopy', rel: 'hooks/new.md' },
     { action: 'toSource', rel: 'skills/a/notes.md' },
   ]);
   assert.deepEqual(r.conflicts.map((c) => c.rel), [SKILL_A]);
@@ -262,11 +262,11 @@ test('a v1 record is migrated', (t) => {
   fs.writeFileSync(f.cp('rules/x.mdc'), 'agent');
   fs.writeFileSync(f.src('rules/x.mdc'), 'team2');
   setMtime(f.cp('rules/x.mdc'), now + 10000);
-  fs.rmSync(f.cp('agents/z.md'));
-  setMtime(f.src('agents/z.md'), now - 10000);
+  fs.rmSync(f.cp('hooks/z.md'));
+  setMtime(f.src('hooks/z.md'), now - 10000);
   const r = syncCopy(f.plugin, f.ids, f.holder);
   assert.deepEqual(r.actions, [
-    { action: 'deletedInSource', rel: 'agents/z.md' },
+    { action: 'deletedInSource', rel: 'hooks/z.md' },
     { action: 'toCopy', rel: SKILL_A },
   ]);
   assert.deepEqual(r.conflicts.map((c) => c.rel), ['rules/x.mdc']);
@@ -391,12 +391,12 @@ test('a broken link is left out', (t) => {
 
 test('a link loop is left out', (t) => {
   const f = setup(t);
-  const loop = path.join(f.plugin.dir, 'agents', 'loop');
+  const loop = path.join(f.plugin.dir, 'hooks', 'loop');
   junction(f.plugin.dir, loop);
   try {
     const r = syncCopy(f.plugin, IDS, holderFor(f, IDS));
-    assert.deepEqual(r.skipped, [{ rel: 'agents/loop', reason: 'link loop' }]);
-    assert.ok(fs.existsSync(path.join(r.copyRoot, 'agents', 'z.md')));
+    assert.deepEqual(r.skipped, [{ rel: 'hooks/loop', reason: 'link loop' }]);
+    assert.ok(fs.existsSync(path.join(r.copyRoot, 'hooks', 'z.md')));
   } finally {
     // removes the link only (a junction on Windows, a symlink elsewhere): the cleanup of the temporary folder can't
     // follow a loop
@@ -609,4 +609,109 @@ test('copyRootOf uses the renamed folder', () => {
   const H = path.join(path.sep, 'h');
   assert.equal(copyRootOf({ dir: '/x/review', folder: 'review-two' }, H), path.join(H, 'review-two'));
   assert.equal(copyRootOf({ dir: '/x/review' }, H), path.join(H, 'review'));
+});
+
+// ---- MCP servers, commands and agents in a partial copy ----
+
+const MCP_REASON = 'MCP servers left out of the selection: an edit in the copy never reaches the repository';
+const MCP_SOURCE = '{"mcpServers":{"a":{"command":"x"},"b":{"command":"y"}}}';
+const ALL_IDS = ['p/skills/s', 'p/commands/c.md', 'p/agents/g.md', 'p/mcp/a', 'p/mcp/b'];
+const A_ONLY_IDS = ['p/skills/s', 'p/commands/c.md', 'p/agents/g.md', 'p/mcp/a'];
+
+function mcpSetup(t, ids) {
+  const root = tmpDir();
+  t.after(() => rmDir(root));
+  const repo = path.join(root, 'repo');
+  makePlugin(repo, 'p', {
+    name: 'p',
+    skills: ['s'],
+    extra: { 'commands/c.md': 'command', 'agents/g.md': 'agent', 'mcp.json': MCP_SOURCE },
+  });
+  const f = { root, repo, ids };
+  f.plugin = readCatalog(repo).plugins[0];
+  f.holder = path.join(root, 'filtered', holderName(f.plugin, ids));
+  f.first = syncCopy(f.plugin, ids, f.holder);
+  f.copyRoot = f.first.copyRoot;
+  f.src = (rel) => path.join(f.plugin.dir, rel);
+  f.cp = (rel) => path.join(f.copyRoot, rel);
+  return f;
+}
+
+const readJsonFile = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
+
+test('an unselected command and agent are left out of the copy', (t) => {
+  const f = mcpSetup(t, ALL_IDS.filter((id) => !id.includes('/commands/') && !id.includes('/agents/')));
+  assert.ok(fs.existsSync(f.cp('skills/s/SKILL.md')));
+  assert.equal(fs.readFileSync(f.cp('mcp.json'), 'utf8'), MCP_SOURCE);
+  assert.ok(!fs.existsSync(f.cp('commands/c.md')));
+  assert.ok(!fs.existsSync(f.cp('agents/g.md')));
+});
+
+test('a left-out MCP server is removed from the copy file', (t) => {
+  const f = mcpSetup(t, A_ONLY_IDS);
+  assert.deepEqual(readJsonFile(f.cp('mcp.json')), { mcpServers: { a: { command: 'x' } } });
+  assert.ok(fs.existsSync(f.cp('commands/c.md')));
+  assert.ok(fs.existsSync(f.cp('agents/g.md')));
+  assert.equal(fs.readFileSync(f.src('mcp.json'), 'utf8'), MCP_SOURCE);
+  const r = syncCopy(f.plugin, f.ids, f.holder);
+  assert.deepEqual(r.actions, []);
+  assert.deepEqual(r.skipped, []);
+});
+
+test('every server of a file left out drops the file', (t) => {
+  const f = mcpSetup(t, ['p/skills/s']);
+  assert.ok(!fs.existsSync(f.cp('mcp.json')));
+  assert.ok(fs.existsSync(f.cp('skills/s/SKILL.md')));
+  assert.deepEqual(syncCopy(f.plugin, f.ids, f.holder).actions, []);
+  assert.equal(fs.readFileSync(f.src('mcp.json'), 'utf8'), MCP_SOURCE);
+});
+
+test('a source change regenerates the filtered file', (t) => {
+  const f = mcpSetup(t, A_ONLY_IDS);
+  fs.writeFileSync(f.src('mcp.json'), '{"mcpServers":{"a":{"command":"x2"},"b":{"command":"y"},"c":{"command":"z"}}}');
+  const plugin = readCatalog(f.repo).plugins[0];
+  const r = syncCopy(plugin, f.ids, f.holder);
+  assert.deepEqual(r.actions, [{ action: 'toCopy', rel: 'mcp.json' }]);
+  assert.deepEqual(readJsonFile(f.cp('mcp.json')), { mcpServers: { a: { command: 'x2' } } });
+  assert.deepEqual(syncCopy(plugin, f.ids, f.holder).actions, []);
+});
+
+test('an edit of the filtered file in the copy never reaches the repository', (t) => {
+  const f = mcpSetup(t, A_ONLY_IDS);
+  fs.writeFileSync(f.cp('mcp.json'), '{"mcpServers":{"a":{"command":"edited"}}}');
+  for (let i = 0; i < 2; i++) {
+    const r = syncCopy(f.plugin, f.ids, f.holder);
+    assert.equal(fs.readFileSync(f.src('mcp.json'), 'utf8'), MCP_SOURCE);
+    assert.equal(fs.readFileSync(f.cp('mcp.json'), 'utf8'), '{"mcpServers":{"a":{"command":"edited"}}}');
+    assert.deepEqual(r.skipped, [{ rel: 'mcp.json', reason: MCP_REASON }]);
+    assert.deepEqual(r.actions, []);
+    assert.deepEqual(r.conflicts, []);
+  }
+});
+
+test('a filtered file deleted in the copy is written again', (t) => {
+  const f = mcpSetup(t, A_ONLY_IDS);
+  fs.rmSync(f.cp('mcp.json'));
+  const r = syncCopy(f.plugin, f.ids, f.holder);
+  assert.deepEqual(r.actions, [{ action: 'toCopy', rel: 'mcp.json' }]);
+  assert.deepEqual(readJsonFile(f.cp('mcp.json')), { mcpServers: { a: { command: 'x' } } });
+  assert.ok(fs.existsSync(f.src('mcp.json')));
+});
+
+test('a filtered file deleted in the repository leaves the copy', (t) => {
+  const f = mcpSetup(t, A_ONLY_IDS);
+  fs.rmSync(f.src('mcp.json'));
+  // the plugin object from before the deletion still lists the file: the "source missing" branch
+  const r = syncCopy(f.plugin, f.ids, f.holder);
+  assert.deepEqual(r.actions, [{ action: 'deletedInCopy', rel: 'mcp.json' }]);
+  assert.ok(!fs.existsSync(f.cp('mcp.json')));
+});
+
+test('after markCopySynced the filtered file is regenerated', (t) => {
+  const f = mcpSetup(t, A_ONLY_IDS);
+  fs.writeFileSync(f.cp('mcp.json'), '{"mcpServers":{"a":{"command":"edited"}}}');
+  assert.equal(markCopySynced(f.holder), true);
+  const r = syncCopy(f.plugin, f.ids, f.holder);
+  assert.deepEqual(r.actions, [{ action: 'toCopy', rel: 'mcp.json' }]);
+  assert.deepEqual(readJsonFile(f.cp('mcp.json')), { mcpServers: { a: { command: 'x' } } });
 });

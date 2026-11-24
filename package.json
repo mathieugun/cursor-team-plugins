@@ -1,8 +1,8 @@
 {
   "name": "cursor-team-plugins",
   "displayName": "Team plugins",
-  "description": "Keeps a team's Cursor plugins (rules and skills) in sync with the team's git repositories and registers the ones each user and project selected.",
-  "version": "0.5.0",
+  "description": "Keeps a team's Cursor plugins (rules, skills, commands, agents and MCP servers) in sync with the team's git repositories and registers the ones each user and project selected.",
+  "version": "0.6.0",
   "publisher": "mathieugun",
   "author": "Mathieu Gunther",
   "license": "MIT",
@@ -86,7 +86,7 @@
           },
           "default": [],
           "scope": "application",
-          "description": "Plugins (`<repository>:<plugin>`) and single skills or rules (`<repository>:<plugin>/skills/<folder>`, `<repository>:<plugin>/rules/<file>`) enabled in every project. Edited by the Team Plugins view."
+          "description": "Plugins (`<repository>:<plugin>`) and single items (`<repository>:<plugin>/skills/<folder>`, `/rules/<file>`, `/commands/<file>`, `/agents/<file>`, `/mcp/<server>`) enabled in every project. Edited by the Team Plugins view."
         },
         "teamPlugins.excluded": {
           "type": "array",
@@ -95,7 +95,7 @@
           },
           "default": [],
           "scope": "application",
-          "description": "Skills and rules left out of plugins enabled in `teamPlugins.enabled`. Edited by the view."
+          "description": "Items (skills, rules, commands, agents, MCP servers) left out of plugins enabled in `teamPlugins.enabled`. Edited by the view."
         },
         "teamPlugins.projectPlugins": {
           "type": "array",
@@ -104,7 +104,7 @@
           },
           "default": [],
           "scope": "resource",
-          "description": "Plugins, skills or rules (`<repository>:<plugin>`, ...) this project needs: enabled for everyone who opens it (commit `.vscode/settings.json`). Read from workspace and folder settings only."
+          "description": "Plugins or single items (`<repository>:<plugin>`, ...) this project needs: enabled for everyone who opens it (commit `.vscode/settings.json`). Read from workspace and folder settings only."
         },
         "teamPlugins.projectRepositories": {
           "type": "array",
@@ -155,7 +155,7 @@
     "colors": [
       {
         "id": "teamPlugins.projectItemForeground",
-        "description": "Colour of the plugins, skills and rules that the project enables (teamPlugins.projectPlugins) in the Team Plugins view.",
+        "description": "Colour of the plugins and items that the project enables (teamPlugins.projectPlugins) in the Team Plugins view.",
         "defaults": {
           "dark": "charts.purple",
           "light": "charts.purple",

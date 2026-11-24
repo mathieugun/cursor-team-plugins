@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { readCatalog, frontmatterDescription } = require('../lib/catalog');
+const { readCatalog, frontmatterDescription, mcpServerNames, filterMcpJson } = require('../lib/catalog');
 const { tmpDir, rmDir, writeFile, makePlugin } = require('./helpers');
 
 function fixture(t) {
@@ -219,4 +219,115 @@ test('a plugins value that is not an array still warns', (t) => {
   const { plugins, warnings } = readCatalog(root);
   assert.equal(plugins.length, 0);
   assert.deepEqual(warnings, ['marketplace.json: "plugins" is not an array']);
+});
+
+test('commands, agents and MCP servers are children, after skills and rules', (t) => {
+  const root = fixture(t);
+  makePlugin(root, 'p', {
+    skills: ['s'],
+    rules: ['r.mdc'],
+    extra: {
+      'commands/b.md': '---\ndescription: Command b\n---\n',
+      'commands/a.txt': 'plain',
+      'commands/notes.json': '{}',
+      'commands/sub/deep.md': 'deep',
+      'agents/helper.md': '---\ndescription: Helper agent\n---\n',
+      'agents/x.txt': 'not an agent',
+      'mcp.json':
+        '{"mcpServers":{"zeta":{"command":"node","args":["z.js","--flag"]},"alpha":{"url":"http://h/mcp"}}}',
+    },
+  });
+  const { plugins, warnings } = readCatalog(root);
+  const [p] = plugins;
+  assert.deepEqual(p.children.map((c) => c.id), [
+    'p/skills/s',
+    'p/rules/r.mdc',
+    'p/commands/a.txt',
+    'p/commands/b.md',
+    'p/agents/helper.md',
+    'p/mcp/alpha',
+    'p/mcp/zeta',
+  ]);
+  assert.deepEqual(p.children.map((c) => c.kind), ['skill', 'rule', 'command', 'command', 'agent', 'mcp', 'mcp']);
+  assert.deepEqual(p.children.slice(2, 5).map((c) => c.name), ['a', 'b', 'helper']);
+  const byId = (id) => p.children.find((c) => c.id === id);
+  assert.equal(byId('p/commands/b.md').description, 'Command b');
+  assert.equal(byId('p/commands/a.txt').description, '');
+  assert.equal(byId('p/mcp/zeta').description, 'node z.js --flag');
+  assert.equal(byId('p/mcp/alpha').description, 'http://h/mcp');
+  assert.equal(byId('p/mcp/zeta').file, path.join(p.dir, 'mcp.json'));
+  assert.equal(byId('p/mcp/alpha').file, path.join(p.dir, 'mcp.json'));
+  assert.deepEqual(p.mcpFiles, { 'mcp.json': ['zeta', 'alpha'] });
+  assert.deepEqual(warnings, []);
+});
+
+test('.mcp.json wins and the top-level form is read', (t) => {
+  const root = fixture(t);
+  makePlugin(root, 'p', {
+    extra: {
+      '.mcp.json': '{"mcpServers":{"gamma":{"command":"dot"},"delta":{"command":"d"}}}',
+      'mcp.json':
+        '{"$schema":"x","gamma":{"command":"plain"},"epsilon":{"url":"u"},"metadata":{"url":"m"},"note":"text"}',
+    },
+  });
+  const { plugins } = readCatalog(root);
+  const [p] = plugins;
+  assert.deepEqual(p.children.map((c) => c.id), ['p/mcp/delta', 'p/mcp/epsilon', 'p/mcp/gamma']);
+  const gamma = p.children[2];
+  assert.equal(gamma.description, 'dot');
+  assert.ok(gamma.file.endsWith('.mcp.json'));
+  assert.deepEqual(p.mcpFiles, { '.mcp.json': ['gamma', 'delta'], 'mcp.json': ['gamma', 'epsilon'] });
+});
+
+test('kinds declared in plugin.json are not selectable (no mcpFiles property)', (t) => {
+  const root = fixture(t);
+  makePlugin(root, 'p', {
+    skills: ['s'],
+    extra: {
+      '.cursor-plugin/plugin.json': JSON.stringify({
+        name: 'p',
+        commands: './cmds/',
+        agents: ['./a.md'],
+        mcpServers: { x: { command: 'c' } },
+      }),
+      'commands/c.md': 'c',
+      'agents/a.md': 'a',
+      'mcp.json': '{"mcpServers":{"y":{"command":"c"}}}',
+    },
+  });
+  const { plugins } = readCatalog(root);
+  assert.deepEqual(plugins[0].children.map((c) => c.id), ['p/skills/s']);
+  assert.equal(plugins[0].mcpFiles, undefined);
+});
+
+test('an invalid mcp.json is a warning', (t) => {
+  const root = fixture(t);
+  makePlugin(root, 'p', { extra: { 'mcp.json': '{ nope' } });
+  const { plugins, warnings } = readCatalog(root);
+  assert.deepEqual(plugins[0].children, []);
+  assert.equal(warnings.length, 1);
+  assert.ok(warnings[0].startsWith('p: mcp.json:'), warnings[0]);
+});
+
+test('mcpServerNames', () => {
+  assert.deepEqual(mcpServerNames({}), []);
+  assert.deepEqual(mcpServerNames({ mcpServers: {}, a: { command: 'x' } }), ['a']);
+  assert.deepEqual(mcpServerNames([1]), []);
+  assert.deepEqual(mcpServerNames({ mcpServers: { b: {} } }), ['b']);
+  assert.deepEqual(mcpServerNames({ Owner: { url: 'u' }, k: { command: 'c' }, s: 'str' }), ['k']);
+});
+
+test('filterMcpJson', () => {
+  assert.equal(
+    filterMcpJson('{"$schema":"s","mcpServers":{"a":{"command":"x"},"b":{"command":"y"}}}', ['b']),
+    '{\n  "$schema": "s",\n  "mcpServers": {\n    "a": {\n      "command": "x"\n    }\n  }\n}\n',
+  );
+  assert.deepEqual(JSON.parse(filterMcpJson('{"a":{"command":"x"},"b":{"url":"u"},"c":3}', ['a'])), {
+    b: { url: 'u' },
+    c: 3,
+  });
+  assert.equal(filterMcpJson('{ nope', ['a']), '{ nope');
+  assert.deepEqual(JSON.parse(filterMcpJson('﻿{"mcpServers":{"a":{"command":"x"},"b":{"command":"y"}}}', ['a'])), {
+    mcpServers: { b: { command: 'y' } },
+  });
 });

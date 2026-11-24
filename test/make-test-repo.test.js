@@ -27,9 +27,14 @@ function assertBaseline(repoDir, name = 'team-test') {
       ['review/skills/code-review', 'skill'],
       ['review/skills/security-check', 'skill'],
       ['review/rules/style.mdc', 'rule'],
+      ['review/commands/review-pr.md', 'command'],
+      ['review/agents/reviewer.md', 'agent'],
+      ['review/mcp/lint', 'mcp'],
+      ['review/mcp/tickets', 'mcp'],
     ],
   );
   assert.equal(review.children[2].description, 'Team code style for the live test.');
+  assert.equal(review.children[3].description, 'Review the open pull request (live test).');
   assert.deepEqual(docs.children.map((c) => c.id), ['docs/skills/write-readme']);
   // a folded (>) description, read as one line
   assert.equal(docs.children[0].description, 'Write or update a project README from the code.');

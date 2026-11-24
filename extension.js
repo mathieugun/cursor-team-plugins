@@ -1076,9 +1076,22 @@ function updateStatus() {
 // ---- tree --------------------------------------------------------------------------------------------------------
 
 // Codicons per node kind (shown after the checkbox).
-const TREE_ICONS = { plugin: 'package', skill: 'sparkle', rule: 'law', error: 'warning', changes: 'git-commit', conflicts: 'warning', conflict: 'git-merge' };
+const TREE_ICONS = {
+  plugin: 'package',
+  skill: 'sparkle',
+  rule: 'law',
+  command: 'terminal',
+  agent: 'robot',
+  mcp: 'plug',
+  error: 'warning',
+  changes: 'git-commit',
+  conflicts: 'warning',
+  conflict: 'git-merge',
+};
+// The kinds of the selectable items below a plugin.
+const ITEM_KINDS = ['skill', 'rule', 'command', 'agent', 'mcp'];
 
-// Project items are marked by a file decoration (label colour + badge): plugin, skill and rule rows carry a
+// Project items are marked by a file decoration (label colour + badge): plugin and item rows carry a
 // team-plugins:/<key> resourceUri, which no other decoration provider touches.
 const ITEM_SCHEME = 'team-plugins';
 const decorationEmitter = new vscode.EventEmitter();
@@ -1088,7 +1101,7 @@ function itemUri(key) {
   return vscode.Uri.from({ scheme: ITEM_SCHEME, path: `/${key}` });
 }
 
-// Records the project state of the plugin, skill and rule nodes; tells the decoration service only when it changed.
+// Records the project state of the plugin and item nodes; tells the decoration service only when it changed.
 function updateProjectStates(nodes) {
   const next = new Map();
   for (const n of nodes.filter((x) => x.kind === 'plugin')) {
@@ -1237,7 +1250,7 @@ async function onCheckboxChange(e) {
   let user = before;
   const unchecked = [];
   for (const [node, state] of e.items) {
-    if (node.kind !== 'plugin' && node.kind !== 'skill' && node.kind !== 'rule') {
+    if (node.kind !== 'plugin' && !ITEM_KINDS.includes(node.kind)) {
       continue;
     }
     const checked = state === vscode.TreeItemCheckboxState.Checked;

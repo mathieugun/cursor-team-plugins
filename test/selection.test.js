@@ -131,3 +131,27 @@ test('desiredRegistrations registers a renamed plugin from a copy even when it i
   const sameDesired = desiredRegistrations(same, effective(same, { enabled: ['P2'], excluded: [] }, []), () => 'copy');
   assert.deepEqual([...sameDesired], [['P2', '/repo/P2']]);
 });
+
+test('toggle of a command and an MCP server', () => {
+  const cat = {
+    plugins: [
+      {
+        name: 'K',
+        displayName: 'K',
+        version: '',
+        description: '',
+        dir: '/repo/K',
+        children: [child('K/commands/c.md', 'command'), child('K/mcp/srv', 'mcp')],
+      },
+    ],
+    warnings: [],
+  };
+  const full = { enabled: ['K'], excluded: [] };
+  const off = toggle(cat, full, 'K/commands/c.md', false);
+  assert.deepEqual(off, { enabled: ['K'], excluded: ['K/commands/c.md'] });
+  assert.equal(effective(cat, off, []).get('K').full, false);
+  assert.deepEqual(toggle(cat, off, 'K/commands/c.md', true), full);
+  const noMcp = toggle(cat, full, 'K/mcp/srv', false);
+  assert.deepEqual(noMcp, { enabled: ['K'], excluded: ['K/mcp/srv'] });
+  assert.deepEqual([...effective(cat, noMcp, []).get('K').included], ['K/commands/c.md']);
+});

@@ -297,3 +297,22 @@ test('buildMissingNodes', () => {
   assert.equal(buildMissingNodes([{ name: 'named', url: 'u', branch: 'dev', normalized: 'x/u' }], [])[0].label, 'named');
   assert.deepEqual(buildMissingNodes([], []), []);
 });
+
+test('item rows say their kind', () => {
+  const kinds = ['skill', 'rule', 'command', 'agent', 'mcp'];
+  const cat = {
+    plugins: [
+      {
+        name: 'K',
+        displayName: 'K',
+        version: '',
+        description: '',
+        dir: '/repo/K',
+        children: kinds.map((k) => child(`K/${k}/x`, k)),
+      },
+    ],
+    warnings: [],
+  };
+  const [k] = buildTree(cat, effective(cat, { enabled: ['K'], excluded: [] }, []), []);
+  assert.deepEqual(k.children.map((c) => c.description), ['skill', 'rule', 'command', 'agent', 'MCP server']);
+});
