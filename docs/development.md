@@ -175,6 +175,29 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
   can't carry files back into the deleted folder, and the ids of the user's `enabled` and `excluded` lists are
   renamed (`renameIds`) before the next apply. Names follow Cursor's own rule for plugin names
   (`/^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/`, at most 64 characters), used for skills, rules, commands and agents too.
+- Rename (`lib/rename.js`, `renameCommand`; F2 or right-click): `renamePlugin` renames the plugin folder (Cursor names a
+  registered plugin after its folder), sets `plugin.json`'s `name` and the marketplace entry (found by its resolved
+  source; the source is rewritten as `./<path from the plugin root>`); `renameItem` renames a skill folder or a rule,
+  command or agent file (extension kept) and a `name:` frontmatter that equalled the old name (`renameSkillName`), or an
+  MCP server key in place in every MCP file that has it. Every check comes before the first change and a failure
+  puts back what was done. Measured in the isolated Cursor 3.32.4: a registered plugin folder and the items inside
+  it can be renamed with `fs.renameSync`, registered or not, so there is no copy-and-delete; the plugin is still
+  unregistered first (like **Move to a repository**) and its partial copy is dropped from `partialCopies`, and
+  `flushPartials` runs before so pending copy edits reach the repository. The record is `"renamed": { "<old id>":
+  "<new id>" }` in the repository's `marketplace.json` (created as just that key when the file is missing: with no
+  `plugins` and no `name` it changes neither the repository's name nor how its plugins are found), ids without the
+  repository name, written for managed and local clones, never for drafts (only this user's lists hold their ids).
+  `recordRename` keeps the map flat (older entries pointing at the old id follow to the new one, the new id's own key
+  is dropped, an entry that points to itself is dropped). Cursor's own `marketplace.json` reader ignores unknown keys
+  (its zod schemas never call `.strict()`), so the key is safe in a repository also imported as a Cursor marketplace.
+  `readCatalog` returns `renamed`; `mergeCatalogs` prefixes it with the repository name (a `Map`) and builds
+  `formerNames`; `normalizeIds` runs every id through `followRenames`: an id that exists in the catalog is never
+  redirected (a new skill may reuse an old name); else the repository's former name is replaced, then the records are
+  followed (the exact id, else its plugin part, up to 10 steps, never twice through one id). The user's lists are
+  rewritten by `migrateIds` at the next apply; a project's lists are only read through the records. A repository renamed
+  through its `marketplace.json`'s `name` is detected by `rememberNames` against `<storage>/repo-names.json`
+  (`{ "<key>": { name, former } }`, written by `doApply`; deliberately not under `state/`, whose watcher would apply
+  again on every write): its old names are `desc.formerNames`.
 - Share with team (`lib/share.js`, `shareCommand`): copies a project's (or `~/.cursor`'s) rule, skill, command or agent
   into a plugin. `shareKind` is the text test behind the Explorer menu's `when` regexes (`share.test.js` keeps the two in
   step). The Explorer passes `(clicked, selected)` to the command but evaluates the `when` on the clicked item only, so
@@ -266,8 +289,15 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
 - Following two branches of one repository is not possible: the second entry is `listed twice`.
 - The clone of a repository removed from the list is not deleted (it stays in the extension's storage).
 - Two URLs of one repository that differ only in the case of the path are two repositories (two clones).
-- Renaming a repository (its `marketplace.json` `name`) changes every id of its plugins: users pick again, projects
-  update their lists.
+- Renaming a repository (its `marketplace.json` `name`) is followed through `repo-names.json` for the people who already
+  follow it; someone who starts following it after the rename reads a project's old `<old name>:...` ids as unknown (the
+  project's items are added again once). No command renames a repository: edit its `marketplace.json`.
+- Rename: references to the old name inside other files (a skill naming another, a rule linking a file) are not
+  updated. The records are never pruned (delete them by hand once every teammate has synced). A case-only rename of a
+  folder named by hand (`Review` -> `review` on Windows) is refused as "already exists". The 0.4 bare ids of a renamed
+  plugin are not followed. An editor open on a renamed file is not reopened on the new path. The F2 binding is not
+  tested by the live scenarios (key presses can't be automated): without a tree element the command takes
+  `treeView.selection[0]`.
 - Upgrade from 0.4: the clone of 0.4 (`.cursor/plugins/repo`) is reused by the entry whose URL equals its origin URL,
   with its local changes. A clone that 0.4 left half-switched (origin still the old URL) is not reused: the entry is
   cloned again under `repos/` and the old folder stays. The partial copies move to new holder folders once (the hash

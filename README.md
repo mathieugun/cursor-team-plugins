@@ -137,7 +137,7 @@ repository's default one):
 
 The view lists every plugin of each repository with a checkbox, and its items below it (skills have a sparkle icon,
 rules a scales icon, commands a terminal icon, agents a robot icon and MCP servers a plug icon). Click an item to open
-its file (for an MCP server, its `mcp.json`).
+its file in a preview tab (for an MCP server, its `mcp.json`); the view keeps the focus.
 
 - Tick a plugin: all its items are enabled, including the ones added later.
 - Tick single items: the plugin is enabled partially and only the ticked items reach the agent. Its box stays
@@ -238,6 +238,15 @@ team's.
 - **Move to a repository** (right-click a draft plugin) copies it to a repository you follow or to your own clone and
   deletes the draft. The ids in your selection follow the plugin. In a managed clone the plugin appears in **Local
   changes**: commit and push it to share it with the team. A draft can't be added to a project.
+- **Rename** (right-click a plugin or an item, or select it in the view and press F2) renames:
+  - a plugin: its folder, the `name` of its `plugin.json` and its entry in the repository's `marketplace.json`;
+  - a skill: its folder and the `name` in its `SKILL.md`; a rule, command or agent: its file and its `name` when it has
+    one; an MCP server: its key in `mcp.json` (and `.mcp.json`).
+
+  Your selection follows. In a repository (not in the drafts) the rename is recorded in `marketplace.json` (a `renamed`
+  list of old to new ids), so your teammates' choices and the projects' lists follow the new name at their next sync
+  instead of silently losing the item. It is a local change like any other: in a managed clone it shows in **Local
+  changes**, commit and push it to share it.
 - **Share with team...** copies a rule, skill, command or agent that lives in a project's `.cursor` folder into a
   plugin. Right-click it in the Explorer (several at once; for a skill, its folder or its `SKILL.md`), or run the
   command from the command palette: it lists the project's items and your personal skills, commands and agents of
@@ -337,8 +346,10 @@ terminal where git and SSH can ask their questions; then click **Sync now**.
   skipped.
 - Conflicts are never merged by the extension: you choose to push your changes to a branch, or discard them.
 - Commit and push includes every local change; there is no per-file choice.
-- Renaming a repository (the `name` of its `marketplace.json`) changes the ids of all its plugins: you pick them again,
-  and the projects' lists are updated.
+- Renaming a repository (the `name` of its `marketplace.json`) keeps the choices of the people who already follow it;
+  someone who starts following it later has to add a project's items once more.
+- A rename doesn't update references to the old name inside other files (a skill that names another, a rule that links
+  a file).
 - Two branches of one repository can't be followed at the same time.
 - Two plugins in folders of the same name (in different repositories): the second is registered as
   `<folder>-<repository>`, and the agent knows it under that name.

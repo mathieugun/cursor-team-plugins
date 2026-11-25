@@ -2,7 +2,7 @@
   "name": "cursor-team-plugins",
   "displayName": "Team plugins",
   "description": "Keeps a team's Cursor plugins (rules, skills, commands, agents and MCP servers) in sync with the team's git repositories and registers the ones each user and project selected.",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "publisher": "mathieugun",
   "author": "Mathieu Gunther",
   "license": "MIT",
@@ -296,6 +296,11 @@
         "category": "Team Plugins"
       },
       {
+        "command": "teamPlugins.rename",
+        "title": "Rename",
+        "category": "Team Plugins"
+      },
+      {
         "command": "teamPlugins.shareWithTeam",
         "title": "Share with team...",
         "category": "Team Plugins"
@@ -404,6 +409,11 @@
           "group": "1_draft@1"
         },
         {
+          "command": "teamPlugins.rename",
+          "when": "view == teamPlugins.plugins && viewItem =~ /^(plugin|child)/",
+          "group": "3_edit@1"
+        },
+        {
           "command": "teamPlugins.newSkill",
           "when": "view == teamPlugins.plugins && viewItem =~ /^plugin/",
           "group": "2_new@1"
@@ -478,9 +488,20 @@
         {
           "command": "teamPlugins.addProjectRepository",
           "when": "false"
+        },
+        {
+          "command": "teamPlugins.rename",
+          "when": "false"
         }
       ]
     },
+    "keybindings": [
+      {
+        "command": "teamPlugins.rename",
+        "key": "f2",
+        "when": "focusedView == teamPlugins.plugins && !inputFocus"
+      }
+    ],
     "viewsContainers": {
       "activitybar": [
         {

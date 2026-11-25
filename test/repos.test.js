@@ -17,6 +17,8 @@ const {
   assignNames,
   mergeCatalogs,
   normalizeIds,
+  followRenames,
+  rememberNames,
   repoOfId,
   missingRepos,
   unlocatedRepos,
@@ -332,4 +334,105 @@ test('withoutProjectRepo', () => {
   const list = [{ name: 'a', url: 'u' }, { name: 'b', url: 'v' }];
   assert.deepEqual(withoutProjectRepo(list, 'a', ['a:x']), list);
   assert.deepEqual(withoutProjectRepo(list, 'a', ['b:y']), [{ name: 'b', url: 'v' }]);
+});
+
+test('mergeCatalogs prefixes the renamed records and builds formerNames', (t) => {
+  const one = makeRepo(t, (root) => makePlugin(root, 'review', {}));
+  const two = makeRepo(t, (root) => makePlugin(root, 'docs', {}));
+  const c1 = { ...readCatalog(one), renamed: { 'review/skills/a': 'review/skills/b', docs: 'audit' } };
+  const { renamed, formerNames } = mergeCatalogs([
+    { desc: { name: 'team', key: 'k1', formerNames: ['old', 'two', 'older'] }, catalog: c1 },
+    { desc: { name: 'two', key: 'k2', formerNames: ['old', 'x'] }, catalog: readCatalog(two) },
+  ]);
+  assert.deepEqual([...renamed], [
+    ['team:review/skills/a', 'team:review/skills/b'],
+    ['team:docs', 'team:audit'],
+  ]);
+  // 'two' is a loaded repository's name; 'old' goes to the first repository that claims it
+  assert.deepEqual([...formerNames], [['old', 'team'], ['older', 'team'], ['x', 'two']]);
+});
+
+function renamedCatalog(t, extra = {}) {
+  const root = makeRepo(t, (r) => {
+    market(r, [['review', './review'], ['audit', './audit']]);
+    makePlugin(r, 'review', { skills: ['new'] });
+    makePlugin(r, 'audit', { skills: ['w'] });
+  });
+  const catalog = mergeCatalogs([{ desc: { name: 'team', key: 'k1', formerNames: ['old'] }, catalog: readCatalog(root) }]);
+  catalog.renamed = new Map(
+    Object.entries({
+      'team:review/skills/old': 'team:review/skills/new',
+      'team:docs': 'team:audit',
+      'team:review': 'team:x',
+      'team:a': 'team:b',
+      'team:b': 'team:a',
+      ...extra,
+    }),
+  );
+  return catalog;
+}
+
+test('followRenames and normalizeIds read ids through the records', (t) => {
+  const catalog = renamedCatalog(t);
+  assert.equal(followRenames(catalog, 'team:review/skills/old'), 'team:review/skills/new');
+  assert.equal(followRenames(catalog, 'team:docs'), 'team:audit');
+  assert.equal(followRenames(catalog, 'team:docs/skills/w'), 'team:audit/skills/w');
+  // an id that exists is never redirected, even when a record has it as a key
+  assert.equal(followRenames(catalog, 'team:review'), 'team:review');
+  // a cycle ends
+  assert.ok(['team:a', 'team:b'].includes(followRenames(catalog, 'team:a')));
+  assert.equal(followRenames(catalog, 'elsewhere:docs'), 'elsewhere:docs');
+  // the former name of the repository
+  assert.equal(followRenames(catalog, 'old:review'), 'team:review');
+  assert.equal(followRenames(catalog, 'old:docs/skills/w'), 'team:audit/skills/w');
+  assert.deepEqual(normalizeIds(catalog, ['team:docs', 'team:audit']), ['team:audit']);
+  assert.deepEqual(normalizeIds(catalog, ['team:docs/skills/w', 'old:review', 'team:review/skills/old']), [
+    'team:audit/skills/w',
+    'team:review',
+    'team:review/skills/new',
+  ]);
+  // a catalog built by hand has no records
+  assert.equal(followRenames({ plugins: [] }, 'team:docs'), 'team:docs');
+});
+
+test('rememberNames', () => {
+  const desc = (key, name, extra = {}) => ({ key, name, kind: 'managed', duplicateOf: null, hiddenBy: null, ...extra });
+  const readable = () => true;
+  const first = rememberNames({}, [desc('k1', 'a'), desc('k2', 'b')], readable);
+  assert.equal(first.changed, true);
+  assert.deepEqual(first.memory, { k1: { name: 'a', former: [] }, k2: { name: 'b', former: [] } });
+  assert.deepEqual(first.renamed, []);
+
+  const same = rememberNames(first.memory, [desc('k1', 'a'), desc('k2', 'b')], readable);
+  assert.equal(same.changed, false);
+  assert.deepEqual(same.memory, first.memory);
+
+  const input = JSON.parse(JSON.stringify(first.memory));
+  const moved = rememberNames(input, [desc('k1', 'c')], readable);
+  assert.deepEqual(input, first.memory, 'the input is not mutated');
+  assert.equal(moved.changed, true);
+  assert.deepEqual(moved.memory.k1, { name: 'c', former: ['a'] });
+  assert.deepEqual(moved.memory.k2, { name: 'b', former: [] }, 'other keys are kept');
+  assert.deepEqual(moved.renamed, [{ key: 'k1', from: 'a', to: 'c' }]);
+
+  const toB = rememberNames(first.memory, [desc('k1', 'b')], readable);
+  const back = rememberNames(toB.memory, [desc('k1', 'a')], readable);
+  assert.deepEqual(back.memory.k1, { name: 'a', former: ['b'] });
+
+  const ignored = rememberNames(
+    {},
+    [
+      desc('d', 'a', { duplicateOf: 'k1' }),
+      desc('h', 'a', { hiddenBy: { key: 'k1' } }),
+      desc('dr', 'drafts', { kind: 'drafts' }),
+      desc('n', 'a'),
+    ],
+    (d) => d.key !== 'n',
+  );
+  assert.equal(ignored.changed, false);
+  assert.deepEqual(ignored.memory, {});
+
+  for (const garbage of [null, [], 'x', 7]) {
+    assert.deepEqual(rememberNames(garbage, [desc('k1', 'a')], readable).memory, { k1: { name: 'a', former: [] } });
+  }
 });

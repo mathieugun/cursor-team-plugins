@@ -7,6 +7,7 @@ const os = require('os');
 const { readCatalog } = require('./lib/catalog');
 const authoring = require('./lib/authoring');
 const share = require('./lib/share');
+const rename = require('./lib/rename');
 const selection = require('./lib/selection');
 const {
   buildTree,
@@ -35,6 +36,7 @@ const {
   assignNames,
   mergeCatalogs,
   normalizeIds,
+  rememberNames,
   repoOfId,
   missingRepos,
   unlocatedRepos,
@@ -640,6 +642,8 @@ async function doApply() {
     }
   }
   descs = assignNames(list, catalogNames(list));
+  const formerNames = rememberRepoNames();
+  descs = descs.map((d) => (formerNames[d.key] && formerNames[d.key].length > 0 ? { ...d, formerNames: formerNames[d.key] } : d));
   const active = descs.filter(isActive);
   catalog = mergeCatalogs(active.map((d) => ({ desc: d, catalog: catalogs.get(d.key) })));
   for (const w of catalog.warnings) {
@@ -720,7 +724,40 @@ async function doApply() {
   updateStatus();
 }
 
-// 0.4 ids in the user's lists (`review`, `review/skills/x`) become `<repository>:<id>`, once the catalog knows them.
+// The last names of the repositories this window follows (<storage>/repo-names.json, outside state/, which is
+// watched), so a repository renamed through its marketplace.json keeps being found under its old name: records the
+// names read now and returns { repository key: [former names] }.
+function rememberRepoNames() {
+  const file = path.join(storage, 'repo-names.json');
+  let memory = {};
+  try {
+    memory = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    // missing or damaged: starts again
+  }
+  const result = rememberNames(memory, descs, (d) => catalogs.has(d.key) && fs.existsSync(d.dir));
+  if (result.changed) {
+    try {
+      fs.mkdirSync(storage, { recursive: true });
+      fs.writeFileSync(file, JSON.stringify(result.memory, null, 2));
+    } catch (err) {
+      log(`cannot write repo-names.json: ${err.message}`);
+    }
+  }
+  for (const r of result.renamed) {
+    log(`repository ${r.from} is now named ${r.to}: its old ids are read with the new name`);
+  }
+  const former = {};
+  for (const [key, e] of Object.entries(result.memory)) {
+    if (e && Array.isArray(e.former)) {
+      former[key] = e.former.filter((f) => typeof f === 'string');
+    }
+  }
+  return former;
+}
+
+// 0.4 ids in the user's lists (`review`, `review/skills/x`) become `<repository>:<id>`, once the catalog knows them,
+// and ids of renamed repositories, plugins and items follow the renames.
 async function migrateIds() {
   const c = cfg();
   for (const key of ['enabled', 'excluded']) {
@@ -729,7 +766,7 @@ async function migrateIds() {
     if (next.join('\n') !== [...new Set(raw)].sort().join('\n')) {
       try {
         await c.update(key, next, vscode.ConfigurationTarget.Global);
-        log(`teamPlugins.${key}: ids moved to <repository>:<plugin> ids`);
+        log(`teamPlugins.${key}: ids updated (0.4 ids, or renamed repositories, plugins or items)`);
       } catch (err) {
         log(`cannot move the ids of teamPlugins.${key}: ${err.message}`);
       }
@@ -2038,6 +2075,114 @@ async function moveDraftCommand(node) {
   }
 }
 
+// Renames a plugin or an item of the tree (right-click, or F2 on the selected row): the files, the plugin.json and
+// marketplace.json names, the record of the rename in the repository, then the user's own lists.
+async function renameCommand(node) {
+  const usable = (n) => (n && (n.kind === 'plugin' || ITEM_KINDS.includes(n.kind)) ? n : null);
+  const target = usable(node) || usable(treeView && treeView.selection[0]);
+  if (!target) {
+    return;
+  }
+  let plugin;
+  let child = null;
+  if (target.kind === 'plugin') {
+    plugin = catalog.plugins.find((p) => p.name === target.key);
+  } else {
+    plugin = catalog.plugins.find((p) => p.children.some((c) => c.id === target.key));
+    child = plugin ? plugin.children.find((c) => c.id === target.key) : null;
+  }
+  const repo = plugin ? descs.find((d) => d.key === plugin.repoKey) : null;
+  if (!plugin || !repo || (target.kind !== 'plugin' && !child)) {
+    return;
+  }
+  const label = child ? authoring.KINDS[child.kind].label : 'plugin';
+  const oldName = child ? child.name : plugin.pluginName;
+  const typed = await ui.showInputBox({
+    prompt: `New name for the ${label} ${oldName}`,
+    value: oldName,
+    valueSelection: [0, oldName.length],
+    ignoreFocusOut: true,
+    validateInput: (v) => {
+      const t = v.trim();
+      if (t === oldName) {
+        return null;
+      }
+      const bad = child && child.kind === 'mcp' ? authoring.serverNameError(t) : authoring.nameError(t);
+      if (bad) {
+        return bad;
+      }
+      if (!child) {
+        return catalog.plugins.some((p) => p.repoKey === plugin.repoKey && p.pluginName === t)
+          ? `${labelOf(repo)} already has a plugin named ${t}`
+          : null;
+      }
+      return plugin.children.some((c) => c.kind === child.kind && c.name === t)
+        ? `${plugin.pluginName} already has a ${label} named ${t}`
+        : null;
+    },
+  });
+  if (typed === undefined || typed.trim() === oldName) {
+    return;
+  }
+  const newName = typed.trim();
+  const record = repo.kind !== 'drafts';
+  await flushPartials();
+  const result = await enqueue(async () => {
+    // a registered folder that is renamed or deleted gets in the way of Windows and Cursor's watcher: unregister first
+    // (the apply that follows registers again whatever is still wanted)
+    if (!child && registrar) {
+      await registrar.remove(plugin.name);
+    }
+    return withRepoLock(repo, () => {
+      const done = child
+        ? rename.renameItem(
+            { pluginDir: plugin.dir, pluginName: plugin.pluginName, kind: child.kind, name: child.name, file: child.file },
+            newName,
+            { repoDir: repo.dir, record },
+          )
+        : rename.renamePlugin({ dir: plugin.dir, pluginName: plugin.pluginName }, newName, { repoDir: repo.dir, record });
+      if (!child && !done.error) {
+        partialCopies.delete(plugin.name); // its copy must not carry its files back into the old folder
+      }
+      return done;
+    });
+  });
+  if (!result || result.error) {
+    if (result) {
+      ui.showErrorMessage(`Team plugins: ${result.error}`);
+    }
+    await apply(); // a plugin was unregistered above
+    return;
+  }
+  const from = child ? child.id : plugin.name;
+  const to = `${plugin.repo}:${result.id}`;
+  const config = cfg();
+  for (const key of ['enabled', 'excluded']) {
+    const current = stringList(config.get(key));
+    const next = authoring.renameIds(current, from, to);
+    if (JSON.stringify(next) !== JSON.stringify(current)) {
+      await config.update(key, next, vscode.ConfigurationTarget.Global);
+    }
+  }
+  await apply();
+  log(`renamed ${label} ${from} to ${to}`);
+  if (repo.kind === 'managed') {
+    ui
+      .showInformationMessage(
+        `Renamed ${oldName} to ${newName} in ${labelOf(repo)}: it is in the repository's Local changes. Commit and push to share it.`,
+        'Commit and push',
+      )
+      .then((c) =>
+        c === 'Commit and push' ? vscode.commands.executeCommand('teamPlugins.commitAndPush', { repo: repo.key }) : undefined,
+      )
+      .then(undefined, (err) => log(`cannot offer commit and push: ${err.message}`));
+  } else if (repo.kind === 'local') {
+    ui.showInformationMessage(
+      `Renamed ${oldName} to ${newName} in your clone ${repo.dir}: commit and push it with your own git tools.`,
+    );
+  }
+}
+
 // The items of the list without the ones that share a path with an earlier one.
 function uniqueBySrc(list) {
   return list.filter((it, i) => list.findIndex((o) => samePath(o.src, it.src)) === i);
@@ -2302,7 +2447,8 @@ function registerCommands(context) {
   reg('teamPlugins.removeFromProject', (node) => removeFromProjectCommand(node));
   reg('teamPlugins.openItem', (node) => {
     if (node && node.file) {
-      return vscode.window.showTextDocument(vscode.Uri.file(node.file));
+      // like the Explorer's single click: a preview that leaves the focus in the view, so F2 still renames the row
+      return vscode.window.showTextDocument(vscode.Uri.file(node.file), { preview: true, preserveFocus: true });
     }
     return undefined;
   });
@@ -2375,6 +2521,7 @@ function registerCommands(context) {
   reg('teamPlugins.newAgent', (node) => newItemCommand('agent', node));
   reg('teamPlugins.newMcpServer', (node) => newItemCommand('mcp', node));
   reg('teamPlugins.moveDraft', moveDraftCommand);
+  reg('teamPlugins.rename', renameCommand);
   reg('teamPlugins.shareWithTeam', shareCommand);
   reg('teamPlugins.commitAndPush', commitAndPushCommand);
   reg('teamPlugins.pushToBranch', pushToBranchCommand);
