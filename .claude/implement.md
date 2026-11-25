@@ -1,6 +1,7 @@
-# implement-brief: cursor-team-plugins specifics
+# implement: cursor-team-plugins specifics
 
-Read by the user-level `implement-brief` skill.
+Read by the user-level `/implement` skill. Requests and plans follow the skill's default layout (`requests/`,
+`requests/done/`, ideas in `requests/ideas.md`).
 
 ## Checking assumptions
 - Cursor behaviour (plugin API, what gets registered): a throwaway probe extension in the scratchpad, started with
