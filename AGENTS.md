@@ -26,14 +26,18 @@ only the current version, with no history). Internals, platform notes, detailed 
   `suggestName`, `shareNameError`, `shareItem`, `renameSkillName`: copying a project item into a plugin). `git` also
   has `cleanProgress`.
 - `scripts/`: `test.js` (test runner), `zip.js` + `package.js` (VSIX writer), `make-test-repo.js` (bare test team
-  repository for live tests, from `test/fixtures/team-repo`; `--name` gives a copy another repository name), `make_icon.py` (regenerates `resources/icon.png`: three stacked package boxes on a blue rounded square, drawn from no source image: `uv run --with pillow python scripts/make_icon.py`; not packaged). Nothing under `lib/` or `scripts/`
+  repository for live tests, from `test/fixtures/team-repo`; `--name` gives a copy another repository name),
+  `live-test.js` (isolated-Cursor scenario runner, one launch per scenario, root `%TEMP%\tp-live`), `make_icon.py` (regenerates `resources/icon.png`: three stacked package boxes on a blue rounded square, drawn from no source image: `uv run --with pillow python scripts/make_icon.py`; not packaged). Nothing under `lib/` or `scripts/`
   may require `vscode`.
 - `test/`: one test file per module (`*.test.js`, `node:test`), `helpers.js` for fixtures. Tests use only local bare
   git repositories, no network. `fixtures/team-repo/` is the test team repository (plugins `review`: skills
   `code-review`, `security-check`, rule `style.mdc`, command `review-pr`, agent `reviewer` and `mcp.json` with servers
   `lint` and `tickets`; `docs`: skill `write-readme`, with a folded description);
-  `make-test-repo.test.js` checks its catalog, so change the two together. `manual-remote-checks.md` is the hand
-  checklist for the SSH and credential cases that tests can't cover.
+  `make-test-repo.test.js` checks its catalog, so change the two together. `remote.test.js` with `remote-helpers.js`
+  and `fake-ssh.js` runs the remote cases against a fake ssh and a `git http-backend` server, with git isolated from the
+  user's config. `live/` (`runner.js`, the scenarios `*.live.js`) needs Cursor's extension host and is not run by
+  `scripts/test.js`. `manual-remote-checks.md` is the short hand checklist for what these can't cover (the real ssh and
+  credential manager, a protected branch on a real server).
 - `.github/workflows/release.yml`: on a `v*` tag, checks the tag against `package.json`, runs the tests, packages,
   makes a GitHub release with the VSIX and publishes it to Open VSX when the `OVSX_PAT` secret is set (`curl` to
   `https://open-vsx.org/api/-/publish?token=`; no npm).
@@ -50,7 +54,10 @@ ELECTRON_RUN_AS_NODE=1 "$LOCALAPPDATA/Programs/cursor/Cursor.exe" scripts/test.j
 ELECTRON_RUN_AS_NODE=1 "$LOCALAPPDATA/Programs/cursor/Cursor.exe" scripts/package.js
 ELECTRON_RUN_AS_NODE=1 "$LOCALAPPDATA/Programs/cursor/Cursor.exe" --check extension.js
 ELECTRON_RUN_AS_NODE=1 "$LOCALAPPDATA/Programs/cursor/Cursor.exe" scripts/make-test-repo.js <target.git> [--name <marketplace name>]
+ELECTRON_RUN_AS_NODE=1 "$LOCALAPPDATA/Programs/cursor/Cursor.exe" scripts/live-test.js [scenario ...]
 ```
+
+`node scripts/live-test.js [scenario ...]` runs the scenarios of `test/live/` in an isolated Cursor instance.
 
 The VSIX is written to `dist/cursor-team-plugins-<version>.vsix`. The runner passes explicit test files to
 `--test`: with Cursor's runtime a directory argument fails.
@@ -202,10 +209,17 @@ On a Linux machine with a Cursor server (a Remote-SSH host), the suite runs with
   menu's regexes must match (`share.test.js` checks it).
 - A Remote-SSH window's file system has no trash (`workspace.fs.delete` with `useTrash` fails: "provider does not
   support it"): `removeOriginals` deletes for good there, only after a modal confirmation (`vscode.env.remoteName`).
+- Every dialog goes through `ui`. A test runner gets its own `vscode` object, so it can't patch the extension's
+  `vscode.window` (probe, Cursor 3.31). In Test mode (`context.extensionMode`, only under `--extensionTestsPath`) `ui`
+  is a recorder that never blocks, and `activate` returns the test hook. Outside Test mode it returns nothing.
+- The isolated instance exits 0 even when the runner fails, so the result is a file. Settings written during a run
+  persist in the profile, so the script rewrites them.
+- In `remote.test.js` the HTTP server runs in the test process, so a synchronous git against it deadlocks.
 
 ## Rules
 
-- Never run `cursor --install-extension` or launch Cursor from an agent unless the user asks.
+- Never run `cursor --install-extension` or launch the user's own Cursor from an agent unless the user asks;
+  `scripts/live-test.js` (isolated profile under the temp folder, nothing installed) may be run without asking.
 - Don't add dependencies, TypeScript or a bundler.
 - Keep README (user documentation) in step with settings, commands and behaviour; implementation details, platform
   quirks and limits that only matter to developers go to `docs/development.md`, not the README.

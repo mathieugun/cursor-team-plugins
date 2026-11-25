@@ -18,6 +18,44 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
   token stored as the repository secret `OVSX_PAT`. Without the secret the workflow only makes the GitHub release.
 - The README is the extension's details page in Cursor and on Open VSX: a change reaches users with the next release.
 
+## Tests
+
+- **Unit tests** (`scripts/test.js`, `test/*.test.js`): one file per module, `node:test`, only local bare git
+  repositories, no network. CI runs them on a release tag.
+- **`test/remote.test.js`** stands in for a real server, with real git: a fake ssh script (`test/fake-ssh.js`, set
+  through `core.sshCommand`; it prints the real ssh messages for an unknown or changed host key and a refused login, or
+  stays silent) and a node `http` server that runs `git http-backend` behind basic auth (`test/remote-helpers.js`). It
+  covers the classified failures, the idle limit (`idleMs`, shortened to 1.5 s) and the process tree kill, a missing or
+  refused credential, a wrong URL or branch, an offline server (`127.0.0.1:1`), a valid clone and update, and a push
+  refused by a hook or by a read-only server. git is isolated from the user's configuration through environment
+  variables (`GIT_CONFIG_NOSYSTEM`, `GIT_CONFIG_GLOBAL`, `HOME`), so Git Credential Manager and `known_hosts` are never
+  used. The server runs in the test process: a synchronous git against it would deadlock, use only `makeGit`.
+- **`scripts/live-test.js`** runs scenarios in an isolated Cursor instance (own profile and extensions folder, nothing
+  installed, the user's profile untouched). A scenario is `test/live/<name>.live.js`, exporting `{ timeoutSec?,
+  setup(ctx), run(t) }`: `setup` runs in the script's process (it builds repositories with `ctx.makeTestRepo` and
+  returns the `settings` written to the profile, optional `workspaceSettings`, `env` and `data`) and `run` runs in
+  Cursor's extension host, where `test/live/runner.js` gives it `t` (`vscode`, `assert`, `hook`, `data`, `step`,
+  `waitFor`, `idle`, `find`, `git`, `messages`, `noSpinner`, and the readers of Cursor's own logs: `pluginsLog`,
+  `mcpLogs`). The window closes when the runner finishes, and Cursor exits with code 0 even when it fails, so the
+  runner writes `out/<scenario>/result.json`.
+  - Root: `%TEMP%\tp-live` (short: under a long path git hits MAX_PATH). `ud` and `ext` (profile), `repos` and `ws` (the
+    workspace folder, always the same path) are wiped before each scenario; `out/<scenario>/` holds `result.json`,
+    `cursor.log`, `data.json` and, on failure, `logs/` (Cursor's newest session). `out/` is wiped at each start.
+  - Outside the temp folder it writes only `~/.cursor/projects/<slug of %TEMP%\tp-live\ws>` (Cursor makes it for any
+    workspace; leave it).
+  - Usage: `scripts/live-test.js [scenario ...] [--timeout <seconds>]`; Cursor is `CURSOR_EXE`, else the runtime that
+    runs the script, else the default Windows install.
+  - To add a scenario: create `test/live/<name>.live.js` (it must not `require('vscode')`; `run` gets it as `t.vscode`).
+    Answer dialogs with `t.hook.respond(fn)` and read what was shown with `t.messages(kind)`: use **Sync now**
+    (`teamPlugins.syncNow`) to get an error message reliably (a sync that isn't user-initiated shows it once, and the
+    check after a settings change only when the window has focus).
+  - The hook (`activate`'s return value in Test mode only): `calls`, `clearCalls`, `respond` (the scripted answers of
+    the recorder that replaces `ui`), `idle` (nothing in flight for 300 ms), `tree` (labels, icons, checkbox states),
+    `check` (ticks or unticks a node like a click), `registrations`, `decoration`, `states` (per repository),
+    `status` (status bar), `logLines`, `storage` and `logUri`.
+- **By hand** (`test/manual-remote-checks.md`): what needs a real server or the real ssh and credential manager, and
+  the look of the view (icons, colours).
+
 ## How it works
 
 - Every repository of `teamPlugins.repositories` has a managed clone in the extension's global storage, in
