@@ -1,48 +1,58 @@
 # Ideas
 
-Ideas from the 2026-11-22 review, not yet planned. Remote-SSH windows (request 04), several repositories (request 05)
-and a reliable remote repository (request 06) are done (`done/`). Each idea below becomes a numbered request when it's
-picked.
+Ideas not yet planned, reassessed on 2026-11-25 after 0.7.0. Done since the 2026-11-22 review: Remote-SSH windows
+(request 04), several repositories (05), a reliable remote repository (06), commands, agents and MCP servers
+selectable (0.6.0), authoring (08). Each idea below becomes a numbered request when it's picked.
 
 ## Top picks
 
-1. **Review executable changes before they run.** When an update changes hooks, MCP servers or scripts, show the diff
-   and ask before applying it. Today a team commit reaches everyone's agent with no check.
-2. **Open a pull request instead of pushing to main.** After **Push to a branch**, or when a push is refused by branch
-   protection, open the hosting service's page that creates a pull request (GitHub, GitLab, Azure DevOps). Skill
-   changes then get a review.
-3. **"New in the team repo".** Remember which plugins and skills the user has seen, and mark new ones (a badge on the
-   view, a "new" label on the items).
-4. **Team presets and recommended plugins.** The repository declares recommended plugins and named presets
-   ("backend", "data"). A new user gets a sensible selection in one click.
-5. **Pick files to commit, and check before pushing.** Checkboxes in Local changes, plus checks before pushing:
-   frontmatter present, name and description valid, no conflict markers.
+Ranked. The first three make contributing easier, which is what keeps a team repository alive; the fourth is what an
+organisation asks for before rolling the extension out widely.
 
-## Selection and discovery
+1. **Share a project rule or skill with the team.** Team skills usually start as a `.cursor/rules/*.mdc` or
+   `.cursor/skills/<name>/` in one project. A **Share with team...** command (right-click in the Explorer) copies it
+   into a plugin, a draft or a repository, as a new local change. Today that path is manual.
+2. **Checks while editing and before pushing.** Diagnostics in the Problems panel for the files of the clones and
+   drafts: frontmatter missing or not valid YAML, empty `description`, a skill folder that doesn't match its `name`,
+   invalid `mcp.json`, a relative link to a missing file, conflict markers. **Commit and push** runs the same checks
+   first. The agent edits these files: catch its mistakes while it edits, not after the push. With it, pick the files
+   to commit (checkboxes in Local changes).
+3. **Open a pull request after Push to a branch.** Open the hosting service's "new pull request" page for the branch
+   (GitHub, GitLab, Azure DevOps, from the remote URL), also offered when a push is refused. Skill changes then get a
+   review, and users without write access are no longer stuck at "the server refused the push".
+4. **Review executable changes before they run.** When an update changes hooks, MCP servers or scripts, show the diff
+   and ask before applying it. Today a team commit reaches everyone's agent with no check. Follow-up: pin a tag or
+   commit, and roll back the last update.
+5. **Update summary.** After a sync, mark new and changed items in the view (remembering what the user has seen); **What
+   changed** opens a diff per item with its author and date, instead of a list of commits in the log. The item's
+   tooltip says who last changed it, and when.
 
-- Make commands, agents and MCP servers selectable, not only skills and rules.
+## Smaller follow-ups
+
+- **MCP server readiness.** Show on an MCP server item what it needs and is missing: an environment variable it
+  references (a token), its command not on PATH (`npx`, `uvx`, `docker`). Today such a server fails silently in Cursor.
+- **Context cost of the selection.** Per plugin and in total: the size of always-applied rules, the number and length
+  of skill descriptions. A rule's tooltip says how it applies (always, globs, agent-requested).
+- **Presets and project suggestions.** `marketplace.json` declares named presets ("backend", "data") and file patterns
+  per plugin (for example `**/*.py`): a new user picks a preset in one click, a matching project suggests the plugin.
+- **Getting started walkthrough** (`contributes.walkthroughs`): check git, add a repository, pick plugins.
+- **Switch branch** on a repository row: the `{ url, branch }` entry already gives per-user channels (stable, beta);
+  only the command is missing.
 - Search and filter in the view.
-- Project suggestions: a plugin declares file patterns (for example `**/*.py`), and the extension suggests it when a
-  matching project is opened.
-- Show in the view the catalog warnings and the `projectPlugins` entries that match nothing, instead of only in the log.
-- Preview a skill (frontmatter and body) before enabling it.
-
-## Updates and versions
-
-- Pin a tag or commit, and roll back the last update if it broke something.
-- Channels: stable and beta branches, chosen per user.
+- Show in the view the catalog warnings and the `projectPlugins` entries that match nothing, instead of only in the
+  log.
 - Sync when the window gets focus again, if the last check is older than a few minutes.
-- One window runs the update timer for all windows. Mostly done in 0.2.3: a timed sync is skipped when another
-  window synced less than half an interval ago (`recentlySynced`); what's left is one timer instead of one per window.
-- **What changed** opens a real diff of the update, per plugin, instead of a list of commits in the log.
 
-## Authoring and contribution
+## Parked
 
-- Who last changed a skill, and when, in its tooltip.
-- A commit message proposed from the list of changed files.
+- A company index repository that lists the team repositories: only worth it beyond a handful of teams; presets and
+  `projectRepositories` cover discovery meanwhile.
+- A commit message proposed from the list of changed files: small value.
+- Preview a skill before enabling it: clicking an item already opens its file.
+- Usage statistics (which skills the agent actually uses): Cursor exposes no API for it.
 
-## Organisation
+## Dropped
 
-- A company index repository that lists the team repositories, so users subscribe to teams from the view (follow-up
-  to request 05).
-- Self-update: the team repository carries the VSIX, and the extension offers to install a newer one.
+- Self-update from a VSIX carried by the team repository: publishing to Open VSX gives auto-update, local and remote.
+- One window runs the update timer for all windows: `recentlySynced` (0.2.3) already skips redundant syncs; one timer
+  instead of one per window gains little.
