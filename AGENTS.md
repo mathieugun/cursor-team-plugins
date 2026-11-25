@@ -56,7 +56,8 @@ The VSIX is written to `dist/cursor-team-plugins-<version>.vsix`. The runner pas
 `--test`: with Cursor's runtime a directory argument fails.
 
 Branches: work on a branch (`request/<NN>-<name>` for a numbered request, `fix/<name>` for anything else), never
-directly on `main`.
+directly on `main`. Exception: writing or updating a request, a plan before its implementation starts, `ideas.md` or
+the facts of `.claude/implement.md` (no code) is committed directly on `main`.
 When it is ready, merge it into `main` locally (`git merge --no-ff`), push `main` and delete the branch: one
 maintainer, so no pull request.
 

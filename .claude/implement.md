@@ -7,6 +7,15 @@ Read by the user-level `/implement` skill. Requests and plans follow the skill's
 - Cursor behaviour (plugin API, what gets registered): a throwaway probe extension in the scratchpad, started with
   `"$LOCALAPPDATA/Programs/cursor/resources/app/bin/cursor.cmd" --new-window --extensionDevelopmentPath=<probe> <empty folder>`;
   the probe writes its results to a JSON file and closes its window (`workbench.action.closeWindow`).
+- Without touching the user's Cursor (probe, Cursor 3.31, 2026-11-25): an isolated instance,
+  `Cursor.exe --user-data-dir=<root>/ud --extensions-dir=<root>/ext --extensionDevelopmentPath=<repo or probe>
+  --extensionTestsPath=<root>/runner/index.js --disable-workspace-trust --skip-welcome --skip-release-notes
+  --new-window <root>/ws`, settings in `<root>/ud/User/settings.json`. Signed out it still registers extension plugins
+  and starts their MCP servers (a sign-in screen shows, blocking nothing); the window closes when the runner's `run()`
+  settles (7 s for a clone and two plugins). The exit code is 0 even when `run()` rejects: read a result file the
+  runner writes. `<root>` must be short (`%TEMP%\tp1`): under the scratchpad git hits MAX_PATH in the managed clone.
+  Its `Cursor Plugins.log` may be under `exthost/anysphere.cursor-agent-exec`: search `<root>/ud/logs`. Still needs
+  the user's OK (it opens a window).
 - What Cursor did: `%APPDATA%\Cursor\logs\<latest session>\window<N>\exthost\anysphere.cursor-agent-host\Cursor Plugins.log`
   (`Registered extension plugin: <name> from <path>`, `Unregistered extension plugin: <path>`,
   `Plugins reload completed: N plugins loaded (M extension, ...)`).
