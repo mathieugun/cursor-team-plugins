@@ -49,6 +49,10 @@ request 09.)
 - Show in the view the catalog warnings and the `projectPlugins` entries that match nothing, instead of only in the
   log.
 - Sync when the window gets focus again, if the last check is older than a few minutes.
+- Isolated live runs in a Remote-SSH window (not probed).
+- Hiding Cursor's sign-in screen during the isolated live runs.
+- Running `scripts/live-test.js` on Linux or macOS (not checked: the Cursor path and the kill are written for both, but
+  never run).
 
 ## Parked
 

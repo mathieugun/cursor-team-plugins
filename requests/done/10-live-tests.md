@@ -1,6 +1,17 @@
 # Request 10: automated live tests
 
-Raised by the maintainer (2026-11-25), not from `ideas.md`. Plan: `10-live-tests.plan.md` (not written yet).
+Raised by the maintainer (2026-11-25), not from `ideas.md`. Plan: `10-live-tests.plan.md`.
+
+## Decisions (design review, 2026-11-25)
+
+- Scope: layers 1 and 2. Layer 3 (real clicks) is request 11. Remote-SSH runs, hiding the sign-in screen and
+  `live-test.js` on Linux/macOS go to `ideas.md`.
+- The test hook and the `ui` recorder exist only in Test mode (`context.extensionMode`, set only under
+  `--extensionTestsPath`); a normal install returns nothing from `activate`.
+- Agents may run `scripts/live-test.js` without asking (isolated profile under the temp folder, nothing installed);
+  installing in the maintainer's Cursor or launching their profile still needs an OK.
+- Scenarios are `test/live/*.live.js` (they need Cursor's extension host, so `scripts/test.js` must not run them).
+- Version stays 0.8.0 (nothing changes for users).
 
 ## Asked
 

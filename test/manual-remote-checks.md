@@ -1,34 +1,28 @@
 # Manual checks: a remote team repository
 
-Tests can't cover SSH host keys, passphrases and the credential manager, so check them by hand before a release that
-changes the remote code. Use a throw-away repository on a real server (GitHub, GitLab, Azure DevOps) and a Cursor window
-with a clean `teamPlugins.repoUrl`. Each case: setup, action, expected result, the fix, the result after **Sync now**,
-how to restore. In a message the buttons are listed after the text; the log is **Output > Team Plugins**.
+Only the cases below need a real server and the real ssh or credential manager. Everything else is covered by
+`test/remote.test.js` (git level: unknown and changed host key, refused login, silent ssh, missing credentials, refused
+credentials, wrong URL and branch, offline, valid repository, protected and read-only pushes) and by
+`scripts/live-test.js` (messages and buttons in an isolated Cursor). Check these by hand before a release that changes
+the remote code, with a throw-away repository on a real server (GitHub, GitLab, Azure DevOps) and a Cursor window that
+follows it through `teamPlugins.repositories` (never `teamPlugins.repoUrl`, gone since 0.5). Each case: setup, action,
+expected result, the fix, the result after **Sync now**, how to restore. In a message the buttons are listed after the
+text; the log is **Output > Team Plugins**.
 
 Run the commands in Git Bash. `<host>` and `<url>` are the server and the repository URL.
 
-## 1. Unknown host key
+## 1. Unknown host key (Git's bundled ssh)
 
 - Setup: back up `~/.ssh/known_hosts` (`cp ~/.ssh/known_hosts ~/.ssh/known_hosts.bak`), then `ssh-keygen -R <host>`.
-- Action: set `teamPlugins.repoUrl` to the SSH URL of the repository.
+- Action: add the SSH URL of the repository to `teamPlugins.repositories`.
 - Expected: within a second or two, a message "SSH does not know the host key of <host> yet (first connection)" with
   **Open terminal**, **Sync now** and **Show log**. No hang, no spinner left in the status bar.
 - Fix: **Open terminal** (runs `git ls-remote -- <url> HEAD`), compare the fingerprint with the server's published one,
   answer yes.
-- After **Sync now**: the clone runs, "repository cloned".
+- After **Sync now**: the clone runs, "cloned".
 - Restore: `cp ~/.ssh/known_hosts.bak ~/.ssh/known_hosts` (or keep the new entry).
 
-## 2. Changed host key
-
-- Setup: back up `known_hosts`, then replace the line of `<host>` with another key (for example a freshly generated one:
-  `ssh-keygen -t ed25519 -f /tmp/fake -N ""`, then put `<host> <contents of /tmp/fake.pub>` in place of the line).
-- Action: **Sync now**.
-- Expected: "the SSH host key of <host> has changed ..." with **Show log** only, no **Open terminal** and no **Sync
-  now**. The key is never accepted automatically; nothing is synced.
-- Fix: none in the extension (ask the admin; `ssh-keygen -R <host>` then case 1).
-- Restore: put the backup back.
-
-## 3. Key with a passphrase (not supported)
+## 2. Key with a passphrase (not supported)
 
 - Setup: add a passphrase to the key the server accepts: `ssh-keygen -p -f <key>`.
 - Action: **Sync now**.
@@ -39,66 +33,27 @@ Run the commands in Git Bash. `<host>` and `<url>` are the server and the reposi
 - After **Sync now**: updates.
 - Restore: nothing.
 
-## 4. HTTPS without stored credentials
+## 3. HTTPS without stored credentials (Git Credential Manager)
 
 - Setup: erase the stored credentials: `printf 'protocol=https\nhost=<host>\n\n' | git credential-manager erase`.
-- Action: set an HTTPS `teamPlugins.repoUrl`, or **Sync now**.
+- Action: add an HTTPS URL to `teamPlugins.repositories`, or **Sync now**.
 - Expected: "git has no stored credentials for <host> and can't ask for them in the background ..." with **Open
-  terminal** and **Sync now**. No Git Credential Manager window opens, not even a hidden one (check the taskbar).
+  terminal** and **Sync now**. No Git Credential Manager window opens, not even a hidden one (check the taskbar); the
+  log shows "Cannot prompt because user interactivity has been disabled".
 - Fix: **Open terminal**, sign in when the credential manager asks.
 - After **Sync now**: updates.
 - Restore: nothing.
 
-## 5. Refused credentials
-
-- Setup: store a wrong token: `printf 'protocol=https\nhost=<host>\nusername=x\npassword=wrong\n\n' | git credential approve`.
-- Action: **Sync now**.
-- Expected: "<host> refused your credentials (wrong password, or an expired or revoked token) ..." with **Open
-  terminal** and **Sync now**.
-- Fix: `printf 'protocol=https\nhost=<host>\n\n' | git credential reject`, then **Open terminal** and sign in.
-- After **Sync now**: updates.
-- Restore: nothing.
-
-## 6. Server unreachable
-
-- Setup: a clone exists. Turn the network (or the VPN) off.
-- Action: wait for a timed update (set `teamPlugins.updateIntervalMinutes` to 5), then press **Sync now**.
-- Expected: the timed update is quiet (a line "update skipped: cannot reach <host> ..." in the log, no notification);
-  the status bar shows the plug-off icon; the plugins still work. **Sync now** shows "cannot reach <host> ..." with
-  **Sync now**. With no clone yet, the first sync shows the message once.
-- Fix: turn the network back on.
-- After the next retry (5 minutes) or **Sync now**: the icon returns to normal and the clone updates.
-- Restore: the interval setting.
-
-## 7. Wrong URL
-
-- Action: set `teamPlugins.repoUrl` to a URL of a repository that doesn't exist (right host, wrong path).
-- Expected: at once, "repository <url> not found, or you have no access to it ..." with **Set repository URL** and
-  **Show log**; the clone is not started.
-- Restore: set the right URL.
-
-## 8. Wrong branch
-
-- Action: set `teamPlugins.branch` to a branch that doesn't exist.
-- Expected: at once, "branch <name> not found on <url> ..." with **Open settings**.
-- Restore: empty the setting.
-
-## 9. Valid URL
-
-- Action: set `teamPlugins.repoUrl` to a valid URL of a large enough repository.
-- Expected: an information message "<url> is reachable. Cloning it in the background." before the clone finishes, then
-  "repository cloned".
-
-## 10. Push to a protected branch
+## 4. Push to a protected branch (a real server's wording)
 
 - Setup: protect `main` of the throw-away repository (no direct push).
 - Action: change a team skill, **Commit and push**.
 - Expected: "the server refused the push to main (...): a protected branch or a server rule ..." with **Push to a
-  branch** and **Show log**.
+  branch** and **Show log**; the server's own words are in the parentheses.
 - Fix: **Push to a branch**: the branch is pushed, the managed clone is back on the team version.
 - Restore: unprotect `main`; delete the pushed branch.
 
-## 11. Optional: Windows OpenSSH
+## 5. Windows OpenSSH (silent)
 
 - Setup: back up the setting (`git config --global core.sshCommand`), then
   `git config --global core.sshCommand C:/Windows/System32/OpenSSH/ssh.exe`, and an unknown host (case 1 setup).

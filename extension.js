@@ -53,6 +53,23 @@ const LOCKED_CODES = ['EBUSY', 'EPERM', 'EACCES'];
 const OFFLINE_RETRY_MS = 5 * 60 * 1000;
 const OLD_EXTENSION_ID = 'mg.cursor-team-plugins'; // the publisher was `mg` up to 0.4.0
 
+// Every dialog goes through `ui`: in Test mode (scripts/live-test.js) it is replaced by a recorder that never
+// blocks; otherwise it is vscode.window's own.
+const realUi = {
+  showInformationMessage: (...a) => vscode.window.showInformationMessage(...a),
+  showWarningMessage: (...a) => vscode.window.showWarningMessage(...a),
+  showErrorMessage: (...a) => vscode.window.showErrorMessage(...a),
+  showQuickPick: (...a) => vscode.window.showQuickPick(...a),
+  showInputBox: (...a) => vscode.window.showInputBox(...a),
+  showOpenDialog: (...a) => vscode.window.showOpenDialog(...a),
+  showWorkspaceFolderPick: (...a) => vscode.window.showWorkspaceFolderPick(...a),
+};
+let ui = realUi;
+let testMode = false; // the extension runs under --extensionTestsPath (scripts/live-test.js)
+const testLog = []; // Test mode: the lines of the log, without their timestamp
+const testCalls = []; // Test mode: the dialogs shown, as recorded by the test `ui`
+let testResponder = () => undefined;
+
 let output;
 let statusItem;
 let treeProvider;
@@ -91,6 +108,12 @@ const loggedWarnings = new Set();
 function log(message) {
   if (output) {
     output.appendLine(`[${new Date().toISOString()}] ${message}`);
+  }
+  if (testMode) {
+    testLog.push(message);
+    if (testLog.length > 5000) {
+      testLog.shift();
+    }
   }
 }
 
@@ -370,7 +393,7 @@ async function syncRepo(d, run, { userInitiated, check }) {
         s.lastResult = c;
         checkFailed = true;
       } else if (vscode.window.state.focused) {
-        vscode.window.showInformationMessage(
+        ui.showInformationMessage(
           `Team plugins: ${d.url} is reachable${c.empty ? ' (empty repository)' : ''}. ${
             hadClone ? 'Updating' : 'Cloning'
           } it in the background.`,
@@ -451,7 +474,7 @@ function showRemoteError(result, d) {
     machine && MACHINE_REASONS.includes(result.reason)
       ? ` This window is connected to ${machine}: git runs there, with that machine's credentials and SSH keys.`
       : '';
-  vscode.window
+  ui
     .showErrorMessage(`Team plugins (${labelOf(d)}): ${result.message}${suffix}`, ...ids.map((id) => ACTIONS[id].label))
     .then((choice) => {
       const id = ids.find((i) => ACTIONS[i].label === choice);
@@ -501,7 +524,7 @@ function notifyAfterSync(result, d, { hadClone, userInitiated, run }) {
     s.errorShown = false; // a recovery re-arms the error notice
   }
   const name = labelOf(d);
-  const ask = (kind, message, ...buttons) => vscode.window[kind](message, ...buttons);
+  const ask = (kind, message, ...buttons) => ui[kind](message, ...buttons);
   switch (result.kind) {
     case 'cloned':
       if (!hadClone) {
@@ -724,7 +747,7 @@ function checkProjectRepositories(project) {
       continue;
     }
     missingNotified.add(e.normalized);
-    vscode.window
+    ui
       .showInformationMessage(
         `Team plugins: this project uses plugins from ${e.name || baseName(e.url)} (${e.url}), which you don't follow.`,
         'Add repository',
@@ -815,7 +838,7 @@ function hasChanges(state) {
 // Reports a local-changes read failure (true) so a command never says "nothing to commit" when git failed.
 function changesUnreadable(state, d) {
   if (state.changes && state.changes.error) {
-    vscode.window
+    ui
       .showErrorMessage(`Team plugins: cannot read the local changes of ${labelOf(d)}: ${state.changes.error}`, 'Show log')
       .then((choice) => (choice === 'Show log' ? output.show() : undefined));
     return true;
@@ -833,7 +856,7 @@ function warnDroppedConflicts(before, after) {
       continue;
     }
     log(`partial copy of ${entry.plugin.name} dropped with ${n} unresolved conflict(s): ${entry.copyRoot}`);
-    vscode.window
+    ui
       .showWarningMessage(
         `Team plugins: the partial copy of ${entry.plugin.name} is no longer used, with ${n} conflict(s) never resolved. Its versions of those files stay in its folder for a week.`,
         'Open files',
@@ -844,7 +867,7 @@ function warnDroppedConflicts(before, after) {
         }
         const files = entry.conflicts.map((c) => c.copy).filter((f) => fs.existsSync(f));
         if (files.length === 0) {
-          vscode.window.showInformationMessage(
+          ui.showInformationMessage(
             `The partial copy deleted these files: ${entry.conflicts.map((c) => c.rel).join(', ')}. Folder: ${entry.copyRoot}`,
           );
           return;
@@ -889,7 +912,7 @@ function updateConflicts() {
   if (fresh.length === 1) {
     const c = fresh[0];
     const node = buildConflictsNode([c], c.repo).children[0];
-    vscode.window
+    ui
       .showWarningMessage(
         `Team plugins: ${c.plugin}/${c.rel} was changed both in the repository and in a partial copy since the last sync. Both versions are kept until you choose one.`,
         'Compare',
@@ -909,7 +932,7 @@ function updateConflicts() {
         return undefined;
       });
   } else if (fresh.length > 1) {
-    vscode.window
+    ui
       .showWarningMessage(
         `Team plugins: ${fresh.length} files were changed both in the repository and in a partial copy since the last sync. Both versions are kept until you choose one in the Conflicts group.`,
         'Show conflicts',
@@ -1303,12 +1326,12 @@ async function onCheckboxChange(e) {
 async function addToProjectCommand(node) {
   const folders = vscode.workspace.workspaceFolders || [];
   if (folders.length === 0) {
-    vscode.window.showErrorMessage('Open a folder first: project plugins are saved in its .vscode/settings.json.');
+    ui.showErrorMessage('Open a folder first: project plugins are saved in its .vscode/settings.json.');
     return;
   }
   let folder = folders[0];
   if (folders.length > 1) {
-    folder = await vscode.window.showWorkspaceFolderPick();
+    folder = await ui.showWorkspaceFolderPick();
     if (!folder) {
       return;
     }
@@ -1562,7 +1585,7 @@ async function pickRepo(arg, { filter = () => true, placeHolder } = {}) {
   if (list.length === 1) {
     return list[0];
   }
-  const picked = await vscode.window.showQuickPick(
+  const picked = await ui.showQuickPick(
     list.map((d) => ({ label: labelOf(d), description: d.source, d })),
     { placeHolder },
   );
@@ -1585,7 +1608,7 @@ async function addRepositoryEntry({ url, branch }) {
   const config = cfg();
   const normalized = normalizeUrl(url);
   if (parseRepositories(config.get('repositories')).some((e) => normalizeUrl(e.url) === normalized)) {
-    vscode.window.showInformationMessage(`Team plugins: ${url} is already in teamPlugins.repositories.`);
+    ui.showInformationMessage(`Team plugins: ${url} is already in teamPlugins.repositories.`);
     return;
   }
   const next = [...globalList(config, 'repositories'), branch ? { url, branch } : { url }];
@@ -1593,7 +1616,7 @@ async function addRepositoryEntry({ url, branch }) {
 }
 
 async function addLocalRepositoryCommand() {
-  const picked = await vscode.window.showOpenDialog({ canSelectFolders: true, canSelectFiles: false, canSelectMany: false });
+  const picked = await ui.showOpenDialog({ canSelectFolders: true, canSelectFiles: false, canSelectMany: false });
   if (!picked || picked.length === 0) {
     return;
   }
@@ -1601,7 +1624,7 @@ async function addLocalRepositoryCommand() {
   const config = cfg();
   const normalized = normalizeUrl(folder);
   if (parseLocalRepositories(config.get('localRepositories')).some((p) => normalizeUrl(p) === normalized)) {
-    vscode.window.showInformationMessage(`Team plugins: ${folder} is already in teamPlugins.localRepositories.`);
+    ui.showInformationMessage(`Team plugins: ${folder} is already in teamPlugins.localRepositories.`);
     return;
   }
   await config.update(
@@ -1620,7 +1643,7 @@ async function removeRepositoryCommand(arg) {
     d.kind === 'managed'
       ? `Its plugins are unregistered. Its clone stays in ${d.dir}${hasChanges(stateOf(d.key)) ? ', with your local changes' : ''}.`
       : 'Its plugins are unregistered. Your clone is not touched.';
-  const choice = await vscode.window.showWarningMessage(`Stop following ${labelOf(d)}?`, { modal: true, detail }, 'Remove');
+  const choice = await ui.showWarningMessage(`Stop following ${labelOf(d)}?`, { modal: true, detail }, 'Remove');
   if (choice !== 'Remove') {
     return;
   }
@@ -1664,7 +1687,7 @@ function targetPickItem(d) {
 function withRepoLock(d, fn) {
   const locked = sync.withLockSync(d.lockFile, fn);
   if (locked.kind === 'busy') {
-    vscode.window.showWarningMessage(BUSY_TEXT);
+    ui.showWarningMessage(BUSY_TEXT);
     return null;
   }
   return locked.value;
@@ -1704,14 +1727,14 @@ async function createPluginFlow(arg) {
     if (given.kind !== 'drafts') {
       target = authoringTargets().find((d) => d.key === given.key);
       if (!target) {
-        vscode.window.showInformationMessage(
+        ui.showInformationMessage(
           `Team plugins: ${labelOf(given)} is not available yet (not cloned, listed twice or replaced).`,
         );
         return null;
       }
     }
   } else {
-    const picked = await vscode.window.showQuickPick(
+    const picked = await ui.showQuickPick(
       [
         { label: 'drafts', description: 'only on this machine: move it to a repository when it is ready', d: null },
         ...authoringTargets().map(targetPickItem),
@@ -1723,7 +1746,7 @@ async function createPluginFlow(arg) {
     }
     target = picked.d;
   }
-  const name = await vscode.window.showInputBox({
+  const name = await ui.showInputBox({
     prompt: 'Plugin name',
     placeHolder: 'my-plugin',
     ignoreFocusOut: true,
@@ -1732,7 +1755,7 @@ async function createPluginFlow(arg) {
   if (name === undefined) {
     return null;
   }
-  const description = await vscode.window.showInputBox({ prompt: 'Plugin description (optional)', ignoreFocusOut: true });
+  const description = await ui.showInputBox({ prompt: 'Plugin description (optional)', ignoreFocusOut: true });
   if (description === undefined) {
     return null;
   }
@@ -1751,7 +1774,7 @@ async function createPluginFlow(arg) {
     return null;
   }
   if (result.error) {
-    vscode.window.showErrorMessage(`Team plugins: ${result.error}`);
+    ui.showErrorMessage(`Team plugins: ${result.error}`);
     return null;
   }
   const repo = target ? labelOf(target) : 'drafts';
@@ -1769,7 +1792,7 @@ async function newPluginCommand(arg) {
   await apply();
   await enableNew(`${repo}:${pluginName}`);
   await vscode.window.showTextDocument(vscode.Uri.file(path.join(dir, '.cursor-plugin', 'plugin.json')));
-  vscode.window
+  ui
     .showInformationMessage(
       `Created plugin ${pluginName} in ${repo}. Add a skill, rule, command, agent or MCP server from its context menu.`,
       'New skill',
@@ -1789,10 +1812,10 @@ async function newItemCommand(kind, node) {
     plugin = catalog.plugins.find((p) => p.name === node.key);
   } else {
     if (catalog.plugins.length === 0) {
-      vscode.window.showInformationMessage('No plugin to add it to: create one with New plugin.');
+      ui.showInformationMessage('No plugin to add it to: create one with New plugin.');
       return;
     }
-    const picked = await vscode.window.showQuickPick(
+    const picked = await ui.showQuickPick(
       catalog.plugins.map((p) => ({ label: p.name, description: p.description, p })),
       { placeHolder: `Plugin to add the ${K.label} to` },
     );
@@ -1803,14 +1826,14 @@ async function newItemCommand(kind, node) {
   }
   const declared = authoring.declaredPathsError(plugin, kind);
   if (declared) {
-    vscode.window.showErrorMessage(`Team plugins: ${declared}`);
+    ui.showErrorMessage(`Team plugins: ${declared}`);
     return;
   }
   const repo = descs.find((d) => d.key === plugin.repoKey);
   if (!repo) {
     return;
   }
-  const name = await vscode.window.showInputBox({
+  const name = await ui.showInputBox({
     prompt: `${K.label.charAt(0).toUpperCase()}${K.label.slice(1)} name`,
     ignoreFocusOut: true,
     validateInput: (v) => {
@@ -1830,7 +1853,7 @@ async function newItemCommand(kind, node) {
   let description = '';
   let entry = null;
   if (kind === 'mcp') {
-    const how = await vscode.window.showQuickPick(
+    const how = await ui.showQuickPick(
       [
         { label: 'Command', description: 'a program the agent starts (stdio)' },
         { label: 'URL', description: 'a server already running (HTTP)' },
@@ -1841,7 +1864,7 @@ async function newItemCommand(kind, node) {
       return;
     }
     if (how.label === 'Command') {
-      const command = await vscode.window.showInputBox({
+      const command = await ui.showInputBox({
         prompt: 'Command line, for example: npx -y my-mcp-server',
         ignoreFocusOut: true,
         validateInput: (v) => {
@@ -1854,7 +1877,7 @@ async function newItemCommand(kind, node) {
       }
       entry = authoring.mcpEntry({ command });
     } else {
-      const url = await vscode.window.showInputBox({
+      const url = await ui.showInputBox({
         prompt: 'Server URL',
         ignoreFocusOut: true,
         validateInput: (v) => (/^https?:\/\/\S+$/i.test(v.trim()) ? null : 'Enter an http:// or https:// URL'),
@@ -1865,7 +1888,7 @@ async function newItemCommand(kind, node) {
       entry = authoring.mcpEntry({ url: url.trim() });
     }
   } else {
-    const typed = await vscode.window.showInputBox({
+    const typed = await ui.showInputBox({
       prompt: `What the ${K.label} is for (shown to the agent and in the view)`,
       ignoreFocusOut: true,
       validateInput: (v) => (v.trim() ? null : 'Enter a description'),
@@ -1887,7 +1910,7 @@ async function newItemCommand(kind, node) {
     return;
   }
   if (result.error) {
-    vscode.window.showErrorMessage(`Team plugins: ${result.error}`);
+    ui.showErrorMessage(`Team plugins: ${result.error}`);
     return;
   }
   await apply();
@@ -1917,10 +1940,10 @@ async function moveDraftCommand(node) {
   } else {
     const drafts = catalog.plugins.filter(isDraft);
     if (drafts.length === 0) {
-      vscode.window.showInformationMessage('There is no draft plugin: create one with New plugin.');
+      ui.showInformationMessage('There is no draft plugin: create one with New plugin.');
       return;
     }
-    const picked = await vscode.window.showQuickPick(
+    const picked = await ui.showQuickPick(
       drafts.map((p) => ({ label: p.pluginName, description: p.description, p })),
       { placeHolder: 'Draft plugin to move' },
     );
@@ -1931,10 +1954,10 @@ async function moveDraftCommand(node) {
   }
   const targets = authoringTargets();
   if (targets.length === 0) {
-    vscode.window.showInformationMessage('Follow a repository or add your own clone first.');
+    ui.showInformationMessage('Follow a repository or add your own clone first.');
     return;
   }
-  const picked = await vscode.window.showQuickPick(targets.map(targetPickItem), {
+  const picked = await ui.showQuickPick(targets.map(targetPickItem), {
     placeHolder: `Repository to move ${plugin.pluginName} to`,
   });
   if (!picked) {
@@ -1945,7 +1968,7 @@ async function moveDraftCommand(node) {
     target.kind === 'managed'
       ? 'The draft is deleted. In the managed clone the plugin is a local change: commit and push it to share it with the team.'
       : 'The draft is deleted. The plugin is copied into your clone: commit and push it with your own git tools.';
-  const choice = await vscode.window.showWarningMessage(
+  const choice = await ui.showWarningMessage(
     `Move ${plugin.pluginName} to ${labelOf(target)}?`,
     { modal: true, detail },
     'Move',
@@ -1966,7 +1989,7 @@ async function moveDraftCommand(node) {
         authoring.movePlugin(plugin.dir, plugin.pluginName, plugin.description, target.dir),
       );
       if (locked.kind === 'busy') {
-        vscode.window.showWarningMessage(BUSY_TEXT);
+        ui.showWarningMessage(BUSY_TEXT);
         return null;
       }
       if (!locked.value.error) {
@@ -1977,7 +2000,7 @@ async function moveDraftCommand(node) {
   });
   if (!result || result.error) {
     if (result) {
-      vscode.window.showErrorMessage(`Team plugins: ${result.error}`);
+      ui.showErrorMessage(`Team plugins: ${result.error}`);
     }
     await apply(); // the draft was unregistered above
     return;
@@ -1994,12 +2017,12 @@ async function moveDraftCommand(node) {
   await apply();
   log(`moved draft ${plugin.pluginName} to ${labelOf(target)} (${result.dir})`);
   if (result.leftover) {
-    vscode.window.showWarningMessage(
+    ui.showWarningMessage(
       `Team plugins: ${plugin.pluginName} was copied, but its draft folder could not be removed yet: ${result.leftover}. Reload the Cursor windows, then delete it if it is still there.`,
     );
   }
   if (target.kind === 'managed') {
-    vscode.window
+    ui
       .showInformationMessage(
         `Moved ${plugin.pluginName} to ${labelOf(target)}: it is in the repository's Local changes. Commit and push to share it.`,
         'Commit and push',
@@ -2009,7 +2032,7 @@ async function moveDraftCommand(node) {
       )
       .then(undefined, (err) => log(`cannot offer commit and push: ${err.message}`));
   } else {
-    vscode.window.showInformationMessage(
+    ui.showInformationMessage(
       `Moved ${plugin.pluginName} to your clone ${target.dir}: commit and push it with your own git tools.`,
     );
   }
@@ -2033,7 +2056,7 @@ async function itemsToShare(uri, uris) {
       }
     }
     if (items.length === 0) {
-      vscode.window.showInformationMessage('Team plugins: only a rule, skill, command or agent of a .cursor folder can be shared.');
+      ui.showInformationMessage('Team plugins: only a rule, skill, command or agent of a .cursor folder can be shared.');
     }
     return uniqueBySrc(items);
   }
@@ -2055,14 +2078,14 @@ async function itemsToShare(uri, uris) {
   }
   const items = uniqueBySrc(all);
   if (items.length === 0) {
-    vscode.window.showInformationMessage(
+    ui.showInformationMessage(
       "Team plugins: no rule, skill, command or agent found in this project's .cursor folder or in ~/.cursor.",
     );
     return [];
   }
   const editor = vscode.window.activeTextEditor;
   const active = editor ? share.shareableItem(editor.document.uri.fsPath) : null;
-  const picked = await vscode.window.showQuickPick(
+  const picked = await ui.showQuickPick(
     items.map((item) => ({
       label: item.name,
       description: `${authoring.KINDS[item.kind].label} · ${item.where}`,
@@ -2080,7 +2103,7 @@ async function shareCommand(uri, uris) {
   if (items.length === 0) {
     return;
   }
-  const dest = await vscode.window.showQuickPick(
+  const dest = await ui.showQuickPick(
     [
       { label: '$(add) New plugin...', newPlugin: true },
       ...catalog.plugins.map((p) => ({ label: p.name, description: p.description, p })),
@@ -2100,7 +2123,7 @@ async function shareCommand(uri, uris) {
     await apply();
     plugin = catalog.plugins.find((p) => p.name === `${created.repo}:${created.pluginName}`);
     if (!plugin) {
-      vscode.window.showErrorMessage('Team plugins: the new plugin is not in the catalog yet: try again.');
+      ui.showErrorMessage('Team plugins: the new plugin is not in the catalog yet: try again.');
       return;
     }
     isNewPlugin = true;
@@ -2108,7 +2131,7 @@ async function shareCommand(uri, uris) {
   for (const kind of new Set(items.map((item) => item.kind))) {
     const declared = authoring.declaredPathsError(plugin, kind);
     if (declared) {
-      vscode.window.showErrorMessage(`Team plugins: ${declared}`);
+      ui.showErrorMessage(`Team plugins: ${declared}`);
       return;
     }
   }
@@ -2125,7 +2148,7 @@ async function shareCommand(uri, uris) {
     let name = item.name;
     const bad = share.shareNameError(plugin.dir, item.kind, name);
     if (bad || taken(name)) {
-      const typed = await vscode.window.showInputBox({
+      const typed = await ui.showInputBox({
         prompt: `Name for the ${label} ${item.name} in ${plugin.pluginName}: ${bad || takenText(name)}`,
         value: share.suggestName(item.name),
         ignoreFocusOut: true,
@@ -2151,7 +2174,7 @@ async function shareCommand(uri, uris) {
   const shared = []; // { item, name, result }
   results.forEach((result, i) => {
     if (result.error) {
-      vscode.window.showErrorMessage(`Team plugins: could not share ${items[i].name}: ${result.error}`);
+      ui.showErrorMessage(`Team plugins: could not share ${items[i].name}: ${result.error}`);
     } else {
       shared.push({ item: items[i], name: names[i], result });
     }
@@ -2178,7 +2201,7 @@ async function shareCommand(uri, uris) {
   }
   const skipped = shared.flatMap(({ name, result }) => result.skipped.map((rel) => `${name}/${rel}`));
   if (skipped.length > 0) {
-    vscode.window.showWarningMessage(`Team plugins: links are not copied: ${skipped.join(', ')}`);
+    ui.showWarningMessage(`Team plugins: links are not copied: ${skipped.join(', ')}`);
   }
   if (shared.length === 1) {
     await vscode.window.showTextDocument(vscode.Uri.file(shared[0].result.file));
@@ -2203,7 +2226,7 @@ async function shareCommand(uri, uris) {
   } else {
     text = `Copied ${what} to ${plugin.name} in your clone: commit and push it with your own git tools.`;
   }
-  vscode.window
+  ui
     .showInformationMessage(text, ...buttons, removeLabel)
     .then(async (choice) => {
       if (choice === 'Commit and push') {
@@ -2220,7 +2243,7 @@ async function shareCommand(uri, uris) {
 async function removeOriginals(shared, pluginName, remote) {
   if (remote) {
     const paths = shared.map(({ item }) => item.src);
-    const choice = await vscode.window.showWarningMessage(
+    const choice = await ui.showWarningMessage(
       shared.length === 1 ? `Delete ${paths[0]} for good?` : `Delete the ${paths.length} originals for good?`,
       {
         modal: true,
@@ -2238,7 +2261,7 @@ async function removeOriginals(shared, pluginName, remote) {
       log(`${remote ? 'deleted' : 'moved to the trash'}: ${item.src}`);
     } catch (err) {
       const how = remote ? 'delete' : 'move';
-      vscode.window.showErrorMessage(
+      ui.showErrorMessage(
         `Team plugins: could not ${how} ${item.src}${remote ? '' : ' to the trash'}: ${err.message}`,
       );
     }
@@ -2251,7 +2274,7 @@ function registerCommands(context) {
   reg('teamPlugins.syncNow', () => refresh({ sync: true, userInitiated: true }));
   reg('teamPlugins.openRepo', async (arg) => {
     if (listConfigured().length === 0) {
-      vscode.window.showInformationMessage('No repository configured.');
+      ui.showInformationMessage('No repository configured.');
       return;
     }
     const d = await pickRepo(arg, { filter: (x) => !x.duplicateOf, placeHolder: 'Repository to open' });
@@ -2261,7 +2284,7 @@ function registerCommands(context) {
   });
   reg('teamPlugins.showLog', () => output.show());
   reg('teamPlugins.addRepository', async () => {
-    const value = await vscode.window.showInputBox({
+    const value = await ui.showInputBox({
       prompt: 'Git URL of a team plugins repository',
       ignoreFocusOut: true,
       validateInput: (v) => (v.trim() ? null : 'Enter a Git URL'),
@@ -2285,18 +2308,18 @@ function registerCommands(context) {
   });
   reg('teamPlugins.discardLocalChanges', async (arg) => {
     if (!listConfigured().some(isManaged)) {
-      vscode.window.showInformationMessage(NO_CLONE);
+      ui.showInformationMessage(NO_CLONE);
       return;
     }
     await flushPartials();
     await refreshChanges();
     const d = await pickRepo(arg, { filter: hasWork, placeHolder: 'Repository whose local changes to discard' });
     if (!d) {
-      vscode.window.showInformationMessage('Nothing to discard.');
+      ui.showInformationMessage('Nothing to discard.');
       return;
     }
     if (d.kind !== 'managed') {
-      vscode.window.showInformationMessage(NO_CLONE);
+      ui.showInformationMessage(NO_CLONE);
       return;
     }
     const s = stateOf(d.key);
@@ -2304,7 +2327,7 @@ function registerCommands(context) {
       return;
     }
     if (!hasChanges(s)) {
-      vscode.window.showInformationMessage('Nothing to discard.');
+      ui.showInformationMessage('Nothing to discard.');
       return;
     }
     const { changes } = s;
@@ -2316,7 +2339,7 @@ function registerCommands(context) {
     if (changes.ahead > 0) {
       detail += `\n${changes.ahead} unpushed commit(s)`;
     }
-    const choice = await vscode.window.showWarningMessage(
+    const choice = await ui.showWarningMessage(
       `Discard all local changes in the managed clone of ${labelOf(d)}?`,
       { modal: true, detail },
       'Discard',
@@ -2339,9 +2362,9 @@ function registerCommands(context) {
     result = result || { ok: false, message: UNEXPECTED.message };
     log(`discard local changes of ${labelOf(d)}: ${result.message}`);
     if (result.busy) {
-      vscode.window.showWarningMessage(BUSY_TEXT);
+      ui.showWarningMessage(BUSY_TEXT);
     } else if (!result.ok) {
-      vscode.window.showErrorMessage(`Team plugins: ${result.message}`);
+      ui.showErrorMessage(`Team plugins: ${result.message}`);
     }
     await refresh({ sync: true, userInitiated: true, keys: new Set([d.key]) });
   });
@@ -2433,7 +2456,7 @@ async function resolveConflictCommand(node, keep) {
     keep === 'source'
       ? [`Keep the repository version of ${node.plugin}/${node.rel}?`, "The partial copy's version is replaced.", 'Keep repository version']
       : [`Keep the partial copy version of ${node.plugin}/${node.rel}?`, "The repository's version is replaced.", 'Keep copy version'];
-  const choice = await vscode.window.showWarningMessage(message, { modal: true, detail }, button);
+  const choice = await ui.showWarningMessage(message, { modal: true, detail }, button);
   if (choice !== button) {
     return;
   }
@@ -2445,7 +2468,7 @@ async function resolveConflictCommand(node, keep) {
         return;
       }
       if (!(entry.conflicts || []).some((c) => c.rel === node.rel)) {
-        vscode.window.showInformationMessage(`${node.plugin}/${node.rel} is no longer in conflict.`);
+        ui.showInformationMessage(`${node.plugin}/${node.rel} is no longer in conflict.`);
         return;
       }
       const lockFile = lockOf(entry.plugin.repoKey);
@@ -2455,7 +2478,7 @@ async function resolveConflictCommand(node, keep) {
       }
       const locked = sync.withLockSync(lockFile, () => resolveConflict(entry.plugin, entry.ids, entry.holder, node.rel, keep));
       if (locked.kind === 'busy') {
-        vscode.window.showWarningMessage(BUSY_TEXT);
+        ui.showWarningMessage(BUSY_TEXT);
         return;
       }
       const a = locked.value;
@@ -2465,13 +2488,13 @@ async function resolveConflictCommand(node, keep) {
       await refreshChanges();
       updateStatus();
     } catch (err) {
-      vscode.window.showErrorMessage(`Team plugins: ${err.message}`);
+      ui.showErrorMessage(`Team plugins: ${err.message}`);
     }
   });
 }
 
 function askCommitMessage(d) {
-  return vscode.window.showInputBox({
+  return ui.showInputBox({
     prompt: `Commit message for your changes to ${labelOf(d)}`,
     placeHolder: 'Update the review skill',
     ignoreFocusOut: true,
@@ -2483,13 +2506,13 @@ function askCommitMessage(d) {
 function reportContribution(result, nothingText, d) {
   switch (result.kind) {
     case 'pushed':
-      vscode.window.showInformationMessage(
+      ui.showInformationMessage(
         `Pushed ${String(result.head).slice(0, 7)} to ${result.branch}: the team gets it at their next sync.`,
       );
       break;
     case 'pushedBranch': {
       const merge = `git fetch ${result.remote}\ngit merge ${result.remote}/${result.branch}`;
-      vscode.window
+      ui
         .showInformationMessage(
           `Pushed your changes to branch ${result.branch}. The managed clone is back on the team version. To merge, in your own clone: git fetch ${result.remote} && git merge ${result.remote}/${result.branch}`,
           'Copy merge commands',
@@ -2498,13 +2521,13 @@ function reportContribution(result, nothingText, d) {
       break;
     }
     case 'nothing':
-      vscode.window.showInformationMessage(nothingText);
+      ui.showInformationMessage(nothingText);
       break;
     case 'busy':
-      vscode.window.showWarningMessage(BUSY_TEXT);
+      ui.showWarningMessage(BUSY_TEXT);
       break;
     case 'conflict':
-      vscode.window
+      ui
         .showWarningMessage(
           `Your commit conflicts with team changes in ${result.files.join(', ')}. It is kept in the managed clone but not pushed.`,
           'Push to a branch',
@@ -2528,18 +2551,18 @@ function reportContribution(result, nothingText, d) {
 // Flushes the partial copies first, so that the changes include the edits still waiting for the watcher.
 async function pickToContribute(arg, { placeHolder, nothingText }) {
   if (!listConfigured().some(isManaged)) {
-    vscode.window.showInformationMessage(NOT_MANAGED);
+    ui.showInformationMessage(NOT_MANAGED);
     return undefined;
   }
   await flushPartials();
   await refreshChanges();
   const d = await pickRepo(arg, { filter: hasWork, placeHolder });
   if (!d) {
-    vscode.window.showInformationMessage(nothingText);
+    ui.showInformationMessage(nothingText);
     return undefined;
   }
   if (d.kind !== 'managed') {
-    vscode.window.showInformationMessage(NOT_MANAGED);
+    ui.showInformationMessage(NOT_MANAGED);
     return undefined;
   }
   const s = stateOf(d.key);
@@ -2547,7 +2570,7 @@ async function pickToContribute(arg, { placeHolder, nothingText }) {
     return undefined;
   }
   if (!hasChanges(s)) {
-    vscode.window.showInformationMessage(nothingText);
+    ui.showInformationMessage(nothingText);
     return undefined;
   }
   return d;
@@ -2570,7 +2593,7 @@ async function commitAndPushCommand(arg) {
     }
     message = typed.trim();
   } else {
-    const choice = await vscode.window.showWarningMessage(
+    const choice = await ui.showWarningMessage(
       `Push ${changes.ahead} unpushed commit(s) of ${labelOf(d)} to the team?`,
       { modal: true },
       'Push',
@@ -2607,7 +2630,7 @@ async function pushToBranchCommand(arg) {
   const { changes } = stateOf(d.key);
   const run = makeGit(gitPath());
   const name = await run(['config', 'user.name'], d.dir);
-  const branch = await vscode.window.showInputBox({
+  const branch = await ui.showInputBox({
     prompt: 'Branch to push your changes to (merge it later from your own clone)',
     value: contribute.defaultBranchName(name.stdout, new Date()),
     ignoreFocusOut: true,
@@ -2660,15 +2683,14 @@ function warnOldExtension() {
   const text = `The old Team plugins extension (${OLD_EXTENSION_ID}) is still installed: both register the same plugins, so the new one stays inactive. Uninstall the old one, then reload the window.`;
   log(text);
   // The extensions view's search can't find it by id (it matches names and descriptions): uninstall it from here.
-  vscode.window
-    .showWarningMessage(text, 'Uninstall it')
+  ui.showWarningMessage(text, 'Uninstall it')
     .then(async (choice) => {
       if (choice !== 'Uninstall it') {
         return;
       }
       await vscode.commands.executeCommand('workbench.extensions.uninstallExtension', OLD_EXTENSION_ID);
       log(`uninstalled ${OLD_EXTENSION_ID}`);
-      const reload = await vscode.window.showInformationMessage(
+      const reload = await ui.showInformationMessage(
         `${OLD_EXTENSION_ID} is uninstalled. Reload the window to finish.`,
         'Reload window',
       );
@@ -2678,14 +2700,222 @@ function warnOldExtension() {
     })
     .then(undefined, (err) => {
       log(`old extension uninstall error: ${err.message}`);
-      vscode.window.showErrorMessage(
+      ui.showErrorMessage(
         `Could not uninstall ${OLD_EXTENSION_ID}: ${err.message}. Uninstall "Team plugins" by mg from the Extensions view.`,
       );
     });
   return true;
 }
 
+// One checkbox click at a time: each reads the selection after the previous click's settings write.
+function queueCheckboxChange(e) {
+  checkboxChain = checkboxChain
+    .then(() => onCheckboxChange(e))
+    .catch((err) => log(`checkbox error: ${err.message}`));
+  return checkboxChain;
+}
+
+// ---- Test mode (scripts/live-test.js) ---------------------------------------------------------------------------
+
+// The `ui` of Test mode: records every dialog and answers it through the responder, never waiting for anyone.
+function makeTestUi() {
+  const push = (record) => {
+    testCalls.push(record);
+    if (testCalls.length > 1000) {
+      testCalls.shift();
+    }
+  };
+  const pickLabel = (item) => (typeof item === 'string' ? item : item && item.label);
+  const printable = (answer) => {
+    if (answer === undefined || answer === null) {
+      return null;
+    }
+    return typeof answer === 'string' ? answer : JSON.stringify(answer);
+  };
+  // fn(args) -> { record, answer: (the responder's answer) => the value to return }
+  const make = (name, prepare) => async (...args) => {
+    const prepared = await prepare(args);
+    const record = { kind: name, ...prepared.record };
+    let answer;
+    try {
+      answer = await testResponder(record, prepared.args || args);
+    } catch (err) {
+      record.answer = null;
+      record.error = err.message;
+      push(record);
+      return undefined;
+    }
+    const value = prepared.answer ? prepared.answer(answer) : answer;
+    record.answer = printable(prepared.printable ? prepared.printable(value) : value);
+    push(record);
+    return value;
+  };
+  const message = (name) =>
+    make(name, (args) => {
+      const options = args[1] && typeof args[1] === 'object' && !('title' in args[1]) ? args[1] : null;
+      const raw = args.slice(options ? 2 : 1);
+      const titles = raw.map((b) => (typeof b === 'string' ? b : b.title));
+      return {
+        record: {
+          message: args[0],
+          modal: !!(options && options.modal),
+          detail: options && options.detail,
+          buttons: titles,
+        },
+        answer: (answer) => (typeof answer === 'string' ? raw.find((b, i) => titles[i] === answer) || answer : answer),
+        printable: (value) => (value && typeof value === 'object' ? value.title : value),
+      };
+    });
+  return {
+    showInformationMessage: message('showInformationMessage'),
+    showWarningMessage: message('showWarningMessage'),
+    showErrorMessage: message('showErrorMessage'),
+    showQuickPick: make('showQuickPick', async (args) => {
+      const items = [...(await args[0])];
+      const options = args[1];
+      return {
+        record: { placeHolder: options && options.placeHolder, items: items.map(pickLabel) },
+        args: [items, ...args.slice(1)],
+        answer: (answer) => {
+          const pick = (a) => (typeof a === 'string' ? items.find((i) => pickLabel(i) === a) || a : a);
+          return Array.isArray(answer) ? answer.map(pick) : pick(answer);
+        },
+        printable: (value) => (Array.isArray(value) ? value.map(pickLabel).join(', ') : pickLabel(value)),
+      };
+    }),
+    showInputBox: make('showInputBox', (args) => {
+      const options = args[0] || {};
+      return { record: { prompt: options.prompt, placeHolder: options.placeHolder, value: options.value } };
+    }),
+    showOpenDialog: make('showOpenDialog', (args) => {
+      const options = args[0] || {};
+      return { record: { title: options.title, openLabel: options.openLabel } };
+    }),
+    showWorkspaceFolderPick: make('showWorkspaceFolderPick', (args) => {
+      const options = args[0] || {};
+      return { record: { title: options.title, openLabel: options.openLabel } };
+    }),
+  };
+}
+
+// Resolves when nothing of the extension is in flight for 300 ms: the serialised queue, the checkbox chain, the
+// debounce timers and the syncs. The timed ones (offline retry, update timer, keep-alive) are ignored.
+async function testIdle({ timeoutMs = 30000 } = {}) {
+  let quietSince = null;
+  let limit;
+  const expired = new Promise((resolve, reject) => {
+    limit = setTimeout(() => reject(new Error(`extension not idle after ${Math.round(timeoutMs / 1000)} s`)), timeoutMs);
+  });
+  try {
+    for (;;) {
+      const q = queue;
+      const c = checkboxChain;
+      await Promise.race([Promise.all([q, c]), expired]);
+      const busy =
+        knownSources === null ||
+        debounceTimer ||
+        copyDebounce ||
+        copyRetryTimer ||
+        [...repoStates.values()].some((s) => s.syncing) ||
+        q !== queue ||
+        c !== checkboxChain;
+      if (busy) {
+        quietSince = null;
+      } else if (quietSince === null) {
+        quietSince = Date.now();
+      } else if (Date.now() - quietSince >= 300) {
+        return;
+      }
+      await Promise.race([new Promise((resolve) => setTimeout(resolve, 50)), expired]);
+    }
+  } finally {
+    clearTimeout(limit);
+  }
+}
+
+function testTree() {
+  const snapshot = (nodes) =>
+    nodes.map((node) => {
+      const item = treeProvider.getTreeItem(node);
+      const box = item.checkboxState;
+      const state = box !== null && typeof box === 'object' ? box.state : box;
+      return {
+        id: item.id,
+        label: String(item.label),
+        description: item.description,
+        icon: (item.iconPath && item.iconPath.id) || null,
+        checked: box === undefined || box === null ? null : state === vscode.TreeItemCheckboxState.Checked,
+        contextValue: item.contextValue,
+        children: snapshot(node.children),
+      };
+    });
+  return snapshot(treeProvider.getChildren());
+}
+
+function testFindNode(id) {
+  const walk = (nodes) => {
+    for (const node of nodes) {
+      if (node.id === id) {
+        return node;
+      }
+      const found = walk(node.children);
+      if (found) {
+        return found;
+      }
+    }
+    return undefined;
+  };
+  return walk(treeProvider.getChildren());
+}
+
+// What activate returns in Test mode: the members a scenario (test/live/*.live.js) needs and nothing else.
+function testHook(context) {
+  return {
+    calls: () => [...testCalls],
+    clearCalls: () => {
+      testCalls.length = 0;
+    },
+    respond: (fn) => {
+      testResponder = fn || (() => undefined);
+    },
+    idle: (opts) => testIdle(opts),
+    tree: () => testTree(),
+    check: (id, checked) => {
+      const node = testFindNode(id);
+      if (!node) {
+        throw new Error(`no tree node ${id}`);
+      }
+      const state = checked ? vscode.TreeItemCheckboxState.Checked : vscode.TreeItemCheckboxState.Unchecked;
+      return queueCheckboxChange({ items: [[node, state]] });
+    },
+    registrations: () => Object.fromEntries(registrar ? registrar.current : []),
+    decoration: (key) => {
+      const d = projectDecorations.provideFileDecoration(itemUri(key));
+      return d ? { badge: d.badge, tooltip: d.tooltip, color: d.color && d.color.id } : null;
+    },
+    states: () =>
+      [...repoStates].map(([key, s]) => ({
+        key,
+        syncing: s.syncing,
+        result: s.lastResult && {
+          kind: s.lastResult.kind,
+          reason: s.lastResult.reason || null,
+          message: s.lastResult.message || '',
+        },
+        changes: s.changes,
+      })),
+    status: () => ({ text: statusItem.text, tooltip: String(statusItem.tooltip || '') }),
+    logLines: () => [...testLog],
+    storage,
+    logUri: context.logUri.fsPath,
+  };
+}
+
 function activate(context) {
+  testMode = context.extensionMode === vscode.ExtensionMode.Test;
+  if (testMode) {
+    ui = makeTestUi();
+  }
   storage = context.globalStorageUri.fsPath;
   fs.mkdirSync(storage, { recursive: true });
 
@@ -2712,10 +2942,7 @@ function activate(context) {
   context.subscriptions.push(vscode.window.registerFileDecorationProvider(projectDecorations), decorationEmitter);
   context.subscriptions.push(
     treeView.onDidChangeCheckboxState((e) => {
-      // one click at a time: each reads the selection after the previous click's settings write
-      checkboxChain = checkboxChain
-        .then(() => onCheckboxChange(e))
-        .catch((err) => log(`checkbox error: ${err.message}`));
+      queueCheckboxChange(e);
     }),
   );
 
@@ -2734,7 +2961,7 @@ function activate(context) {
   } else {
     log('vscode.cursor.plugins is missing: plugins cannot be registered');
     statusItem.text = '$(error) Team plugins';
-    vscode.window.showErrorMessage(
+    ui.showErrorMessage(
       'Team plugins: this Cursor cannot register plugins from extensions (vscode.cursor.plugins is missing). Update Cursor.',
     );
   }
@@ -2792,6 +3019,10 @@ function activate(context) {
       KEEP_ALIVE_MS,
     );
   }
+  if (testMode) {
+    return testHook(context);
+  }
+  return undefined;
 }
 
 async function deactivate() {

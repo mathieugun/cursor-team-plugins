@@ -32,7 +32,10 @@ README.md (Cursor users: features, install, usage, main limits), docs/developmen
 detailed limits, releasing), AGENTS.md, `package.json` version and `contributes` (settings, commands, menus).
 
 ## Live test
-Needs the user's OK (it changes the Cursor they use): package
+Run `scripts/live-test.js` first (pre-approved: isolated profile, nothing installed). A request that changes behaviour
+adds or updates a scenario in `test/live/`; the install in the user's Cursor is asked only for what the scenarios can't
+show (the look, Remote-SSH).
+The install needs the user's OK (it changes the Cursor they use): package
 (`ELECTRON_RUN_AS_NODE=1 "$LOCALAPPDATA/Programs/cursor/Cursor.exe" scripts/package.js`), then
 `cursor --install-extension dist/cursor-team-plugins-<version>.vsix` and a window reload; check the Cursor Plugins
 log and the Team Plugins view. The team repository is the fixture: build it with
@@ -46,8 +49,9 @@ own changes). Logs: the newest `%APPDATA%\Cursor\logs\<session>` folder that has
 (exact action, where, what they should see) and check logs and files between steps.
 
 ## Don't
-Never install the extension or launch Cursor windows without the user asking (probe windows for checking
-assumptions are fine when the user asked for the assumptions to be tested).
+Never install the extension or launch the user's own Cursor without the user asking (probe windows for checking
+assumptions are fine when the user asked for the assumptions to be tested). `scripts/live-test.js` (isolated profile
+under the temp folder, nothing installed) may be run without asking.
 
 ## Facts for plans
 - Cursor names an extension plugin after its folder, not `plugin.json`'s `name` (a probe whose folder and name are
@@ -100,6 +104,21 @@ assumptions are fine when the user asked for the assumptions to be tested).
   process is killed a fixed 30 s after it leaves the lease: poll `Win32_Process` for `server.js` to time it); a server that keeps its name keeps its old
   config (new `args` are used only after a window reload), so test server changes by name, not by argument (probe,
   Cursor 3.31, 2026-11-25). Opening a probe window from an agent was refused by the auto-mode classifier: ask the user.
+
+- Git calls `ssh -G` first when `core.sshCommand` is set without a variant; `-c ssh.variant=ssh` (or
+  `GIT_SSH_VARIANT=ssh`) skips it (probe, Cursor 3.31, 2026-11-25).
+- A node `http` server in the test process that runs `git http-backend` serves git over HTTP; a synchronous git
+  (`spawnSync`, `helpers.git`) against it blocks the event loop and deadlocks: use only async git (probe, Cursor 3.31,
+  2026-11-25).
+- Each extension has its own `vscode` object: a test runner in the extension host can't patch the extension's
+  `vscode.window` (probe, Cursor 3.31, 2026-11-25); hence the `ui` seam in `extension.js`.
+- Settings written with `getConfiguration(...).update` from a runner persist in the isolated profile's
+  `User/settings.json` for the next launch: write the file fresh before every launch (probe, Cursor 3.31, 2026-11-25).
+- The isolated instance creates `~/.cursor/projects/<slug of the workspace path>/` in the real user home: keep one fixed
+  workspace path and leave the folder (probe, Cursor 3.31, 2026-11-25).
+- `extension.js` splits some calls over two lines (`vscode.window` then `.showErrorMessage(` on the next line: 11 of the
+  81 dialog calls, request 10 review, 2026-11-25): count or check call sites with a multiline search
+  (`vscode\.window\s*\.\s*show`), never a single-line grep.
 
 - On the maintainer's machine git has no global `user.name`/`user.email` (only this repository's `.git/config`): a
   live **Commit and push** of a managed clone stops at "git doesn't know your name and email" (live test 0.8.0,
