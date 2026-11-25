@@ -61,6 +61,13 @@ request 09.)
 - A commit message proposed from the list of changed files: small value.
 - Preview a skill before enabling it: clicking an item already opens its file.
 - Usage statistics (which skills the agent actually uses): Cursor exposes no API for it.
+- Real clicks in the isolated Cursor (live tests, layer 3; was request 11): scenarios that click the workbench
+  through the Chrome DevTools Protocol (a tree checkbox, a notification button, a context menu, the status bar item)
+  and attach a screenshot of each step. Blocked: Cursor's release build refuses `--remote-debugging-port`,
+  `--remote-debugging-pipe` and `--inspect*` and exits (probe, Cursor 3.32.4, 2026-11-25). Considered and set aside:
+  workbench commands from the extension host (no checkbox, context menu or status bar click, no screenshots) and
+  Windows UI Automation (Windows only, a driver outside the repository's plain JavaScript, brittle). Revisit if Cursor
+  allows the switch again.
 
 ## Dropped
 

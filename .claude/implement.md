@@ -125,5 +125,11 @@ under the temp folder, nothing installed) may be run without asking.
   2026-11-25, `git config --global user.name` exit 1). To test a commit live, set an identity in the managed clone's
   own `.git/config` first (with the user's OK), never the global one.
 
+- Cursor's release build refuses debugger switches: `Cursor.exe ... --remote-debugging-port=0` prints
+  `--remote-debugging-port is not supported in this build. Debugger switches work only in development builds.` and
+  exits 1 in 0.2 s. `resources/app/out/main.js` (`electronFuses.js`) blocks `remote-debugging-port`,
+  `remote-debugging-pipe` and every `--inspect*` argument unless the binary's inspect-arguments fuse is on, so no CDP
+  to the workbench of an isolated instance (probe, Cursor 3.32.4, 2026-11-25, launcher in the scratchpad; request 11).
+
 ## Implementer lessons
 <!-- One line per project-specific mistake seen in review. -->
