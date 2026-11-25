@@ -298,6 +298,19 @@ test('kinds declared in plugin.json are not selectable (no mcpFiles property)', 
   const { plugins } = readCatalog(root);
   assert.deepEqual(plugins[0].children.map((c) => c.id), ['p/skills/s']);
   assert.equal(plugins[0].mcpFiles, undefined);
+  assert.deepEqual(plugins[0].customPaths, ['commands', 'agents', 'mcpServers']);
+});
+
+test('customPaths lists the kinds plugin.json declares, only when there are some', (t) => {
+  const root = fixture(t);
+  makePlugin(root, 'declared', {
+    extra: { '.cursor-plugin/plugin.json': JSON.stringify({ name: 'declared', commands: './cmds', skills: [] }) },
+  });
+  makePlugin(root, 'plain', { skills: ['s'] });
+  const { plugins } = readCatalog(root);
+  const byName = Object.fromEntries(plugins.map((p) => [p.name, p]));
+  assert.deepEqual(byName.declared.customPaths, ['skills', 'commands']);
+  assert.ok(!('customPaths' in byName.plain));
 });
 
 test('an invalid mcp.json is a warning', (t) => {

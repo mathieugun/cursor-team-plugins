@@ -48,7 +48,10 @@ assumptions are fine when the user asked for the assumptions to be tested).
 - On Windows the **parent** of a registered plugin folder cannot be deleted or renamed while the plugin is registered
   (EPERM, possibly left half-deleted), in any window that registered it; the registered folder itself, its files and
   subfolders can be edited and deleted, and after `removePlugin` the parent can be deleted at once (probe, Cursor
-  3.31, 2026-11-22). The managed clone and the `filtered/<name>-<hash>` holders are such parents: update them in
+  3.31, 2026-11-22). Deleting the registered folder itself leaves it "delete pending" (still listed by `readdir`,
+  `lstat` EPERM, `fs.existsSync` false) until the window unregisters it or reloads: a plan that deletes a registered
+  folder unregisters it first, and checks deletion with `readdir` of the parent, not `existsSync` (live test 0.7.0,
+  2026-11-25). The managed clone and the `filtered/<name>-<hash>` holders are such parents: update them in
   place; delete only unregistered ones.
 - Remote-SSH: the extension runs in the remote extension host (UI-side addPlugin fails with ENOENT on the local
   path). Remote logs: `~/.cursor-server/data/logs/<session>/exthost<N>/`; the Cursor Plugins log is under

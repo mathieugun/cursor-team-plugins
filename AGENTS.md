@@ -1,6 +1,6 @@
 # cursor-team-plugins: developer notes
 
-Cursor (VS Code) extension, version in `package.json` (0.6.0). Plain JavaScript, CommonJS, no npm dependency, no
+Cursor (VS Code) extension, version in `package.json` (0.7.0). Plain JavaScript, CommonJS, no npm dependency, no
 build step. User documentation: `README.md` (for Cursor users: what it does, install, usage; it shows
 only the current version, with no history). Internals, platform notes, detailed limits and the release process:
 `docs/development.md`.
@@ -10,7 +10,8 @@ only the current version, with no history). Internals, platform notes, detailed 
 - `extension.js`: the only file that requires `vscode` (activation, tree view, status bar, commands, timers,
   watchers). Not covered by the tests: check its syntax with the command below.
 - `lib/`: pure logic, never requires `vscode`, tested with node: `catalog` (read one repository: `name`, `plugins`,
-  `mcpServerNames`, `filterMcpJson`), `repos` (the list of repositories: `normalizeUrl`, `listRepos`, `assignNames`,
+  `mcpServerNames`, `filterMcpJson`; its plugins carry `customPaths`, the kinds `plugin.json` declares), `repos` (the
+  list of repositories: `normalizeUrl`, `listRepos` (takes the `drafts` folder), `assignNames`,
   `mergeCatalogs`, `normalizeIds`, `originUrl`, `migratedSettings`, `missingRepos`, `unlocatedRepos`, `projectRepoEntry`,
   `withProjectRepo`, `withoutProjectRepo`), `selection` (selection model, on the merged catalog), `treeModel` (`buildTree`,
   `buildChangesNode`, `buildConflictsNode`, `repoStatus`, `buildRepoNode`, `buildMissingNodes`), `materialize`
@@ -19,7 +20,9 @@ only the current version, with no history). Internals, platform notes, detailed 
   `discardLocalChanges`, `withLock`, `withLockSync`, `removeStaleIndexLock`, `removeLeftovers`, `recentlySynced`,
   `headFileArgs`, `checkRemote`), `contribute` (`commitAndPush`, `pushToBranch`, `defaultBranchName`), `cursorApi`,
   `registrar`, `remoteErrors` (`classify`, `remoteHost`, `describeRemote`, `remoteResult`: classified git failures with
-  a message and the actions to offer). `git` also has `cleanProgress`.
+  a message and the actions to offer), `authoring` (scaffolds and drafts: `nameError`, `serverNameError`, `yamlScalar`,
+  `itemFile`, `createItem`, `splitCommandLine`, `mcpEntry`, `addMcpServer`, `pluginLocation`, `createPlugin`,
+  `movePlugin`, `renameIds`, `declaredPathsError`). `git` also has `cleanProgress`.
 - `scripts/`: `test.js` (test runner), `zip.js` + `package.js` (VSIX writer), `make-test-repo.js` (bare test team
   repository for live tests, from `test/fixtures/team-repo`; `--name` gives a copy another repository name), `make_icon.py` (regenerates `resources/icon.png`: three stacked package boxes on a blue rounded square, drawn from no source image: `uv run --with pillow python scripts/make_icon.py`; not packaged). Nothing under `lib/` or `scripts/`
   may require `vscode`.
@@ -90,7 +93,9 @@ On a Linux machine with a Cursor server (a Remote-SSH host), the suite runs with
 - `localChanges` throws when `git status` fails (a failure must never read as "no changes"): the view shows a
   `changes.error` node and the commands report it.
 - Windows refuses to delete or rename the parent of a registered plugin folder (EPERM, in every window that
-  registered it); the registered folder itself can be deleted. So a URL or branch change switches the managed clone
+  registered it); the registered folder itself can be deleted, but while a window has it registered it is only "delete
+  pending" (still listed by `readdir`, `lstat` fails with EPERM, gone at that window's reload): unregister it first
+  (`Registrar.remove`, as **Move to a repository** does). So a URL or branch change switches the managed clone
   in place (`switchInPlace`: fetch the branch into `refs/team-plugins/switch`, `checkout -B`, then `set-url`, the
   upstream and the other branches; the URL changes last so a failed step is retried), never deletes it.
 - An entry of `teamPlugins.repositories` without a branch is resolved at each sync with
@@ -176,6 +181,11 @@ On a Linux machine with a Cursor server (a Remote-SSH host), the suite runs with
   same command ids, so whichever activates second throws `command 'teamPlugins.syncNow' already exists` (seen on a
   Remote-SSH host, where the old one activated first). The extensions view's search matches names and descriptions,
   so `@installed mg.cursor-team-plugins` finds nothing.
+- Drafts (`<storage>/.cursor/plugins/drafts`, under `.cursor/plugins` so its skills are skills) are a repository of
+  `kind: 'drafts'` listed first when the folder exists, which never counts as a configured repository (`unconfigured`
+  state, status text); the folder is never deleted (it is the parent of registered
+  plugin folders, which Windows can't delete or rename); authoring writes go to the repository's folder under its lock,
+  never to a partial copy (the copy follows through `syncCopy`).
 
 ## Rules
 

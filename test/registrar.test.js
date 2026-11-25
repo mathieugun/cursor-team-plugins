@@ -90,3 +90,17 @@ test('Registrar keeps going after a failed add; removeAll clears', async () => {
   assert.deepEqual(calls, ['remove /p/d']);
   assert.equal(reg.current.size, 0);
 });
+
+test('Registrar remove unregisters one plugin; the next apply registers it again', async () => {
+  const calls = [];
+  const reg = new Registrar(fakeApi(calls));
+  await reg.apply(new Map([['a', '/p/a'], ['b', '/p/b']]));
+  calls.length = 0;
+  await reg.remove('a');
+  await reg.remove('unknown');
+  assert.deepEqual(calls, ['remove /p/a']);
+  assert.deepEqual([...reg.current.keys()], ['b']);
+  calls.length = 0;
+  await reg.apply(new Map([['a', '/p/a'], ['b', '/p/b']]));
+  assert.deepEqual(calls, ['add /p/a']);
+});

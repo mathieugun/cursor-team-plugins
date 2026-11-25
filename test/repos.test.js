@@ -131,6 +131,31 @@ test('listRepos', () => {
   assert.ok(other.every((d) => d.key !== 'repo'));
 });
 
+test('listRepos: the drafts folder comes first', () => {
+  const drafts = 'C:\\s\\.cursor\\plugins\\drafts';
+  const list = listRepos({ ...WIN, drafts, repositories: REPOSITORIES, localRepositories: ['D:\\src\\a'] });
+  assert.deepEqual(list.map((d) => d.kind), ['drafts', 'local', 'managed', 'managed', 'managed']);
+  const [d, local, first] = list;
+  assert.equal(d.key, 'drafts');
+  assert.equal(d.dir, drafts);
+  assert.equal(d.source, drafts);
+  assert.equal(d.url, '');
+  assert.equal(d.branch, '');
+  assert.equal(d.lockFile, 'C:\\s\\locks\\drafts.lock');
+  assert.equal(d.stateFile, 'C:\\s\\state\\drafts.json');
+  assert.equal(d.duplicateOf, null);
+  // the rest of the list is unchanged
+  assert.deepEqual(list.slice(1), listRepos({ ...WIN, repositories: REPOSITORIES, localRepositories: ['D:\\src\\a'] }));
+  assert.match(local.key, /^local-a-[0-9a-f]{8}$/);
+  assert.equal(first.duplicateOf, null);
+  assert.equal(assignNames(list, new Map())[0].name, 'drafts');
+  // no drafts: no descriptor
+  assert.ok(listRepos({ ...WIN, drafts: '', repositories: REPOSITORIES }).every((x) => x.kind !== 'drafts'));
+  // a local clone of the drafts folder is a duplicate of it
+  const twice = listRepos({ ...WIN, drafts, repositories: [], localRepositories: [drafts] });
+  assert.equal(twice[1].duplicateOf, 'drafts');
+});
+
 test('assignNames', () => {
   const list = listRepos({
     ...WIN,

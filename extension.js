@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { readCatalog } = require('./lib/catalog');
+const authoring = require('./lib/authoring');
 const selection = require('./lib/selection');
 const {
   buildTree,
@@ -71,6 +72,7 @@ let lastApplyErrors = 0;
 let timer = null;
 let offlineTimer = null;
 let watchers = [];
+let draftsWatched = false; // whether the last startWatchers call watched the drafts folder
 let debounceTimer = null;
 let queue = Promise.resolve();
 let storage = '';
@@ -104,7 +106,7 @@ function stateOf(key) {
 
 function paths() {
   const pluginsRoot = path.join(storage, '.cursor', 'plugins');
-  return { pluginsRoot, filteredRoot: path.join(pluginsRoot, 'filtered') };
+  return { pluginsRoot, filteredRoot: path.join(pluginsRoot, 'filtered'), draftsRoot: path.join(pluginsRoot, 'drafts') };
 }
 
 function cfg() {
@@ -133,9 +135,9 @@ function gitPath() {
   return 'git';
 }
 
-// Every configured repository, before it has a name (locals first, then managed).
+// Every configured repository, before it has a name (the drafts folder when it exists, then locals, then managed).
 function rawRepos() {
-  const { pluginsRoot } = paths();
+  const { pluginsRoot, draftsRoot } = paths();
   let config = '';
   try {
     config = fs.readFileSync(path.join(pluginsRoot, 'repo', '.git', 'config'), 'utf8');
@@ -145,6 +147,7 @@ function rawRepos() {
   return listRepos({
     repositories: parseRepositories(cfg().get('repositories')),
     localRepositories: parseLocalRepositories(cfg().get('localRepositories')),
+    drafts: isDirectory(draftsRoot) ? draftsRoot : '',
     pluginsRoot,
     storage,
     legacyOrigin: originUrl(config),
@@ -175,6 +178,15 @@ function isActive(d) {
 
 function isManaged(d) {
   return d.kind === 'managed' && !d.duplicateOf;
+}
+
+// The drafts folder with no plugin and no conflict in it: the view and the status tooltip leave it out.
+function isEmptyDrafts(d) {
+  return (
+    d.kind === 'drafts' &&
+    !catalog.plugins.some((p) => p.repoKey === d.key) &&
+    !copyConflicts.some((c) => c.repo === d.key)
+  );
 }
 
 // What the view and the messages call a repository (a repository listed twice has no name of its own).
@@ -292,7 +304,8 @@ function refresh({ sync: doSync, userInitiated = false, check = null, keys = nul
 
 async function doRefresh(doSync, userInitiated, check, keys) {
   const list = listConfigured();
-  if (list.length === 0) {
+  if (list.every((d) => d.kind === 'drafts')) {
+    // the drafts folder alone is no repository: the view still offers to add one
     await vscode.commands.executeCommand('setContext', 'teamPlugins.state', 'unconfigured');
     scheduleOfflineRetry();
     await doApply();
@@ -328,6 +341,10 @@ async function doRefresh(doSync, userInitiated, check, keys) {
 // Syncs one repository: a managed clone is cloned or updated, a local one is only looked at.
 async function syncRepo(d, run, { userInitiated, check }) {
   const s = stateOf(d.key);
+  if (d.kind === 'drafts') {
+    s.lastCheck = new Date();
+    return;
+  }
   if (d.kind === 'local') {
     s.lastResult = await sync.localStatus({ run, repoDir: d.dir });
     s.lastCheck = new Date();
@@ -671,6 +688,9 @@ async function doApply() {
     const holders = filteredHolders(filteredRoot, [...desired.values()]);
     touchFiltered(holders);
     gcFiltered(filteredRoot, holders, FILTERED_MAX_AGE_MS);
+  }
+  if (descs.some((d) => d.kind === 'drafts') && !draftsWatched) {
+    startWatchers(); // the drafts folder was created (by this window or another one) after the watchers started
   }
   await refreshChanges();
   updateStatus();
@@ -1017,7 +1037,7 @@ function updateStatus() {
   let text;
   if (states.some(([, s]) => s.syncing)) {
     text = '$(sync~spin) Team plugins';
-  } else if (descs.length === 0) {
+  } else if (descs.every((d) => d.kind === 'drafts')) {
     text = '$(plug) Team plugins: not configured';
   } else if (!api) {
     text = '$(error) Team plugins';
@@ -1040,6 +1060,9 @@ function updateStatus() {
     lines.push(`Machine: ${remoteMachine()} (remote window)`);
   }
   for (const [d, s] of states) {
+    if (isEmptyDrafts(d)) {
+      continue;
+    }
     let line = `${labelOf(d)}: ${repoStatus(d, s).text}`;
     if (s.lastResult && s.lastResult.head) {
       line += ` · ${String(s.lastResult.head).slice(0, 7)}`;
@@ -1165,7 +1188,7 @@ class PluginTree {
     const project = projectList();
     const eff = selection.effective(catalog, userSelection(), project);
     const pluginNodes = [];
-    const repoNodes = descs.map((d) => {
+    const repoNodes = descs.filter((d) => !isEmptyDrafts(d)).map((d) => {
       const s = stateOf(d.key);
       const children = [
         buildConflictsNode(
@@ -1176,7 +1199,9 @@ class PluginTree {
       ].filter((n) => n);
       let plugins = [];
       if (isActive(d)) {
-        plugins = buildTree({ plugins: catalog.plugins.filter((p) => p.repoKey === d.key) }, eff, project);
+        plugins = buildTree({ plugins: catalog.plugins.filter((p) => p.repoKey === d.key) }, eff, project, {
+          draft: d.kind === 'drafts',
+        });
         pluginNodes.push(...plugins);
         children.push(...plugins);
       }
@@ -1450,11 +1475,13 @@ function startWatchers() {
 
   // an edit inside a clone (an agent's, another window's partial copy, a direct edit) reaches this window's catalog,
   // partial copies and Local changes
-  for (const d of listConfigured()) {
+  const list = listConfigured();
+  for (const d of list) {
     if (!d.duplicateOf) {
       watchers.push(watchTree(d.dir, onRepoFile));
     }
   }
+  draftsWatched = list.some((d) => d.kind === 'drafts');
 }
 
 // .git changes (fetch, the editor's own git status) don't change plugin files
@@ -1584,8 +1611,8 @@ async function addLocalRepositoryCommand() {
 }
 
 async function removeRepositoryCommand(arg) {
-  const d = await pickRepo(arg, { placeHolder: 'Repository to stop following' });
-  if (!d) {
+  const d = await pickRepo(arg, { filter: (x) => x.kind !== 'drafts', placeHolder: 'Repository to stop following' });
+  if (!d || d.kind === 'drafts') {
     return;
   }
   const detail =
@@ -1615,6 +1642,365 @@ async function removeRepositoryCommand(arg) {
     next = list.filter((item) => !matches(item));
   }
   await config.update(key, next, vscode.ConfigurationTarget.Global);
+}
+
+// ---- writing plugins: new plugin, new items, drafts ---------------------------------------------------------------
+
+// The repositories a plugin can be written in: loaded, and on disk (a managed clone not cloned yet is left out).
+function authoringTargets() {
+  return descs.filter((d) => isActive(d) && d.kind !== 'drafts' && fs.existsSync(d.dir));
+}
+
+function targetPickItem(d) {
+  return {
+    label: labelOf(d),
+    description: d.kind === 'managed' ? 'team repository: a local change until you commit and push it' : 'your own clone',
+    d,
+  };
+}
+
+// Runs fn under the repository's lock (call it inside enqueue); null, with a warning, when another window holds it.
+function withRepoLock(d, fn) {
+  const locked = sync.withLockSync(d.lockFile, fn);
+  if (locked.kind === 'busy') {
+    vscode.window.showWarningMessage(BUSY_TEXT);
+    return null;
+  }
+  return locked.value;
+}
+
+// Adds a plugin or item that was just written (and is in the catalog after an apply) to the user's selection, unless
+// the selection already includes it.
+async function enableNew(id) {
+  const owner = catalog.plugins.find((p) => p.name === id || p.children.some((c) => c.id === id));
+  if (!owner) {
+    log(`new item not in the catalog yet: ${id}`);
+    return;
+  }
+  const user = userSelection();
+  const e = selection.effective(catalog, user, projectList()).get(owner.name);
+  if (e && (owner.name === id ? e.full : e.included.has(id))) {
+    return;
+  }
+  const next = selection.toggle(catalog, user, id, true);
+  const config = cfg();
+  for (const key of ['enabled', 'excluded']) {
+    if (JSON.stringify(next[key]) !== JSON.stringify(user[key])) {
+      await config.update(key, next[key], vscode.ConfigurationTarget.Global);
+    }
+  }
+}
+
+async function newPluginCommand(arg) {
+  let target = null; // a descriptor, or null for the drafts
+  if (arg && arg.kind === 'repo') {
+    const given = repoFromArg(arg);
+    if (!given) {
+      return;
+    }
+    if (given.kind !== 'drafts') {
+      target = authoringTargets().find((d) => d.key === given.key);
+      if (!target) {
+        vscode.window.showInformationMessage(
+          `Team plugins: ${labelOf(given)} is not available yet (not cloned, listed twice or replaced).`,
+        );
+        return;
+      }
+    }
+  } else {
+    const picked = await vscode.window.showQuickPick(
+      [
+        { label: 'drafts', description: 'only on this machine: move it to a repository when it is ready', d: null },
+        ...authoringTargets().map(targetPickItem),
+      ],
+      { placeHolder: 'Where to create the plugin' },
+    );
+    if (!picked) {
+      return;
+    }
+    target = picked.d;
+  }
+  const name = await vscode.window.showInputBox({
+    prompt: 'Plugin name',
+    placeHolder: 'my-plugin',
+    ignoreFocusOut: true,
+    validateInput: (v) => authoring.nameError(v.trim()) || null,
+  });
+  if (name === undefined) {
+    return;
+  }
+  const description = await vscode.window.showInputBox({ prompt: 'Plugin description (optional)', ignoreFocusOut: true });
+  if (description === undefined) {
+    return;
+  }
+  const { draftsRoot } = paths();
+  const draftsDesc = descs.find((d) => d.kind === 'drafts');
+  const lock = target ? target.lockFile : draftsDesc ? draftsDesc.lockFile : path.join(storage, 'locks', 'drafts.lock');
+  const result = await enqueue(() => {
+    if (!target) {
+      fs.mkdirSync(draftsRoot, { recursive: true });
+    }
+    return withRepoLock({ lockFile: lock }, () =>
+      authoring.createPlugin(target ? target.dir : draftsRoot, { name: name.trim(), description }),
+    );
+  });
+  if (!result) {
+    return;
+  }
+  if (result.error) {
+    vscode.window.showErrorMessage(`Team plugins: ${result.error}`);
+    return;
+  }
+  const repo = target ? labelOf(target) : 'drafts';
+  const pluginName = name.trim();
+  log(`created plugin ${repo}:${pluginName} in ${result.dir}`);
+  await apply();
+  await enableNew(`${repo}:${pluginName}`);
+  await vscode.window.showTextDocument(vscode.Uri.file(path.join(result.dir, '.cursor-plugin', 'plugin.json')));
+  vscode.window
+    .showInformationMessage(
+      `Created plugin ${pluginName} in ${repo}. Add a skill, rule, command, agent or MCP server from its context menu.`,
+      'New skill',
+    )
+    .then((choice) =>
+      choice === 'New skill'
+        ? vscode.commands.executeCommand('teamPlugins.newSkill', { kind: 'plugin', key: `${repo}:${pluginName}` })
+        : undefined,
+    )
+    .then(undefined, (err) => log(`cannot offer a new skill: ${err.message}`));
+}
+
+async function newItemCommand(kind, node) {
+  const K = authoring.KINDS[kind];
+  let plugin;
+  if (node && node.kind === 'plugin') {
+    plugin = catalog.plugins.find((p) => p.name === node.key);
+  } else {
+    if (catalog.plugins.length === 0) {
+      vscode.window.showInformationMessage('No plugin to add it to: create one with New plugin.');
+      return;
+    }
+    const picked = await vscode.window.showQuickPick(
+      catalog.plugins.map((p) => ({ label: p.name, description: p.description, p })),
+      { placeHolder: `Plugin to add the ${K.label} to` },
+    );
+    plugin = picked ? picked.p : undefined;
+  }
+  if (!plugin) {
+    return;
+  }
+  const declared = authoring.declaredPathsError(plugin, kind);
+  if (declared) {
+    vscode.window.showErrorMessage(`Team plugins: ${declared}`);
+    return;
+  }
+  const repo = descs.find((d) => d.key === plugin.repoKey);
+  if (!repo) {
+    return;
+  }
+  const name = await vscode.window.showInputBox({
+    prompt: `${K.label.charAt(0).toUpperCase()}${K.label.slice(1)} name`,
+    ignoreFocusOut: true,
+    validateInput: (v) => {
+      const t = v.trim();
+      const bad = kind === 'mcp' ? authoring.serverNameError(t) : authoring.nameError(t);
+      if (bad) {
+        return bad;
+      }
+      return plugin.children.some((c) => c.kind === kind && c.name === t)
+        ? `${plugin.pluginName} already has a ${K.label} named ${t}`
+        : null;
+    },
+  });
+  if (name === undefined) {
+    return;
+  }
+  let description = '';
+  let entry = null;
+  if (kind === 'mcp') {
+    const how = await vscode.window.showQuickPick(
+      [
+        { label: 'Command', description: 'a program the agent starts (stdio)' },
+        { label: 'URL', description: 'a server already running (HTTP)' },
+      ],
+      { placeHolder: 'How the MCP server runs' },
+    );
+    if (!how) {
+      return;
+    }
+    if (how.label === 'Command') {
+      const command = await vscode.window.showInputBox({
+        prompt: 'Command line, for example: npx -y my-mcp-server',
+        ignoreFocusOut: true,
+        validateInput: (v) => {
+          const parts = authoring.splitCommandLine(v);
+          return parts === null ? 'Close the double quote' : parts.length === 0 ? 'Enter a command' : null;
+        },
+      });
+      if (command === undefined) {
+        return;
+      }
+      entry = authoring.mcpEntry({ command });
+    } else {
+      const url = await vscode.window.showInputBox({
+        prompt: 'Server URL',
+        ignoreFocusOut: true,
+        validateInput: (v) => (/^https?:\/\/\S+$/i.test(v.trim()) ? null : 'Enter an http:// or https:// URL'),
+      });
+      if (url === undefined) {
+        return;
+      }
+      entry = authoring.mcpEntry({ url: url.trim() });
+    }
+  } else {
+    const typed = await vscode.window.showInputBox({
+      prompt: `What the ${K.label} is for (shown to the agent and in the view)`,
+      ignoreFocusOut: true,
+      validateInput: (v) => (v.trim() ? null : 'Enter a description'),
+    });
+    if (typed === undefined) {
+      return;
+    }
+    description = typed.trim();
+  }
+  const itemName = name.trim();
+  const result = await enqueue(() =>
+    withRepoLock(repo, () =>
+      kind === 'mcp'
+        ? authoring.addMcpServer(plugin.dir, itemName, entry)
+        : authoring.createItem(plugin.dir, kind, itemName, description),
+    ),
+  );
+  if (!result) {
+    return;
+  }
+  if (result.error) {
+    vscode.window.showErrorMessage(`Team plugins: ${result.error}`);
+    return;
+  }
+  await apply();
+  let id = null;
+  if (kind === 'mcp') {
+    id = `${plugin.name}/mcp/${itemName}`;
+  } else {
+    const fresh = catalog.plugins.find((p) => p.name === plugin.name);
+    const child = fresh && fresh.children.find((c) => samePath(c.file, result.file));
+    id = child ? child.id : null;
+  }
+  log(`created ${K.label} ${id || itemName} in ${result.file}`);
+  if (id) {
+    await enableNew(id);
+  }
+  await vscode.window.showTextDocument(vscode.Uri.file(result.file));
+}
+
+async function moveDraftCommand(node) {
+  const isDraft = (p) => descs.some((d) => d.key === p.repoKey && d.kind === 'drafts');
+  let plugin;
+  if (node && node.kind === 'plugin') {
+    plugin = catalog.plugins.find((p) => p.name === node.key);
+    if (plugin && !isDraft(plugin)) {
+      plugin = undefined;
+    }
+  } else {
+    const drafts = catalog.plugins.filter(isDraft);
+    if (drafts.length === 0) {
+      vscode.window.showInformationMessage('There is no draft plugin: create one with New plugin.');
+      return;
+    }
+    const picked = await vscode.window.showQuickPick(
+      drafts.map((p) => ({ label: p.pluginName, description: p.description, p })),
+      { placeHolder: 'Draft plugin to move' },
+    );
+    plugin = picked ? picked.p : undefined;
+  }
+  if (!plugin) {
+    return;
+  }
+  const targets = authoringTargets();
+  if (targets.length === 0) {
+    vscode.window.showInformationMessage('Follow a repository or add your own clone first.');
+    return;
+  }
+  const picked = await vscode.window.showQuickPick(targets.map(targetPickItem), {
+    placeHolder: `Repository to move ${plugin.pluginName} to`,
+  });
+  if (!picked) {
+    return;
+  }
+  const target = picked.d;
+  const detail =
+    target.kind === 'managed'
+      ? 'The draft is deleted. In the managed clone the plugin is a local change: commit and push it to share it with the team.'
+      : 'The draft is deleted. The plugin is copied into your clone: commit and push it with your own git tools.';
+  const choice = await vscode.window.showWarningMessage(
+    `Move ${plugin.pluginName} to ${labelOf(target)}?`,
+    { modal: true, detail },
+    'Move',
+  );
+  if (choice !== 'Move') {
+    return;
+  }
+  await flushPartials();
+  const draftsDesc = descs.find((d) => d.key === plugin.repoKey);
+  const result = await enqueue(async () => {
+    // a registered folder that is deleted stays "delete pending" on Windows while Cursor watches it: unregister first
+    // (the apply that follows registers again whatever is still wanted, the draft too if the move fails)
+    if (registrar) {
+      await registrar.remove(plugin.name);
+    }
+    return withRepoLock(target, () => {
+      const locked = sync.withLockSync(draftsDesc.lockFile, () =>
+        authoring.movePlugin(plugin.dir, plugin.pluginName, plugin.description, target.dir),
+      );
+      if (locked.kind === 'busy') {
+        vscode.window.showWarningMessage(BUSY_TEXT);
+        return null;
+      }
+      if (!locked.value.error) {
+        partialCopies.delete(plugin.name); // its copy must not carry its files back into the deleted draft
+      }
+      return locked.value;
+    });
+  });
+  if (!result || result.error) {
+    if (result) {
+      vscode.window.showErrorMessage(`Team plugins: ${result.error}`);
+    }
+    await apply(); // the draft was unregistered above
+    return;
+  }
+  const to =`${labelOf(target)}:${plugin.pluginName}`;
+  const config = cfg();
+  for (const key of ['enabled', 'excluded']) {
+    const current = stringList(config.get(key));
+    const next = authoring.renameIds(current, plugin.name, to);
+    if (JSON.stringify(next) !== JSON.stringify(current)) {
+      await config.update(key, next, vscode.ConfigurationTarget.Global);
+    }
+  }
+  await apply();
+  log(`moved draft ${plugin.pluginName} to ${labelOf(target)} (${result.dir})`);
+  if (result.leftover) {
+    vscode.window.showWarningMessage(
+      `Team plugins: ${plugin.pluginName} was copied, but its draft folder could not be removed yet: ${result.leftover}. Reload the Cursor windows, then delete it if it is still there.`,
+    );
+  }
+  if (target.kind === 'managed') {
+    vscode.window
+      .showInformationMessage(
+        `Moved ${plugin.pluginName} to ${labelOf(target)}: it is in the repository's Local changes. Commit and push to share it.`,
+        'Commit and push',
+      )
+      .then((c) =>
+        c === 'Commit and push' ? vscode.commands.executeCommand('teamPlugins.commitAndPush', { repo: target.key }) : undefined,
+      )
+      .then(undefined, (err) => log(`cannot offer commit and push: ${err.message}`));
+  } else {
+    vscode.window.showInformationMessage(
+      `Moved ${plugin.pluginName} to your clone ${target.dir}: commit and push it with your own git tools.`,
+    );
+  }
 }
 
 function registerCommands(context) {
@@ -1717,6 +2103,13 @@ function registerCommands(context) {
     }
     await refresh({ sync: true, userInitiated: true, keys: new Set([d.key]) });
   });
+  reg('teamPlugins.newPlugin', newPluginCommand);
+  reg('teamPlugins.newSkill', (node) => newItemCommand('skill', node));
+  reg('teamPlugins.newRule', (node) => newItemCommand('rule', node));
+  reg('teamPlugins.newCommand', (node) => newItemCommand('command', node));
+  reg('teamPlugins.newAgent', (node) => newItemCommand('agent', node));
+  reg('teamPlugins.newMcpServer', (node) => newItemCommand('mcp', node));
+  reg('teamPlugins.moveDraft', moveDraftCommand);
   reg('teamPlugins.commitAndPush', commitAndPushCommand);
   reg('teamPlugins.pushToBranch', pushToBranchCommand);
   reg('teamPlugins.openChange', openChangeCommand);

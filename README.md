@@ -20,6 +20,8 @@ Team plugins keeps them in git repositories, one per team, and brings them into 
   `.vscode/settings.json`.
 - **Improve skills where you use them.** Ask the agent to fix a team skill in the middle of your work; the change shows
   in the view and is one click away from being committed and pushed for the whole team.
+- **Write new plugins and skills.** Create a plugin as a draft that stays on your machine until it is ready, then move
+  it to a repository; scaffold a skill, rule, command, agent or MCP server in any plugin with one command.
 
 ## Install
 
@@ -222,6 +224,30 @@ commit and push with your usual tools. The clone replaces the repository you fol
 `name` of its `marketplace.json`), so you keep working on your version of the plugins while the others follow the
 team's.
 
+## Writing plugins
+
+- **New plugin** (the **...** menu of the view's title bar, or right-click a repository) asks where to create it, then
+  for a name and a description. A name uses lowercase letters, digits, hyphens and dots, as Cursor requires. The plugin
+  is enabled for you in full and its `plugin.json` opens in the editor.
+  - **drafts** keeps the plugin only on this machine (in the extension's storage; in a Remote-SSH window, on the remote
+    machine), in a **drafts** group that shows up once it holds a plugin. Nothing is pushed and nothing is backed up.
+  - In a repository you follow, the new folder is a local change of its managed clone until you **Commit and push**
+    it. In your own clone it is new files for your own git tools.
+  - When the repository's `marketplace.json` lists its plugins, the new plugin is added to that list.
+- **Move to a repository** (right-click a draft plugin) copies it to a repository you follow or to your own clone and
+  deletes the draft. The ids in your selection follow the plugin. In a managed clone the plugin appears in **Local
+  changes**: commit and push it to share it with the team. A draft can't be added to a project.
+- **New skill**, **New rule**, **New command**, **New agent** and **New MCP server** (right-click a plugin, or the
+  command palette) ask for a name and write the file in the plugin's folder, then enable it for you and open it:
+  - a skill is `skills/<name>/SKILL.md`, a rule `rules/<name>.mdc`, a command `commands/<name>.md` and an agent
+    `agents/<name>.md`, each with a frontmatter holding the description you typed and a body to fill in;
+  - an MCP server is added to the plugin's `mcp.json` (to `.mcp.json` when that is the only one there is), from a
+    command line or a URL.
+
+  A kind whose paths the plugin's `plugin.json` sets gets no file: Cursor would ignore it, so add it there by hand.
+
+An edited `marketplace.json` or `mcp.json` is rewritten with two-space indentation.
+
 ## Staying up to date
 
 The repositories are checked at startup, every `teamPlugins.updateIntervalMinutes` (60 by default, at least 5; `0`
@@ -303,6 +329,8 @@ terminal where git and SSH can ask their questions; then click **Sync now**.
 - Two plugins in folders of the same name (in different repositories): the second is registered as
   `<folder>-<repository>`, and the agent knows it under that name.
 - **Remove repository** keeps the clone in the extension's storage.
+- Drafts are only on this machine and are not backed up: move a plugin to a repository to keep it safe.
+- Writing a plugin rewrites the formatting of the `marketplace.json` or `mcp.json` it edits.
 
 ## Contributing
 

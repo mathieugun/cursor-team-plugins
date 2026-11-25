@@ -282,6 +282,30 @@ test('buildRepoNode', () => {
   assert.ok(!local.tooltip.includes('default branch'), local.tooltip);
 });
 
+const DRAFTS = { key: 'drafts', name: 'drafts', kind: 'drafts', source: '/s/drafts', branch: '', dir: '/s/drafts', duplicateOf: null, hiddenBy: null };
+
+test('drafts repository', () => {
+  const idle = { syncing: false, lastResult: null };
+  const s = repoStatus(DRAFTS, idle);
+  assert.deepEqual([s.text, s.icon, s.problem], ['only on this machine', 'edit', false]);
+  const u = repoStatus(DRAFTS, { syncing: true });
+  assert.deepEqual([u.text, u.icon, u.problem], ['updating…', 'sync~spin', false]);
+  const node = buildRepoNode(DRAFTS, idle, []);
+  assert.equal(node.contextValue, 'repo.drafts');
+  assert.ok(node.tooltip.split('\n')[0].startsWith('Drafts: '), node.tooltip);
+  assert.ok(!node.tooltip.includes('Repository:'), node.tooltip);
+});
+
+test('buildTree of the drafts', () => {
+  const eff = effective(catalog, { enabled: ['P1'], excluded: [] }, ['P2']);
+  const draft = buildTree(catalog, eff, ['P2'], { draft: true });
+  assert.ok(draft.every((p) => p.contextValue === 'plugin.draft'));
+  assert.ok(draft.every((p) => p.children.every((c) => c.contextValue === 'child.draft')));
+  const plain = buildTree(catalog, eff, ['P2']);
+  assert.deepEqual(plain.map((p) => p.contextValue), ['plugin', 'plugin.project', 'plugin']);
+  assert.equal(plain[0].children[0].contextValue, 'child');
+});
+
 test('buildMissingNodes', () => {
   const nodes = buildMissingNodes(
     [{ name: '', url: 'https://h/org/b.git', branch: '', normalized: 'h/org/b' }],

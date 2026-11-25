@@ -19,6 +19,7 @@ have briefs. Each idea below becomes a brief when it's picked.
 
 ## Selection and discovery
 
+- Make commands, agents and MCP servers selectable, not only skills and rules.
 - Search and filter in the view.
 - Project suggestions: a plugin declares file patterns (for example `**/*.py`), and the extension suggests it when a
   matching project is opened.
@@ -36,7 +37,6 @@ have briefs. Each idea below becomes a brief when it's picked.
 
 ## Authoring and contribution
 
-- A **New skill** command that scaffolds a skill (folder, `SKILL.md` with frontmatter) in a chosen plugin.
 - Who last changed a skill, and when, in its tooltip.
 - A commit message proposed from the list of changed files.
 

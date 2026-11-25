@@ -113,6 +113,29 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
   `<key>.tmp-*` folders of a failed clone at the next sync.
 - An unreachable server (offline) is quiet while a clone exists, never counts as a sync, and is retried after 5
   minutes. A background sync error is shown once, and again only after a sync succeeded (Sync now always shows it).
+- Drafts: `<storage>/.cursor/plugins/drafts` is a repository of `kind: 'drafts'` (key `drafts`, `listRepos`'s `drafts`
+  argument), listed first when the folder exists and named `drafts` by `baseName`. It has no git and no sync
+  (`syncRepo` only records the check), its own lock (`locks/drafts.lock`, taken by the partial-copy syncs and the
+  authoring writes like any repository's) and a plain folder watcher. The view hides it while it holds no plugin and
+  no conflict (`isEmptyDrafts`). It is never deleted: it is the parent of the registered plugin folders, and Windows
+  refuses to delete or rename that parent; only a draft plugin's own folder is removed (`movePlugin`). Another window
+  starts watching a folder created elsewhere at its next apply (`draftsWatched`, checked at the end of `doApply`), not
+  at once.
+- Authoring (`lib/authoring.js`): the files are written in the repository's folder (`plugin.dir`), never in a partial
+  copy (the copy follows through `syncCopy`), under that repository's lock inside the operation queue. `createPlugin`
+  and `movePlugin` add an entry to `marketplace.json` only when it has a `plugins` array (honouring
+  `metadata.pluginRoot`), and refuse a folder or plugin name already taken. A new item is added to the selection
+  (`enableNew`) only when it is not already included: a fully enabled plugin takes it by itself. A kind whose paths
+  `plugin.json` declares (`customPaths` of the catalog's plugins) gets no scaffold: Cursor would ignore the default
+  folder. **Move to a repository** first unregisters the draft in this window (`Registrar.remove`): on Windows a folder
+  deleted while Cursor watches it as a registered plugin is only "delete pending" (still listed, `lstat` fails with
+  EPERM) until that window unregisters it or reloads (seen live with 0.7.0 before this order). `movePlugin` then copies
+  the folder (`fs.cpSync`), adds the marketplace entry and deletes the draft (a draft folder still listed afterwards,
+  pending or not, is reported as `leftover`; another window that registered the draft lets go of it at its next apply,
+  when the renamed ids reach it); the partial copy of the draft is dropped from `partialCopies` so that it
+  can't carry files back into the deleted folder, and the ids of the user's `enabled` and `excluded` lists are
+  renamed (`renameIds`) before the next apply. Names follow Cursor's own rule for plugin names
+  (`/^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/`, at most 64 characters), used for skills, rules, commands and agents too.
 
 ## Remote windows (Remote-SSH)
 
@@ -199,6 +222,11 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
   cloned again under `repos/` and the old folder stays. The partial copies move to new holder folders once (the hash
   input now holds the repository name): an edit made in an old copy while no window was running is not carried over
   (the old copy stays a week).
+- Writing a plugin rewrites the `marketplace.json` or `mcp.json` it edits with `JSON.stringify(obj, null, 2)`: their
+  formatting (indentation, key layout) changes.
+- Drafts are not backed up and not synced (on a Remote-SSH host they are on the remote machine). A draft has no
+  **Add to this project** (a project can't require a plugin other people don't have). A drafts folder created by another
+  window is shown by this one at its next apply (any sync or settings change), not at once.
 - The publisher was `mg` before the first public release: `extension.js` warns while `mg.cursor-team-plugins` is
   installed (both would register the same plugins), stays inactive and offers to uninstall it; its storage is not
   migrated.

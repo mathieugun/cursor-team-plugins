@@ -2,7 +2,7 @@
   "name": "cursor-team-plugins",
   "displayName": "Team plugins",
   "description": "Keeps a team's Cursor plugins (rules, skills, commands, agents and MCP servers) in sync with the team's git repositories and registers the ones each user and project selected.",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "publisher": "mathieugun",
   "author": "Mathieu Gunther",
   "license": "MIT",
@@ -258,6 +258,42 @@
         "title": "Keep copy version",
         "category": "Team Plugins",
         "icon": "$(arrow-right)"
+      },
+      {
+        "command": "teamPlugins.newPlugin",
+        "title": "New plugin",
+        "category": "Team Plugins",
+        "icon": "$(new-folder)"
+      },
+      {
+        "command": "teamPlugins.newSkill",
+        "title": "New skill",
+        "category": "Team Plugins"
+      },
+      {
+        "command": "teamPlugins.newRule",
+        "title": "New rule",
+        "category": "Team Plugins"
+      },
+      {
+        "command": "teamPlugins.newCommand",
+        "title": "New command",
+        "category": "Team Plugins"
+      },
+      {
+        "command": "teamPlugins.newAgent",
+        "title": "New agent",
+        "category": "Team Plugins"
+      },
+      {
+        "command": "teamPlugins.newMcpServer",
+        "title": "New MCP server",
+        "category": "Team Plugins"
+      },
+      {
+        "command": "teamPlugins.moveDraft",
+        "title": "Move to a repository",
+        "category": "Team Plugins"
       }
     ],
     "menus": {
@@ -286,6 +322,11 @@
           "command": "teamPlugins.showLog",
           "when": "view == teamPlugins.plugins",
           "group": "navigation@4"
+        },
+        {
+          "command": "teamPlugins.newPlugin",
+          "when": "view == teamPlugins.plugins",
+          "group": "1_author@1"
         }
       ],
       "view/item/context": [
@@ -344,8 +385,43 @@
         },
         {
           "command": "teamPlugins.removeRepository",
-          "when": "view == teamPlugins.plugins && viewItem =~ /^repo\\./",
+          "when": "view == teamPlugins.plugins && viewItem =~ /^repo\\.(managed|local)$/",
           "group": "1_repo@2"
+        },
+        {
+          "command": "teamPlugins.newPlugin",
+          "when": "view == teamPlugins.plugins && viewItem =~ /^repo\\.(managed|local|drafts)$/",
+          "group": "2_author@1"
+        },
+        {
+          "command": "teamPlugins.moveDraft",
+          "when": "view == teamPlugins.plugins && viewItem == plugin.draft",
+          "group": "1_draft@1"
+        },
+        {
+          "command": "teamPlugins.newSkill",
+          "when": "view == teamPlugins.plugins && viewItem =~ /^plugin/",
+          "group": "2_new@1"
+        },
+        {
+          "command": "teamPlugins.newRule",
+          "when": "view == teamPlugins.plugins && viewItem =~ /^plugin/",
+          "group": "2_new@2"
+        },
+        {
+          "command": "teamPlugins.newCommand",
+          "when": "view == teamPlugins.plugins && viewItem =~ /^plugin/",
+          "group": "2_new@3"
+        },
+        {
+          "command": "teamPlugins.newAgent",
+          "when": "view == teamPlugins.plugins && viewItem =~ /^plugin/",
+          "group": "2_new@4"
+        },
+        {
+          "command": "teamPlugins.newMcpServer",
+          "when": "view == teamPlugins.plugins && viewItem =~ /^plugin/",
+          "group": "2_new@5"
         },
         {
           "command": "teamPlugins.addProjectRepository",
