@@ -45,8 +45,8 @@ names in fixtures, settings or test data.
 Setup and cleanup: copy `%APPDATA%\Cursor\User\settings.json` to the scratchpad first, point
 `teamPlugins.repositories` at the fixture, and copy the backup back at the end (after a `diff` shows only the test's
 own changes). Logs: the newest `%APPDATA%\Cursor\logs\<session>` folder that has `window*/exthost` (a
-`cursor --install-extension` run makes a newer folder without it). Ask for each hand step with a question card
-(exact action, where, what they should see) and check logs and files between steps.
+`cursor --install-extension` run makes a newer folder without it). Give each hand step as bullets in the message
+(exact action, where, what they should see; what to type or press in backticks), then a question card for the outcome and check logs and files between steps.
 
 ## Don't
 Never install the extension or launch the user's own Cursor without the user asking (probe windows for checking
@@ -130,6 +130,20 @@ under the temp folder, nothing installed) may be run without asking.
   exits 1 in 0.2 s. `resources/app/out/main.js` (`electronFuses.js`) blocks `remote-debugging-port`,
   `remote-debugging-pipe` and every `--inspect*` argument unless the binary's inspect-arguments fuse is on, so no CDP
   to the workbench of an isolated instance (probe, Cursor 3.32.4, 2026-11-25, launcher in the scratchpad; request 11).
+
+- A registered plugin folder, and a skill folder or rule file inside it, can be renamed in place with `fs.renameSync`,
+  registered or not (probe scenario in the isolated Cursor, Cursor 3.32.4, 2026-11-25; request 12). Only its parent
+  (clone, `filtered/` holder) is locked.
+- Cursor's `marketplace.json` reader ignores unknown keys: its zod schemas in
+  `resources/app/extensions/cursor-agent-host/dist/4846.js` never call `.strict()` on the marketplace objects (grep,
+  Cursor 3.32.4, 2026-11-25).
+- In a live scenario `t.find(id)` returns the test hook's snapshot of a tree node (`id`, `label`, `contextValue`,
+  `children`), with no `kind` or `key`: a command that takes a node is called with `{ kind, key }` built by hand
+  (request 12 review, 2026-11-25).
+
+- A tree item whose click command opens a file with plain `showTextDocument` moves the focus to the editor: a view
+  keybinding (`focusedView == ...`) then no longer fires, F2 goes to the editor. Open with `preserveFocus: true` (hand
+  check, Cursor 3.32.4, 2026-11-26; request 12).
 
 ## Implementer lessons
 <!-- One line per project-specific mistake seen in review. -->

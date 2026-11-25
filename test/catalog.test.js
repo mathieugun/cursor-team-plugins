@@ -344,3 +344,37 @@ test('filterMcpJson', () => {
     mcpServers: { b: { command: 'y' } },
   });
 });
+
+test('readCatalog returns the renamed record, keeping only usable entries', (t) => {
+  const root = fixture(t);
+  makePlugin(root, 'a', { skills: ['s'] });
+  assert.deepEqual(readCatalog(root).renamed, {});
+  writeFile(
+    root,
+    '.cursor-plugin/marketplace.json',
+    JSON.stringify({
+      name: 'team',
+      plugins: [{ name: 'a', source: './a' }],
+      renamed: { old: 'a', 'a/skills/x': 'a/skills/s', same: 'same', empty: '', num: 3, '': 'x' },
+    }),
+  );
+  const c = readCatalog(root);
+  assert.deepEqual(c.renamed, { old: 'a', 'a/skills/x': 'a/skills/s' });
+  assert.deepEqual(c.warnings, []);
+  assert.deepEqual(c.plugins.map((p) => p.name), ['a']);
+});
+
+test('readCatalog reads renamed from a marketplace.json without plugins, and warns when it is not an object', (t) => {
+  const root = fixture(t);
+  makePlugin(root, 'a', {});
+  writeFile(root, '.cursor-plugin/marketplace.json', JSON.stringify({ renamed: { old: 'a' } }));
+  const c = readCatalog(root);
+  assert.deepEqual(c.renamed, { old: 'a' });
+  assert.equal(c.name, '');
+  assert.deepEqual(c.plugins.map((p) => p.name), ['a']);
+  writeFile(root, '.cursor-plugin/marketplace.json', JSON.stringify({ renamed: ['x'] }));
+  const bad = readCatalog(root);
+  assert.deepEqual(bad.renamed, {});
+  assert.deepEqual(bad.warnings, ['marketplace.json: "renamed" is not an object']);
+  assert.deepEqual(bad.plugins.map((p) => p.name), ['a']);
+});

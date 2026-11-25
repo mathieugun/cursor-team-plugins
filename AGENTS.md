@@ -1,6 +1,6 @@
 # cursor-team-plugins: developer notes
 
-Cursor (VS Code) extension, version in `package.json` (0.8.0). Plain JavaScript, CommonJS, no npm dependency, no
+Cursor (VS Code) extension, version in `package.json` (0.8.1). Plain JavaScript, CommonJS, no npm dependency, no
 build step. User documentation: `README.md` (for Cursor users: what it does, install, usage; it shows
 only the current version, with no history). Internals, platform notes, detailed limits and the release process:
 `docs/development.md`.
@@ -10,9 +10,10 @@ only the current version, with no history). Internals, platform notes, detailed 
 - `extension.js`: the only file that requires `vscode` (activation, tree view, status bar, commands, timers,
   watchers). Not covered by the tests: check its syntax with the command below.
 - `lib/`: pure logic, never requires `vscode`, tested with node: `catalog` (read one repository: `name`, `plugins`,
-  `mcpServerNames`, `filterMcpJson`; its plugins carry `customPaths`, the kinds `plugin.json` declares), `repos` (the
-  list of repositories: `normalizeUrl`, `listRepos` (takes the `drafts` folder), `assignNames`,
-  `mergeCatalogs`, `normalizeIds`, `originUrl`, `migratedSettings`, `missingRepos`, `unlocatedRepos`, `projectRepoEntry`,
+  `renamed` (the `renamed` record of `marketplace.json`), `mcpServerNames`, `filterMcpJson`; its plugins carry
+  `customPaths`, the kinds `plugin.json` declares), `repos` (the list of repositories: `normalizeUrl`, `listRepos`
+  (takes the `drafts` folder), `assignNames`, `mergeCatalogs`, `normalizeIds`, `followRenames`, `rememberNames`,
+  `originUrl`, `migratedSettings`, `missingRepos`, `unlocatedRepos`, `projectRepoEntry`,
   `withProjectRepo`, `withoutProjectRepo`), `selection` (selection model, on the merged catalog), `treeModel` (`buildTree`,
   `buildChangesNode`, `buildConflictsNode`, `repoStatus`, `buildRepoNode`, `buildMissingNodes`), `materialize`
   (`holderName`, `copyRootOf`, `syncCopy`, `markCopySynced`, `resolveConflict`, `hashCache`: partial plugin copies kept
@@ -23,7 +24,8 @@ only the current version, with no history). Internals, platform notes, detailed 
   a message and the actions to offer), `authoring` (scaffolds and drafts: `nameError`, `serverNameError`, `yamlScalar`,
   `itemFile`, `createItem`, `splitCommandLine`, `mcpEntry`, `addMcpServer`, `pluginLocation`, `createPlugin`,
   `movePlugin`, `renameIds`, `declaredPathsError`, `clashError`), `share` (`shareKind`, `shareableItem`, `projectItems`,
-  `suggestName`, `shareNameError`, `shareItem`, `renameSkillName`: copying a project item into a plugin). `git` also
+  `suggestName`, `shareNameError`, `shareItem`, `renameSkillName`: copying a project item into a plugin), `rename`
+  (`renamePlugin`, `renameItem`, `recordRename`: renaming a plugin or an item and recording it in `marketplace.json`). `git` also
   has `cleanProgress`.
 - `scripts/`: `test.js` (test runner), `zip.js` + `package.js` (VSIX writer), `make-test-repo.js` (bare test team
   repository for live tests, from `test/fixtures/team-repo`; `--name` gives a copy another repository name),
@@ -204,6 +206,11 @@ On a Linux machine with a Cursor server (a Remote-SSH host), the suite runs with
   state, status text); the folder is never deleted (it is the parent of registered
   plugin folders, which Windows can't delete or rename); authoring writes go to the repository's folder under its lock,
   never to a partial copy (the copy follows through `syncCopy`).
+- A registered plugin folder (and the items inside it) can be renamed in place with `fs.renameSync` (probe, Cursor
+  3.32.4), but **Rename** unregisters the plugin first like Move does. `"renamed"` in `marketplace.json` is safe in a
+  repository also imported as a Cursor marketplace: Cursor's schema ignores unknown keys. An id that exists in the
+  catalog is never redirected (`followRenames`). Repository names are remembered in `<storage>/repo-names.json`, outside
+  `state/` (watched: a write there applies in every window).
 - An Explorer context command gets `(clickedUri, selectedUris)` and its `when` is evaluated on the clicked item only;
   `resourcePath` is `fsPath` for `file:` (backslashes on Windows), `uri.path` otherwise: `share.shareKind` and the
   menu's regexes must match (`share.test.js` checks it).
