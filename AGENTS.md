@@ -52,8 +52,8 @@ The VSIX is written to `dist/cursor-team-plugins-<version>.vsix`. The runner pas
 `--test`: with Cursor's runtime a directory argument fails.
 
 Branches: work on a branch (`brief/<name>` for a brief, `fix/<name>` for anything else), never directly on `main`.
-When it is ready, merge it into `main` through a pull request (`gh pr create`, merged on GitHub) or locally with
-`git merge --no-ff`.
+When it is ready, merge it into `main` locally (`git merge --no-ff`), push `main` and delete the branch: one
+maintainer, so no pull request.
 
 Release (from `main`, after the merge): bump `version`, commit, `git tag v<version>`, `git push origin main v<version>`.
 The release workflow runs on the tag, so a tag is only ever made on `main`.
