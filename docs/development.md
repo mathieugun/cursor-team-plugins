@@ -146,7 +146,9 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
   filter on `lstat` that leaves links out (reported); a skill folder that is itself a link is copied through
   `realpath`. A rule from a subfolder of `.cursor/rules` is flattened into the plugin's `rules` (plugins read rules only
   directly there). A renamed skill gets its frontmatter `name:` rewritten when it equalled the old folder name
-  (`renameSkillName`). The original is only ever moved to the trash (`useTrash`), never deleted for good.
+  (`renameSkillName`). The original is moved to the trash (`useTrash`); in a remote window (`vscode.env.remoteName`
+  set) the file system has no trash, so the button reads **Delete the original(s)** and deletes for good after a modal
+  confirmation (`removeOriginals`).
 
 ## Remote windows (Remote-SSH)
 
@@ -238,9 +240,10 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
 - Drafts are not backed up and not synced (on a Remote-SSH host they are on the remote machine). A draft has no
   **Add to this project** (a project can't require a plugin other people don't have). A drafts folder created by another
   window is shown by this one at its next apply (any sync or settings change), not at once.
-- Share with team: moving the original to the trash (`vscode.workspace.fs.delete` with `useTrash`) is not verified in a
-  Remote-SSH window (the remote file system may have no trash); a failure is shown and nothing is deleted. The command
-  palette lists only the `.cursor` folders at the root of each workspace folder and `~/.cursor` (its skills, commands
+- Share with team: a Remote-SSH window's file system has no trash (`vscode.workspace.fs.delete` with `useTrash` fails
+  with "Unable to delete file ... via trash because provider does not support it", live test 0.8.0 on a Linux host),
+  hence the confirmed permanent delete there. A personal `~/.cursor` item is addressed with `Uri.file` in a remote
+  window: deleting it there was not tried live (a failure is shown, nothing else is deleted). The command palette lists only the `.cursor` folders at the root of each workspace folder and `~/.cursor` (its skills, commands
   and agents, no rules); the Explorer's right-click works on any `.cursor` folder.
 - The publisher was `mg` before the first public release: `extension.js` warns while `mg.cursor-team-plugins` is
   installed (both would register the same plugins), stays inactive and offers to uninstall it; its storage is not

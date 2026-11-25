@@ -16,4 +16,6 @@ Today that path is manual.
 - The destination is any loaded plugin (drafts included) or a new plugin (drafts or a repository, the **New plugin**
   flow). The copy is enabled for the user, like a new item.
 - The original stays where it is; the final message offers to move it to the trash (never a permanent delete).
+- After the Remote-SSH live test (a remote window has no trash): there the button deletes the original for good, after
+  a modal confirmation.
 - A name that breaks Cursor's rule or is taken in the plugin is asked for again, with a suggestion.

@@ -63,6 +63,10 @@ assumptions are fine when the user asked for the assumptions to be tested).
   path). Remote logs: `~/.cursor-server/data/logs/<session>/exthost<N>/`; the Cursor Plugins log is under
   `anysphere.cursor-agent-host` there. A remote probe window: `cursor.cmd --new-window --remote ssh-remote+<host>
   --extensionDevelopmentPath=vscode-remote://ssh-remote+<host>/<probe dir> <remote folder>` (needs the user's OK).
+- Remote-SSH live test without a probe: `scp` the VSIX to the host and install it with the server's CLI
+  (`~/.cursor-server/bin/linux-x64/<commit>/bin/cursor-server --install-extension <vsix> --force`), then a window
+  reload. In a remote window `vscode.workspace.fs.delete(..., { useTrash: true })` fails ("provider does not support
+  it"): a plan that deletes user files remotely needs another way (live test 0.8.0, Linux host, 2026-11-25).
 - File watchers on a Linux remote miss subfolders that appear together with their parent (see `watchTree` in
   AGENTS.md): test watcher changes there with `mkdir -p a/b` and a write in `b`, not only a write in an existing folder.
 - Run the suite on a Linux remote with the Cursor server's node (`git archive HEAD | ssh <host> 'tar -x -C <dir>'`,

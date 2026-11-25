@@ -422,3 +422,14 @@ ELECTRON_RUN_AS_NODE=1 "$LOCALAPPDATA/Programs/cursor/Cursor.exe" scripts/packag
 - Use `removeTree` (from `lib/sync.js`), never `fs.rmSync`, in the code and the tests.
 - Don't delete anything without the trash in the extension; never a permanent delete of the user's original.
 - Edit files with the editing tools, not with scripts that rewrite them.
+
+## Changes after review
+
+- Review: a stray whitespace change in `registerCommands` (`const reg =(`) was undone.
+- Remote-SSH live test (Linux host): `vscode.workspace.fs.delete(uri, { useTrash: true })` fails in a remote window
+  ("Unable to delete file 'vscode-remote://...' via trash because provider does not support it"; nothing deleted).
+  Decided with the user: when `vscode.env.remoteName` is set, the last button reads `Delete the original` /
+  `Delete the originals` and `removeOriginals` asks with a modal warning (`Delete <path> for good?` /
+  `Delete the <n> originals for good?`, detail: no trash in this remote window, the copies in the plugin stay, then
+  the paths), button `Delete`, then deletes with `useTrash: false`. Local windows keep the trash. The rule "never a
+  permanent delete" of the Don't list no longer holds for remote windows.

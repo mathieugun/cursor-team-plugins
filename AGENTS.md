@@ -199,6 +199,8 @@ On a Linux machine with a Cursor server (a Remote-SSH host), the suite runs with
 - An Explorer context command gets `(clickedUri, selectedUris)` and its `when` is evaluated on the clicked item only;
   `resourcePath` is `fsPath` for `file:` (backslashes on Windows), `uri.path` otherwise: `share.shareKind` and the
   menu's regexes must match (`share.test.js` checks it).
+- A Remote-SSH window's file system has no trash (`workspace.fs.delete` with `useTrash` fails: "provider does not
+  support it"): `removeOriginals` deletes for good there, only after a modal confirmation (`vscode.env.remoteName`).
 
 ## Rules
 

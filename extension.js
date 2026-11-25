@@ -2187,7 +2187,12 @@ async function shareCommand(uri, uris) {
     shared.length === 1
       ? `the ${authoring.KINDS[shared[0].item.kind].label} ${shared[0].name}`
       : `${shared.length} items`;
-  const trash = shared.length === 1 ? 'Move the original to the trash' : 'Move the originals to the trash';
+  const remote = Boolean(vscode.env.remoteName); // a remote window's file system has no trash
+  const one = shared.length === 1;
+  let removeLabel = one ? 'Move the original to the trash' : 'Move the originals to the trash';
+  if (remote) {
+    removeLabel = one ? 'Delete the original' : 'Delete the originals';
+  }
   const buttons = [];
   let text;
   if (repo.kind === 'drafts') {
@@ -2199,21 +2204,45 @@ async function shareCommand(uri, uris) {
     text = `Copied ${what} to ${plugin.name} in your clone: commit and push it with your own git tools.`;
   }
   vscode.window
-    .showInformationMessage(text, ...buttons, trash)
+    .showInformationMessage(text, ...buttons, removeLabel)
     .then(async (choice) => {
       if (choice === 'Commit and push') {
         await vscode.commands.executeCommand('teamPlugins.commitAndPush', { repo: repo.key });
-      } else if (choice === trash) {
-        for (const { item } of shared) {
-          try {
-            await vscode.workspace.fs.delete(item.uri, { recursive: true, useTrash: true });
-          } catch (err) {
-            vscode.window.showErrorMessage(`Team plugins: could not move ${item.src} to the trash: ${err.message}`);
-          }
-        }
+      } else if (choice === removeLabel) {
+        await removeOriginals(shared, plugin.name, remote);
       }
     })
     .then(undefined, (err) => log(`cannot offer the closing choices of the share: ${err.message}`));
+}
+
+// Removes the originals of shared items: to the trash, or in a remote window (no trash there) deleted for good once the
+// user confirmed it in a modal dialog.
+async function removeOriginals(shared, pluginName, remote) {
+  if (remote) {
+    const paths = shared.map(({ item }) => item.src);
+    const choice = await vscode.window.showWarningMessage(
+      shared.length === 1 ? `Delete ${paths[0]} for good?` : `Delete the ${paths.length} originals for good?`,
+      {
+        modal: true,
+        detail: `This remote window has no trash: they can't be recovered. The copies in ${pluginName} stay.\n\n${paths.join('\n')}`,
+      },
+      'Delete',
+    );
+    if (choice !== 'Delete') {
+      return;
+    }
+  }
+  for (const { item } of shared) {
+    try {
+      await vscode.workspace.fs.delete(item.uri, { recursive: true, useTrash: !remote });
+      log(`${remote ? 'deleted' : 'moved to the trash'}: ${item.src}`);
+    } catch (err) {
+      const how = remote ? 'delete' : 'move';
+      vscode.window.showErrorMessage(
+        `Team plugins: could not ${how} ${item.src}${remote ? '' : ' to the trash'}: ${err.message}`,
+      );
+    }
+  }
 }
 
 function registerCommands(context) {

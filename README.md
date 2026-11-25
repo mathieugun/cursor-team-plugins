@@ -248,7 +248,7 @@ team's.
   - A name Cursor would refuse, or one the plugin already has, is asked for again.
   - The copy is enabled for you and is a local change like a new item (in a managed clone, in **Local changes**).
   - The original stays in the project: the closing message offers to move it to the trash, so the agent doesn't read
-    it twice.
+    it twice. A Remote-SSH window has no trash: there the button deletes the original for good, after you confirm it.
   - The palette lists only the `.cursor` folders at the root of each workspace folder; right-click works on any
     `.cursor` folder shown in the Explorer.
 - **New skill**, **New rule**, **New command**, **New agent** and **New MCP server** (right-click a plugin, or the
