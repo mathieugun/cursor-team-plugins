@@ -7,16 +7,23 @@ selectable (0.6.0), authoring (08). Each idea below becomes a numbered request w
 ## Top picks
 
 Ranked. The first three make contributing easier, which is what keeps a team repository alive; the fourth is what an
-organisation asks for before rolling the extension out widely.
+organisation asks for before rolling the extension out widely. (Share a project rule or skill with the team: picked as
+request 09.)
 
-1. **Share a project rule or skill with the team.** Team skills usually start as a `.cursor/rules/*.mdc` or
-   `.cursor/skills/<name>/` in one project. A **Share with team...** command (right-click in the Explorer) copies it
-   into a plugin, a draft or a repository, as a new local change. Today that path is manual.
-2. **Checks while editing and before pushing.** Diagnostics in the Problems panel for the files of the clones and
+1. **Checks while editing and before pushing.** Diagnostics in the Problems panel for the files of the clones and
    drafts: frontmatter missing or not valid YAML, empty `description`, a skill folder that doesn't match its `name`,
    invalid `mcp.json`, a relative link to a missing file, conflict markers. **Commit and push** runs the same checks
    first. The agent edits these files: catch its mistakes while it edits, not after the push. With it, pick the files
    to commit (checkboxes in Local changes).
+2. **Rename a plugin or an item.** **Rename** (right-click) renames a plugin (folder, `plugin.json` `name`,
+   `marketplace.json` entry; unregistered first, as **Move to a repository** does), a skill (folder and frontmatter
+   `name`), a rule, command or agent (file, and frontmatter `name` when there is one) or an MCP server (its key in
+   `mcp.json`), in a draft, a managed clone or a local clone; the user's selection follows (`renameIds`). Done by hand
+   today, a rename silently drops the item for every teammate who picked it one by one or excluded it, and for every
+   project that lists it: so the repository records it (for example `"renamed": { "<old id>": "<new id>" }` in
+   `marketplace.json`), each user's extension rewrites its lists at the next sync, and projects' lists are read through
+   it like 0.4 ids. The same record (`"formerNames"`) would lift the limitation on renaming a repository. Completes
+   authoring: create, move, rename.
 3. **Open a pull request after Push to a branch.** Open the hosting service's "new pull request" page for the branch
    (GitHub, GitLab, Azure DevOps, from the remote URL), also offered when a push is refused. Skill changes then get a
    review, and users without write access are no longer stuck at "the server refused the push".
