@@ -6,22 +6,20 @@ selectable (0.6.0), authoring (08). Each idea below becomes a numbered request w
 
 ## Top picks
 
-Ranked. The first two make contributing easier, which is what keeps a team repository alive; the third is what an
+Ranked. The first makes contributing easier, which is what keeps a team repository alive; the second is what an
 organisation asks for before rolling the extension out widely. (Share a project rule or skill with the team: picked as
-request 09; rename a plugin or an item: picked as request 12.)
+request 09; rename a plugin or an item: picked as request 12; open a pull request after Push to a branch: picked as
+request 13.)
 
 1. **Checks while editing and before pushing.** Diagnostics in the Problems panel for the files of the clones and
    drafts: frontmatter missing or not valid YAML, empty `description`, a skill folder that doesn't match its `name`,
    invalid `mcp.json`, a relative link to a missing file, conflict markers. **Commit and push** runs the same checks
    first. The agent edits these files: catch its mistakes while it edits, not after the push. With it, pick the files
    to commit (checkboxes in Local changes).
-2. **Open a pull request after Push to a branch.** Open the hosting service's "new pull request" page for the branch
-   (GitHub, GitLab, Azure DevOps, from the remote URL), also offered when a push is refused. Skill changes then get a
-   review, and users without write access are no longer stuck at "the server refused the push".
-3. **Review executable changes before they run.** When an update changes hooks, MCP servers or scripts, show the diff
+2. **Review executable changes before they run.** When an update changes hooks, MCP servers or scripts, show the diff
    and ask before applying it. Today a team commit reaches everyone's agent with no check. Follow-up: pin a tag or
    commit, and roll back the last update.
-4. **Update summary.** After a sync, mark new and changed items in the view (remembering what the user has seen); **What
+3. **Update summary.** After a sync, mark new and changed items in the view (remembering what the user has seen); **What
    changed** opens a diff per item with its author and date, instead of a list of commits in the log. The item's
    tooltip says who last changed it, and when.
 
