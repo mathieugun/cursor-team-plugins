@@ -12,6 +12,7 @@ const {
   serverNameError,
   yamlScalar,
   itemFile,
+  clashError,
   createItem,
   splitCommandLine,
   mcpEntry,
@@ -115,6 +116,15 @@ test('createItem writes files the catalog reads back', (t) => {
   assert.deepEqual(createItem(dir, 'command', 'y', 'd'), { error: 'commands/y.txt already exists' });
   assert.deepEqual(createItem(dir, 'agent', 'Bad', 'd'), { error: NAME_RULE });
   assert.equal(fs.existsSync(path.join(dir, 'agents', 'Bad.md')), false);
+});
+
+test('clashError', (t) => {
+  const root = fixture(t);
+  makePlugin(root, 'p');
+  const dir = path.join(root, 'p');
+  assert.equal(clashError(dir, 'skill', 'x'), '');
+  createItem(dir, 'skill', 'x', 'd');
+  assert.equal(clashError(dir, 'skill', 'x'), 'skills/x already exists');
 });
 
 test('splitCommandLine', () => {

@@ -88,5 +88,10 @@ assumptions are fine when the user asked for the assumptions to be tested).
   config (new `args` are used only after a window reload), so test server changes by name, not by argument (probe,
   Cursor 3.31, 2026-11-25). Opening a probe window from an agent was refused by the auto-mode classifier: ask the user.
 
+- On the maintainer's machine git has no global `user.name`/`user.email` (only this repository's `.git/config`): a
+  live **Commit and push** of a managed clone stops at "git doesn't know your name and email" (live test 0.8.0,
+  2026-11-25, `git config --global user.name` exit 1). To test a commit live, set an identity in the managed clone's
+  own `.git/config` first (with the user's OK), never the global one.
+
 ## Implementer lessons
 <!-- One line per project-specific mistake seen in review. -->

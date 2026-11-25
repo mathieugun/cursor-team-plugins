@@ -21,7 +21,8 @@ Team plugins keeps them in git repositories, one per team, and brings them into 
 - **Improve skills where you use them.** Ask the agent to fix a team skill in the middle of your work; the change shows
   in the view and is one click away from being committed and pushed for the whole team.
 - **Write new plugins and skills.** Create a plugin as a draft that stays on your machine until it is ready, then move
-  it to a repository; scaffold a skill, rule, command, agent or MCP server in any plugin with one command.
+  it to a repository; scaffold a skill, rule, command, agent or MCP server in any plugin with one command, or share a
+  rule or skill that started in a project.
 
 ## Install
 
@@ -237,6 +238,19 @@ team's.
 - **Move to a repository** (right-click a draft plugin) copies it to a repository you follow or to your own clone and
   deletes the draft. The ids in your selection follow the plugin. In a managed clone the plugin appears in **Local
   changes**: commit and push it to share it with the team. A draft can't be added to a project.
+- **Share with team...** copies a rule, skill, command or agent that lives in a project's `.cursor` folder into a
+  plugin. Right-click it in the Explorer (several at once; for a skill, its folder or its `SKILL.md`), or run the
+  command from the command palette: it lists the project's items and your personal skills, commands and agents of
+  `~/.cursor`.
+  - Pick a plugin, or **New plugin...** to create one on the way.
+  - A skill is copied with its whole folder (links inside it are left out and reported); a rule from a subfolder of
+    `.cursor/rules` goes straight into the plugin's `rules`.
+  - A name Cursor would refuse, or one the plugin already has, is asked for again.
+  - The copy is enabled for you and is a local change like a new item (in a managed clone, in **Local changes**).
+  - The original stays in the project: the closing message offers to move it to the trash, so the agent doesn't read
+    it twice.
+  - The palette lists only the `.cursor` folders at the root of each workspace folder; right-click works on any
+    `.cursor` folder shown in the Explorer.
 - **New skill**, **New rule**, **New command**, **New agent** and **New MCP server** (right-click a plugin, or the
   command palette) ask for a name and write the file in the plugin's folder, then enable it for you and open it:
   - a skill is `skills/<name>/SKILL.md`, a rule `rules/<name>.mdc`, a command `commands/<name>.md` and an agent
@@ -331,6 +345,8 @@ terminal where git and SSH can ask their questions; then click **Sync now**.
 - **Remove repository** keeps the clone in the extension's storage.
 - Drafts are only on this machine and are not backed up: move a plugin to a repository to keep it safe.
 - Writing a plugin rewrites the formatting of the `marketplace.json` or `mcp.json` it edits.
+- Share with team copies only rules, skills, commands and agents (not the MCP servers of `.cursor/mcp.json`, nor
+  `AGENTS.md`); links from the item to other project files are copied as they are and may break.
 
 ## Contributing
 

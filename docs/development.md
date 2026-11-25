@@ -137,6 +137,16 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
   can't carry files back into the deleted folder, and the ids of the user's `enabled` and `excluded` lists are
   renamed (`renameIds`) before the next apply. Names follow Cursor's own rule for plugin names
   (`/^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/`, at most 64 characters), used for skills, rules, commands and agents too.
+- Share with team (`lib/share.js`, `shareCommand`): copies a project's (or `~/.cursor`'s) rule, skill, command or agent
+  into a plugin. `shareKind` is the text test behind the Explorer menu's `when` regexes (`share.test.js` keeps the two in
+  step). The Explorer passes `(clicked, selected)` to the command but evaluates the `when` on the clicked item only, so
+  the command filters the selection itself (`shareableItem`). `resourcePath` is `uri.fsPath` for a `file:` URI
+  (backslashes on Windows) and `uri.path` otherwise (Remote-SSH), hence `[\\/]` in the regexes. The copy goes to
+  `plugin.dir` under the repository lock, like the other authoring writes. A skill is copied with `fs.cpSync` and a
+  filter on `lstat` that leaves links out (reported); a skill folder that is itself a link is copied through
+  `realpath`. A rule from a subfolder of `.cursor/rules` is flattened into the plugin's `rules` (plugins read rules only
+  directly there). A renamed skill gets its frontmatter `name:` rewritten when it equalled the old folder name
+  (`renameSkillName`). The original is only ever moved to the trash (`useTrash`), never deleted for good.
 
 ## Remote windows (Remote-SSH)
 
@@ -228,6 +238,10 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
 - Drafts are not backed up and not synced (on a Remote-SSH host they are on the remote machine). A draft has no
   **Add to this project** (a project can't require a plugin other people don't have). A drafts folder created by another
   window is shown by this one at its next apply (any sync or settings change), not at once.
+- Share with team: moving the original to the trash (`vscode.workspace.fs.delete` with `useTrash`) is not verified in a
+  Remote-SSH window (the remote file system may have no trash); a failure is shown and nothing is deleted. The command
+  palette lists only the `.cursor` folders at the root of each workspace folder and `~/.cursor` (its skills, commands
+  and agents, no rules); the Explorer's right-click works on any `.cursor` folder.
 - The publisher was `mg` before the first public release: `extension.js` warns while `mg.cursor-team-plugins` is
   installed (both would register the same plugins), stays inactive and offers to uninstall it; its storage is not
   migrated.
