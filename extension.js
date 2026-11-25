@@ -6,6 +6,7 @@ const path = require('path');
 const os = require('os');
 const { readCatalog } = require('./lib/catalog');
 const authoring = require('./lib/authoring');
+const share = require('./lib/share');
 const selection = require('./lib/selection');
 const {
   buildTree,
@@ -1691,12 +1692,14 @@ async function enableNew(id) {
   }
 }
 
-async function newPluginCommand(arg) {
+// Asks where and how to name a new plugin and creates it: { repo, pluginName, dir } (repo: the label, 'drafts' for the
+// drafts), or null when cancelled, busy or failed.
+async function createPluginFlow(arg) {
   let target = null; // a descriptor, or null for the drafts
   if (arg && arg.kind === 'repo') {
     const given = repoFromArg(arg);
     if (!given) {
-      return;
+      return null;
     }
     if (given.kind !== 'drafts') {
       target = authoringTargets().find((d) => d.key === given.key);
@@ -1704,7 +1707,7 @@ async function newPluginCommand(arg) {
         vscode.window.showInformationMessage(
           `Team plugins: ${labelOf(given)} is not available yet (not cloned, listed twice or replaced).`,
         );
-        return;
+        return null;
       }
     }
   } else {
@@ -1716,7 +1719,7 @@ async function newPluginCommand(arg) {
       { placeHolder: 'Where to create the plugin' },
     );
     if (!picked) {
-      return;
+      return null;
     }
     target = picked.d;
   }
@@ -1727,11 +1730,11 @@ async function newPluginCommand(arg) {
     validateInput: (v) => authoring.nameError(v.trim()) || null,
   });
   if (name === undefined) {
-    return;
+    return null;
   }
   const description = await vscode.window.showInputBox({ prompt: 'Plugin description (optional)', ignoreFocusOut: true });
   if (description === undefined) {
-    return;
+    return null;
   }
   const { draftsRoot } = paths();
   const draftsDesc = descs.find((d) => d.kind === 'drafts');
@@ -1745,18 +1748,27 @@ async function newPluginCommand(arg) {
     );
   });
   if (!result) {
-    return;
+    return null;
   }
   if (result.error) {
     vscode.window.showErrorMessage(`Team plugins: ${result.error}`);
-    return;
+    return null;
   }
   const repo = target ? labelOf(target) : 'drafts';
   const pluginName = name.trim();
   log(`created plugin ${repo}:${pluginName} in ${result.dir}`);
+  return { repo, pluginName, dir: result.dir };
+}
+
+async function newPluginCommand(arg) {
+  const created = await createPluginFlow(arg);
+  if (!created) {
+    return;
+  }
+  const { repo, pluginName, dir } = created;
   await apply();
   await enableNew(`${repo}:${pluginName}`);
-  await vscode.window.showTextDocument(vscode.Uri.file(path.join(result.dir, '.cursor-plugin', 'plugin.json')));
+  await vscode.window.showTextDocument(vscode.Uri.file(path.join(dir, '.cursor-plugin', 'plugin.json')));
   vscode.window
     .showInformationMessage(
       `Created plugin ${pluginName} in ${repo}. Add a skill, rule, command, agent or MCP server from its context menu.`,
@@ -2003,6 +2015,236 @@ async function moveDraftCommand(node) {
   }
 }
 
+// The items of the list without the ones that share a path with an earlier one.
+function uniqueBySrc(list) {
+  return list.filter((it, i) => list.findIndex((o) => samePath(o.src, it.src)) === i);
+}
+
+// The rules, skills, commands and agents to share: the Explorer's selection, or a pick among the project's and the
+// user's. [] when there is none or the pick was cancelled (the user was told or chose so).
+async function itemsToShare(uri, uris) {
+  if (uri instanceof vscode.Uri) {
+    const items = [];
+    for (const u of Array.isArray(uris) && uris.length > 0 ? uris : [uri]) {
+      const item = share.shareableItem(u.fsPath);
+      if (item) {
+        // SKILL.md was clicked: the folder is shared
+        items.push({ ...item, uri: samePath(item.src, u.fsPath) ? u : vscode.Uri.joinPath(u, '..') });
+      }
+    }
+    if (items.length === 0) {
+      vscode.window.showInformationMessage('Team plugins: only a rule, skill, command or agent of a .cursor folder can be shared.');
+    }
+    return uniqueBySrc(items);
+  }
+  const folders = vscode.workspace.workspaceFolders || [];
+  const all = [];
+  for (const folder of folders) {
+    for (const item of share.projectItems(folder.uri.fsPath)) {
+      all.push({
+        ...item,
+        uri: vscode.Uri.joinPath(folder.uri, ...item.rel.split('/')),
+        where: folders.length > 1 ? `${folder.name}/${item.rel}` : item.rel,
+      });
+    }
+  }
+  for (const item of share.projectItems(os.homedir())) {
+    if (item.kind !== 'rule') {
+      all.push({ ...item, uri: vscode.Uri.file(item.src), where: `personal · ~/${item.rel}` });
+    }
+  }
+  const items = uniqueBySrc(all);
+  if (items.length === 0) {
+    vscode.window.showInformationMessage(
+      "Team plugins: no rule, skill, command or agent found in this project's .cursor folder or in ~/.cursor.",
+    );
+    return [];
+  }
+  const editor = vscode.window.activeTextEditor;
+  const active = editor ? share.shareableItem(editor.document.uri.fsPath) : null;
+  const picked = await vscode.window.showQuickPick(
+    items.map((item) => ({
+      label: item.name,
+      description: `${authoring.KINDS[item.kind].label} · ${item.where}`,
+      picked: Boolean(active) && samePath(active.src, item.src),
+      item,
+    })),
+    { canPickMany: true, placeHolder: 'Rules, skills, commands and agents to share' },
+  );
+  return picked ? picked.map((p) => p.item) : [];
+}
+
+// Share with team: copies rules, skills, commands and agents of a .cursor folder into a plugin.
+async function shareCommand(uri, uris) {
+  const items = await itemsToShare(uri, uris);
+  if (items.length === 0) {
+    return;
+  }
+  const dest = await vscode.window.showQuickPick(
+    [
+      { label: '$(add) New plugin...', newPlugin: true },
+      ...catalog.plugins.map((p) => ({ label: p.name, description: p.description, p })),
+    ],
+    { placeHolder: `Plugin to copy ${items.length === 1 ? items[0].name : `${items.length} items`} to` },
+  );
+  if (!dest) {
+    return;
+  }
+  let plugin = dest.p;
+  let isNewPlugin = false;
+  if (dest.newPlugin) {
+    const created = await createPluginFlow(undefined);
+    if (!created) {
+      return;
+    }
+    await apply();
+    plugin = catalog.plugins.find((p) => p.name === `${created.repo}:${created.pluginName}`);
+    if (!plugin) {
+      vscode.window.showErrorMessage('Team plugins: the new plugin is not in the catalog yet: try again.');
+      return;
+    }
+    isNewPlugin = true;
+  }
+  for (const kind of new Set(items.map((item) => item.kind))) {
+    const declared = authoring.declaredPathsError(plugin, kind);
+    if (declared) {
+      vscode.window.showErrorMessage(`Team plugins: ${declared}`);
+      return;
+    }
+  }
+  const repo = descs.find((d) => d.key === plugin.repoKey);
+  if (!repo) {
+    return;
+  }
+  const chosen = new Set(); // `${kind}:${name}` of the names taken by this share
+  const names = [];
+  for (const item of items) {
+    const label = authoring.KINDS[item.kind].label;
+    const taken = (n) => chosen.has(`${item.kind}:${n}`);
+    const takenText = (n) => `another item you are sharing is named ${n}`;
+    let name = item.name;
+    const bad = share.shareNameError(plugin.dir, item.kind, name);
+    if (bad || taken(name)) {
+      const typed = await vscode.window.showInputBox({
+        prompt: `Name for the ${label} ${item.name} in ${plugin.pluginName}: ${bad || takenText(name)}`,
+        value: share.suggestName(item.name),
+        ignoreFocusOut: true,
+        validateInput: (v) => {
+          const t = v.trim();
+          return share.shareNameError(plugin.dir, item.kind, t) || (taken(t) ? takenText(t) : null);
+        },
+      });
+      if (typed === undefined) {
+        return;
+      }
+      name = typed.trim();
+    }
+    chosen.add(`${item.kind}:${name}`);
+    names.push(name);
+  }
+  const results = await enqueue(() =>
+    withRepoLock(repo, () => items.map((item, i) => share.shareItem(item, plugin.dir, names[i]))),
+  );
+  if (!results) {
+    return;
+  }
+  const shared = []; // { item, name, result }
+  results.forEach((result, i) => {
+    if (result.error) {
+      vscode.window.showErrorMessage(`Team plugins: could not share ${items[i].name}: ${result.error}`);
+    } else {
+      shared.push({ item: items[i], name: names[i], result });
+    }
+  });
+  if (shared.length === 0) {
+    return;
+  }
+  await apply();
+  const fresh = catalog.plugins.find((p) => p.name === plugin.name);
+  const ids = [];
+  for (const { item, name, result } of shared) {
+    const child = fresh && fresh.children.find((c) => samePath(c.file, result.file));
+    log(`shared ${item.src} as ${child ? child.id : name} in ${result.file}`);
+    if (child) {
+      ids.push(child.id);
+    }
+  }
+  if (isNewPlugin) {
+    await enableNew(plugin.name);
+  } else {
+    for (const id of ids) {
+      await enableNew(id);
+    }
+  }
+  const skipped = shared.flatMap(({ name, result }) => result.skipped.map((rel) => `${name}/${rel}`));
+  if (skipped.length > 0) {
+    vscode.window.showWarningMessage(`Team plugins: links are not copied: ${skipped.join(', ')}`);
+  }
+  if (shared.length === 1) {
+    await vscode.window.showTextDocument(vscode.Uri.file(shared[0].result.file));
+  }
+  const what =
+    shared.length === 1
+      ? `the ${authoring.KINDS[shared[0].item.kind].label} ${shared[0].name}`
+      : `${shared.length} items`;
+  const remote = Boolean(vscode.env.remoteName); // a remote window's file system has no trash
+  const one = shared.length === 1;
+  let removeLabel = one ? 'Move the original to the trash' : 'Move the originals to the trash';
+  if (remote) {
+    removeLabel = one ? 'Delete the original' : 'Delete the originals';
+  }
+  const buttons = [];
+  let text;
+  if (repo.kind === 'drafts') {
+    text = `Copied ${what} to the draft plugin ${plugin.pluginName}. Move the plugin to a repository when it is ready.`;
+  } else if (repo.kind === 'managed') {
+    text = `Copied ${what} to ${plugin.name}: it is in the repository's Local changes. Commit and push to share it with the team.`;
+    buttons.push('Commit and push');
+  } else {
+    text = `Copied ${what} to ${plugin.name} in your clone: commit and push it with your own git tools.`;
+  }
+  vscode.window
+    .showInformationMessage(text, ...buttons, removeLabel)
+    .then(async (choice) => {
+      if (choice === 'Commit and push') {
+        await vscode.commands.executeCommand('teamPlugins.commitAndPush', { repo: repo.key });
+      } else if (choice === removeLabel) {
+        await removeOriginals(shared, plugin.name, remote);
+      }
+    })
+    .then(undefined, (err) => log(`cannot offer the closing choices of the share: ${err.message}`));
+}
+
+// Removes the originals of shared items: to the trash, or in a remote window (no trash there) deleted for good once the
+// user confirmed it in a modal dialog.
+async function removeOriginals(shared, pluginName, remote) {
+  if (remote) {
+    const paths = shared.map(({ item }) => item.src);
+    const choice = await vscode.window.showWarningMessage(
+      shared.length === 1 ? `Delete ${paths[0]} for good?` : `Delete the ${paths.length} originals for good?`,
+      {
+        modal: true,
+        detail: `This remote window has no trash: they can't be recovered. The copies in ${pluginName} stay.\n\n${paths.join('\n')}`,
+      },
+      'Delete',
+    );
+    if (choice !== 'Delete') {
+      return;
+    }
+  }
+  for (const { item } of shared) {
+    try {
+      await vscode.workspace.fs.delete(item.uri, { recursive: true, useTrash: !remote });
+      log(`${remote ? 'deleted' : 'moved to the trash'}: ${item.src}`);
+    } catch (err) {
+      const how = remote ? 'delete' : 'move';
+      vscode.window.showErrorMessage(
+        `Team plugins: could not ${how} ${item.src}${remote ? '' : ' to the trash'}: ${err.message}`,
+      );
+    }
+  }
+}
+
 function registerCommands(context) {
   const reg = (id, fn) => context.subscriptions.push(vscode.commands.registerCommand(id, fn));
 
@@ -2110,6 +2352,7 @@ function registerCommands(context) {
   reg('teamPlugins.newAgent', (node) => newItemCommand('agent', node));
   reg('teamPlugins.newMcpServer', (node) => newItemCommand('mcp', node));
   reg('teamPlugins.moveDraft', moveDraftCommand);
+  reg('teamPlugins.shareWithTeam', shareCommand);
   reg('teamPlugins.commitAndPush', commitAndPushCommand);
   reg('teamPlugins.pushToBranch', pushToBranchCommand);
   reg('teamPlugins.openChange', openChangeCommand);

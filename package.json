@@ -2,7 +2,7 @@
   "name": "cursor-team-plugins",
   "displayName": "Team plugins",
   "description": "Keeps a team's Cursor plugins (rules, skills, commands, agents and MCP servers) in sync with the team's git repositories and registers the ones each user and project selected.",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "publisher": "mathieugun",
   "author": "Mathieu Gunther",
   "license": "MIT",
@@ -294,6 +294,11 @@
         "command": "teamPlugins.moveDraft",
         "title": "Move to a repository",
         "category": "Team Plugins"
+      },
+      {
+        "command": "teamPlugins.shareWithTeam",
+        "title": "Share with team...",
+        "category": "Team Plugins"
       }
     ],
     "menus": {
@@ -432,6 +437,13 @@
           "command": "teamPlugins.addProjectRepository",
           "when": "view == teamPlugins.plugins && viewItem == missing",
           "group": "1_missing@1"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "teamPlugins.shareWithTeam",
+          "when": "explorerResourceIsFolder && resourcePath =~ /[\\\\/]\\.cursor[\\\\/]skills[\\\\/][^\\\\/]+$/ || !explorerResourceIsFolder && resourcePath =~ /[\\\\/]\\.cursor[\\\\/](rules[\\\\/](.+[\\\\/])?[^\\\\/]+\\.mdc?|skills[\\\\/][^\\\\/]+[\\\\/]SKILL\\.md|commands[\\\\/][^\\\\/]+\\.(md|mdc|markdown|txt)|agents[\\\\/][^\\\\/]+\\.(md|mdc|markdown))$/",
+          "group": "7_teamPlugins@1"
         }
       ],
       "commandPalette": [

@@ -1,6 +1,6 @@
 # cursor-team-plugins: developer notes
 
-Cursor (VS Code) extension, version in `package.json` (0.7.0). Plain JavaScript, CommonJS, no npm dependency, no
+Cursor (VS Code) extension, version in `package.json` (0.8.0). Plain JavaScript, CommonJS, no npm dependency, no
 build step. User documentation: `README.md` (for Cursor users: what it does, install, usage; it shows
 only the current version, with no history). Internals, platform notes, detailed limits and the release process:
 `docs/development.md`.
@@ -22,7 +22,9 @@ only the current version, with no history). Internals, platform notes, detailed 
   `registrar`, `remoteErrors` (`classify`, `remoteHost`, `describeRemote`, `remoteResult`: classified git failures with
   a message and the actions to offer), `authoring` (scaffolds and drafts: `nameError`, `serverNameError`, `yamlScalar`,
   `itemFile`, `createItem`, `splitCommandLine`, `mcpEntry`, `addMcpServer`, `pluginLocation`, `createPlugin`,
-  `movePlugin`, `renameIds`, `declaredPathsError`). `git` also has `cleanProgress`.
+  `movePlugin`, `renameIds`, `declaredPathsError`, `clashError`), `share` (`shareKind`, `shareableItem`, `projectItems`,
+  `suggestName`, `shareNameError`, `shareItem`, `renameSkillName`: copying a project item into a plugin). `git` also
+  has `cleanProgress`.
 - `scripts/`: `test.js` (test runner), `zip.js` + `package.js` (VSIX writer), `make-test-repo.js` (bare test team
   repository for live tests, from `test/fixtures/team-repo`; `--name` gives a copy another repository name), `make_icon.py` (regenerates `resources/icon.png`: three stacked package boxes on a blue rounded square, drawn from no source image: `uv run --with pillow python scripts/make_icon.py`; not packaged). Nothing under `lib/` or `scripts/`
   may require `vscode`.
@@ -194,6 +196,11 @@ On a Linux machine with a Cursor server (a Remote-SSH host), the suite runs with
   state, status text); the folder is never deleted (it is the parent of registered
   plugin folders, which Windows can't delete or rename); authoring writes go to the repository's folder under its lock,
   never to a partial copy (the copy follows through `syncCopy`).
+- An Explorer context command gets `(clickedUri, selectedUris)` and its `when` is evaluated on the clicked item only;
+  `resourcePath` is `fsPath` for `file:` (backslashes on Windows), `uri.path` otherwise: `share.shareKind` and the
+  menu's regexes must match (`share.test.js` checks it).
+- A Remote-SSH window's file system has no trash (`workspace.fs.delete` with `useTrash` fails: "provider does not
+  support it"): `removeOriginals` deletes for good there, only after a modal confirmation (`vscode.env.remoteName`).
 
 ## Rules
 
