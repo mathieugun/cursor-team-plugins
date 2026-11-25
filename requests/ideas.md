@@ -1,7 +1,8 @@
-# Feature ideas
+# Ideas
 
-Ideas from the 2026-11-22 review, not yet planned. Remote-SSH windows (brief 04), several repositories (brief 05) and a reliable remote repository (brief 06) already
-have briefs. Each idea below becomes a brief when it's picked.
+Ideas from the 2026-11-22 review, not yet planned. Remote-SSH windows (request 04), several repositories (request 05)
+and a reliable remote repository (request 06) are done (`done/`). Each idea below becomes a numbered request when it's
+picked.
 
 ## Top picks
 
@@ -43,5 +44,5 @@ have briefs. Each idea below becomes a brief when it's picked.
 ## Organisation
 
 - A company index repository that lists the team repositories, so users subscribe to teams from the view (follow-up
-  to brief 05).
+  to request 05).
 - Self-update: the team repository carries the VSIX, and the extension offers to install a newer one.

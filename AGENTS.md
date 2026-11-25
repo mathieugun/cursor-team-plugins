@@ -35,6 +35,8 @@ only the current version, with no history). Internals, platform notes, detailed 
 - `.github/workflows/release.yml`: on a `v*` tag, checks the tag against `package.json`, runs the tests, packages,
   makes a GitHub release with the VSIX and publishes it to Open VSX when the `OVSX_PAT` secret is set (`curl` to
   `https://open-vsx.org/api/-/publish?token=`; no npm).
+- `requests/`: requests being worked on (`NN-<name>.md`) with their plans (`NN-<name>.plan.md`), finished ones in
+  `done/`, ideas not picked yet in `ideas.md` (the `/implement` skill's layout; not packaged).
 
 ## Commands
 
@@ -51,7 +53,8 @@ ELECTRON_RUN_AS_NODE=1 "$LOCALAPPDATA/Programs/cursor/Cursor.exe" scripts/make-t
 The VSIX is written to `dist/cursor-team-plugins-<version>.vsix`. The runner passes explicit test files to
 `--test`: with Cursor's runtime a directory argument fails.
 
-Branches: work on a branch (`brief/<name>` for a brief, `fix/<name>` for anything else), never directly on `main`.
+Branches: work on a branch (`request/<NN>-<name>` for a numbered request, `fix/<name>` for anything else), never
+directly on `main`.
 When it is ready, merge it into `main` locally (`git merge --no-ff`), push `main` and delete the branch: one
 maintainer, so no pull request.
 
