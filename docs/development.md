@@ -7,7 +7,8 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
 
 - Build the VSIX: `node scripts/package.js` (writes `dist/cursor-team-plugins-<version>.vsix`; see `AGENTS.md` for
   running it with Cursor's runtime when node is not installed).
-- Release: bump `version` in `package.json`, commit, then push a tag `v<version>` (`git tag v<version>`,
+- Changes are made on a branch and merged into `main` when ready (see `AGENTS.md`). Release from `main`: bump
+  `version` in `package.json`, commit, then push a tag `v<version>` (`git tag v<version>`,
   `git push origin main v<version>`). `.github/workflows/release.yml` checks that the tag matches the version, runs the
   tests, attaches the VSIX to a GitHub release and publishes it to Open VSX, which Cursor's marketplace mirrors (a new
   extension appeared there about 7 minutes after Open VSX listed it; new versions of existing extensions show up at

@@ -29,6 +29,11 @@ log and the Team Plugins view. The team repository is the fixture: build it with
 `scripts/make-test-repo.js <scratchpad>/team-plugins.git` (plugins `review` and `docs`) and add the path it prints to
 `teamPlugins.repositories` (a second one built with `--name team-two`). Test names stay generic: no company or team
 names in fixtures, settings or test data.
+Setup and cleanup: copy `%APPDATA%\Cursor\User\settings.json` to the scratchpad first, point
+`teamPlugins.repositories` at the fixture, and copy the backup back at the end (after a `diff` shows only the test's
+own changes). Logs: the newest `%APPDATA%\Cursor\logs\<session>` folder that has `window*/exthost` (a
+`cursor --install-extension` run makes a newer folder without it). Ask for each hand step with a question card
+(exact action, where, what they should see) and check logs and files between steps.
 
 ## Don't
 Never install the extension or launch Cursor windows without the user asking (probe windows for checking

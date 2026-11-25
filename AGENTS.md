@@ -51,7 +51,12 @@ ELECTRON_RUN_AS_NODE=1 "$LOCALAPPDATA/Programs/cursor/Cursor.exe" scripts/make-t
 The VSIX is written to `dist/cursor-team-plugins-<version>.vsix`. The runner passes explicit test files to
 `--test`: with Cursor's runtime a directory argument fails.
 
-Release: bump `version`, commit, `git tag v<version>`, `git push origin v<version>`.
+Branches: work on a branch (`brief/<name>` for a brief, `fix/<name>` for anything else), never directly on `main`.
+When it is ready, merge it into `main` through a pull request (`gh pr create`, merged on GitHub) or locally with
+`git merge --no-ff`.
+
+Release (from `main`, after the merge): bump `version`, commit, `git tag v<version>`, `git push origin main v<version>`.
+The release workflow runs on the tag, so a tag is only ever made on `main`.
 
 On a Linux machine with a Cursor server (a Remote-SSH host), the suite runs with the server's node:
 `~/.cursor-server/bin/linux-x64/<commit>/node scripts/test.js`.
