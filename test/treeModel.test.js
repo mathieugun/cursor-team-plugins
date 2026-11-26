@@ -444,3 +444,96 @@ test('itemDecoration', () => {
     }
   }
 });
+
+// ---- problems (lib/checks.js) ------------------------------------------------------------------------------------
+
+const problem = (severity, line, message = 'm') => ({ file: '/x/f.md', line, severity, message });
+
+test('an item with problems says so and has a worst severity', () => {
+  const cat = {
+    plugins: [
+      {
+        name: 'P',
+        displayName: 'P',
+        version: '',
+        description: '',
+        dir: '/repo/P',
+        children: [
+          { ...child('P/skills/a', 'skill'), problems: [problem('error', 3, 'broken')] },
+          { ...child('P/skills/b', 'skill'), problems: [problem('warning', 1, 'w1'), problem('warning', 0, 'w2')] },
+          child('P/skills/c', 'skill'),
+        ],
+      },
+    ],
+  };
+  const [p] = buildTree(cat, effective(cat, { enabled: ['P'], excluded: [] }, []), []);
+  const [a, b, c] = p.children;
+  assert.equal(a.problem, 'error');
+  assert.equal(a.description, 'skill · problem');
+  assert.ok(a.tooltip.includes('Problem (line 3): broken'), a.tooltip);
+  assert.deepEqual(a.problems, [problem('error', 3, 'broken')]);
+  assert.equal(b.problem, 'warning');
+  assert.equal(b.description, 'skill · 2 problems');
+  assert.ok(b.tooltip.includes('Problem (line 1): w1\nProblem: w2'), b.tooltip);
+  assert.equal(c.problem, null);
+  assert.equal(c.description, 'skill');
+  assert.deepEqual(c.problems, []);
+  assert.equal(p.itemProblems, 3);
+  assert.equal(p.problem, 'error');
+  assert.equal(p.description, '3 problems');
+  assert.ok(p.tooltip.includes('2 item(s) with problems'), p.tooltip);
+});
+
+test('a plugin counts its own problems and its items', () => {
+  const cat = {
+    plugins: [
+      {
+        name: 'P',
+        displayName: 'P',
+        version: '1.0.0',
+        description: 'Desc',
+        dir: '/repo/P',
+        problems: [problem('warning', 0, 'own')],
+        children: [{ ...child('P/skills/a', 'skill'), problems: [problem('error', 2, 'item')] }],
+      },
+      { name: 'Q', displayName: 'Q', version: '', description: '', dir: '/repo/Q', children: [child('Q/skills/b', 'skill')] },
+      {
+        name: 'R',
+        displayName: 'R',
+        version: '',
+        description: '',
+        dir: '/repo/R',
+        problems: [problem('warning', 4, 'only')],
+        children: [],
+      },
+    ],
+  };
+  const [p, q, r] = buildTree(cat, effective(cat, { enabled: [], excluded: [] }, []), []);
+  assert.equal(p.description, 'v1.0.0 · 2 problems');
+  assert.equal(p.problem, 'error');
+  assert.equal(p.itemProblems, 1);
+  assert.equal(p.tooltip, 'Desc\nProblem: own\n1 item(s) with problems');
+  assert.equal(q.problem, null);
+  assert.equal(q.description, '');
+  assert.equal(q.tooltip, 'Q');
+  assert.deepEqual(q.problems, []);
+  assert.equal(q.itemProblems, 0);
+  assert.equal(r.problem, 'warning');
+  assert.equal(r.description, '1 problem');
+  assert.equal(r.tooltip, 'R\nProblem (line 4): only');
+});
+
+test('buildRepoNode shows the problems of the repository', () => {
+  const state = { lastResult: { kind: 'upToDate', head: 'abcdef1234' } };
+  const one = buildRepoNode(MANAGED, state, [], undefined, [problem('error', 0, 'bad list')]);
+  assert.equal(one.description, 'up to date · 1 problem');
+  assert.ok(one.tooltip.includes('Problem: bad list\nState: up to date'), one.tooltip);
+  const two = buildRepoNode(MANAGED, state, [], { new: 1, updated: 0, removed: 0 }, [
+    problem('error', 2, 'a'),
+    problem('warning', 0, 'b'),
+  ]);
+  assert.equal(two.description, 'up to date · 1 new · 2 problems');
+  assert.ok(two.tooltip.includes('Problem (line 2): a\nProblem: b\nState: up to date'), two.tooltip);
+  assert.equal(buildRepoNode(MANAGED, state, [], undefined, []).description, 'up to date');
+  assert.equal(buildRepoNode(MANAGED, state, []).description, 'up to date');
+});

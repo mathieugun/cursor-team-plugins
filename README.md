@@ -215,6 +215,14 @@ Cursor asks which one when several have changes. To share them:
   print that page's address on the push).
 - **Discard local changes** throws them away, after a confirmation that lists what would be lost.
 
+Before pushing, the extension checks the plugins you changed for what Cursor silently drops or misreads: frontmatter
+that isn't valid YAML, a skill or agent without a description, an agent with no instructions, two skills with one name,
+JSON that doesn't parse in `marketplace.json`, `plugin.json` or `mcp.json`, conflict markers. If it finds any, it stops
+and lists them: **Push anyway** pushes regardless, **Open files** opens them. The same problems show in the view (an
+error or warning icon, `· problem` on the row, the message in the tooltip) and in the Problems panel, where Cursor's
+agent can read them with its lint tool after its edits. The most common fix: put a value that contains `: ` (or starts with `*`, `[`, `@`...) in
+quotes, e.g. `globs: "*.ts"`.
+
 Updates never overwrite your changes: they are kept on top of the team's new commits. Only a real conflict, where a
 teammate changed the same lines, pauses the updates until you push your changes to a branch or discard them.
 
@@ -331,6 +339,8 @@ terminal where git and SSH can ask their questions; then click **Sync now**.
   per repository (state, last commit, last check) and lists the registered plugins. A warning icon means a paused
   update, a failed sync, a repository that is not loaded or a failed registration; a plug-off icon means a server
   couldn't be reached.
+- A skill, rule, command or agent that is missing in Cursor: look at its row in the view; an error icon says why Cursor
+  drops it (hover it for the message).
 - "vscode.cursor.plugins is missing": this Cursor is too old for extension plugins; update Cursor.
 - "git was not found": install git (2.38 or later) and restart Cursor, or set `git.path`; **Team Plugins: Check git**
   checks it again.
