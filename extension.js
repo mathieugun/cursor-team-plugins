@@ -65,6 +65,9 @@ const realUi = {
   showInputBox: (...a) => vscode.window.showInputBox(...a),
   showOpenDialog: (...a) => vscode.window.showOpenDialog(...a),
   showWorkspaceFolderPick: (...a) => vscode.window.showWorkspaceFolderPick(...a),
+  // The URL is passed as a string so that Cursor opens it exactly: a Uri is re-encoded with
+  // encodeURI(uri.toString(true)), which breaks an encoded &, + or # of a branch name.
+  openExternal: (url) => vscode.env.openExternal(url),
 };
 let ui = realUi;
 let testMode = false; // the extension runs under --extensionTestsPath (scripts/live-test.js)
@@ -450,6 +453,10 @@ const ACTIONS = {
   pushToBranch: {
     label: 'Push to a branch',
     run: (d) => vscode.commands.executeCommand('teamPlugins.pushToBranch', { repo: d.key }),
+  },
+  pullRequest: {
+    label: 'Open a pull request',
+    run: (d) => vscode.commands.executeCommand('teamPlugins.pushToBranch', { repo: d.key, openPullRequest: true }),
   },
   retryPush: {
     label: 'Try again',
@@ -2649,8 +2656,14 @@ function askCommitMessage(d) {
   });
 }
 
-// Shows the outcome of commitAndPush / pushToBranch on the repository d.
-function reportContribution(result, nothingText, d) {
+// Opens the hosting service's new pull request page of a pushed branch (result.pullRequest of pushToBranch).
+function openPullRequest(result) {
+  return ui.openExternal(result.pullRequest.url);
+}
+
+// Shows the outcome of commitAndPush / pushToBranch on the repository d. openPullRequest: open the pull request page
+// of a pushed branch at once (the user chose Open a pull request).
+function reportContribution(result, nothingText, d, { openPullRequest: openPage = false } = {}) {
   switch (result.kind) {
     case 'pushed':
       ui.showInformationMessage(
@@ -2658,13 +2671,33 @@ function reportContribution(result, nothingText, d) {
       );
       break;
     case 'pushedBranch': {
-      const merge = `git fetch ${result.remote}\ngit merge ${result.remote}/${result.branch}`;
-      ui
-        .showInformationMessage(
-          `Pushed your changes to branch ${result.branch}. The managed clone is back on the team version. To merge, in your own clone: git fetch ${result.remote} && git merge ${result.remote}/${result.branch}`,
-          'Copy merge commands',
-        )
-        .then((choice) => (choice === 'Copy merge commands' ? vscode.env.clipboard.writeText(merge) : undefined));
+      const { branch, remote } = result;
+      const merge = `git fetch ${remote}\ngit merge ${remote}/${branch}`;
+      const mergeText = `git fetch ${remote} && git merge ${remote}/${branch}`;
+      const page = result.pullRequest;
+      if (page) {
+        log(`pull request page for ${branch}: ${page.url}`);
+      }
+      const into = page && page.target ? ` into ${page.target}` : '';
+      let text;
+      let buttons;
+      if (openPage && page) {
+        openPullRequest(result);
+        text = `Pushed your changes to branch ${branch} and opened the page to propose them as a pull request${into}. The managed clone is back on the team version.`;
+        buttons = ['Open pull request', 'Copy merge commands'];
+      } else if (page) {
+        text = `Pushed your changes to branch ${branch}. The managed clone is back on the team version. Open a pull request to have them reviewed and merged${into}, or merge it in your own clone: ${mergeText}`;
+        buttons = ['Open pull request', 'Copy merge commands'];
+      } else {
+        text = `Pushed your changes to branch ${branch}. The managed clone is back on the team version. Open a pull request from it on the hosting service, or merge it in your own clone: ${mergeText}`;
+        buttons = ['Copy merge commands'];
+      }
+      ui.showInformationMessage(text, ...buttons).then((choice) => {
+        if (choice === 'Open pull request') {
+          return openPullRequest(result);
+        }
+        return choice === 'Copy merge commands' ? vscode.env.clipboard.writeText(merge) : undefined;
+      });
       break;
     }
     case 'nothing':
@@ -2770,6 +2803,7 @@ async function commitAndPushCommand(arg) {
 }
 
 async function pushToBranchCommand(arg) {
+  const wantsPage = !!(arg && arg.openPullRequest);
   const d = await pickToContribute(arg, { placeHolder: 'Repository to push', nothingText: 'Nothing to push.' });
   if (!d) {
     return;
@@ -2778,7 +2812,7 @@ async function pushToBranchCommand(arg) {
   const run = makeGit(gitPath());
   const name = await run(['config', 'user.name'], d.dir);
   const branch = await ui.showInputBox({
-    prompt: 'Branch to push your changes to (merge it later from your own clone)',
+    prompt: 'Branch to push your changes to (then open a pull request from it, or merge it from your own clone)',
     value: contribute.defaultBranchName(name.stdout, new Date()),
     ignoreFocusOut: true,
     validateInput: (v) => (v.trim() ? null : 'Enter a branch name'),
@@ -2816,7 +2850,7 @@ async function pushToBranchCommand(arg) {
         },
       ),
     )) || UNEXPECTED;
-  reportContribution(result, 'Nothing to push.', d);
+  reportContribution(result, 'Nothing to push.', d, { openPullRequest: wantsPage });
   await refresh({ sync: true, keys: new Set([d.key]) });
 }
 
@@ -2942,6 +2976,7 @@ function makeTestUi() {
       const options = args[0] || {};
       return { record: { title: options.title, openLabel: options.openLabel } };
     }),
+    openExternal: make('openExternal', (args) => ({ record: { url: args[0] } })),
   };
 }
 
