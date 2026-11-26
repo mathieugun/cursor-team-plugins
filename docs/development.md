@@ -59,7 +59,10 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
     can't be tested live: with `--extensionTestsPath` Cursor keeps its storage in memory, so a scenario can't read
     the walkthrough's progress.
 - **By hand** (`test/manual-remote-checks.md`): what needs a real server or the real ssh and credential manager, and
-  the look of the view (icons, colours).
+  the look of the view (icons, colours). `python scripts/live_check.py` helps there: `install` (package and install
+  in the Cursor you use, or with `--host` on a Remote-SSH host), `status --since install` (installed files against
+  the working tree, the Team Plugins log and Cursor's plugin registrations since the install, across reloads) and
+  `settings backup|diff|restore <dir>` around a test that changes `teamPlugins.*` settings.
 
 ## How it works
 
