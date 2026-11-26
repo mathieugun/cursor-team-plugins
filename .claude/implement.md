@@ -35,18 +35,24 @@ detailed limits, releasing), AGENTS.md, `package.json` version and `contributes`
 Run `scripts/live-test.js` first (pre-approved: isolated profile, nothing installed). A request that changes behaviour
 adds or updates a scenario in `test/live/`; the install in the user's Cursor is asked only for what the scenarios can't
 show (the look, Remote-SSH).
-The install needs the user's OK (it changes the Cursor they use): package
-(`ELECTRON_RUN_AS_NODE=1 "$LOCALAPPDATA/Programs/cursor/Cursor.exe" scripts/package.js`), then
-`cursor --install-extension dist/cursor-team-plugins-<version>.vsix` and a window reload; check the Cursor Plugins
-log and the Team Plugins view. The team repository is the fixture: build it with
+The install needs the user's OK (it changes the Cursor they use). The team repository is the fixture: build it with
 `scripts/make-test-repo.js <scratchpad>/team-plugins.git` (plugins `review` and `docs`) and add the path it prints to
 `teamPlugins.repositories` (a second one built with `--name team-two`). Test names stay generic: no company or team
 names in fixtures, settings or test data.
-Setup and cleanup: copy `%APPDATA%\Cursor\User\settings.json` to the scratchpad first, point
-`teamPlugins.repositories` at the fixture, and copy the backup back at the end (after a `diff` shows only the test's
-own changes). Logs: the newest `%APPDATA%\Cursor\logs\<session>` folder that has `window*/exthost` (a
-`cursor --install-extension` run makes a newer folder without it). Give each hand step as bullets in the message
-(exact action, where, what they should see; what to type or press in backticks), then a question card for the outcome and check logs and files between steps.
+
+Hand checks run in a separate session: brief `.claude/live-test-brief.md`, model Sonnet, report
+`requests/NN-<name>.live.md` (not committed). Run `scripts/live-test.js` here first; the session gets only what the
+scenarios can't show.
+
+Tools (`python scripts/live_check.py`, from the repo root; `--host <ssh host>` for Remote-SSH):
+- `status [--since install|host|10m|07:10] [--grep <regex>]`: the installed version and whether its files match the
+  working tree, then per window the Team Plugins output lines and Cursor's plugin registrations since then (default:
+  the current extension host; `install` reads across reloads). Check each hand step with it.
+- `install [--no-package] [--dry-run]`: package, install (`cursor --install-extension --force`, or the Cursor
+  server's CLI on the host), check the installed files; the user then reloads the window.
+- `settings backup|diff|restore <dir>`: back up `%APPDATA%\Cursor\User\settings.json` before pointing
+  `teamPlugins.repositories` at the fixture, `diff` to see only the test's own changes, `restore` at the end.
+  `backup` refuses to overwrite an earlier backup (it may hold the real settings).
 
 ## Don't
 Never install the extension or launch the user's own Cursor without the user asking (probe windows for checking
@@ -164,6 +170,17 @@ under the temp folder, nothing installed) may be run without asking.
   host. With `--extensionTestsPath` storage is in memory: progress can't be read in a live scenario.
 - `scripts/package.js` packages `resources/` non-recursively: a new resource goes directly in `resources/`
   (request 14, read in `vsixEntries`).
+
+- Cursor's logs: locally one `window*/exthost` per window in the newest `%APPDATA%\Cursor\logs\<session>` that has
+  one (a `cursor --install-extension` run makes a newer folder without it), a new
+  `output_logging_<local time>_<id>` folder per extension host (each reload), `Cursor Plugins.log` appended across
+  reloads; on a Remote-SSH host each reload adds an `exthost<N>` under `~/.cursor-server/data/logs/<session>/`.
+  Team Plugins lines carry a UTC `[...Z]` time, Cursor Plugins lines local time then a UTC `[...Z]`.
+  `extensions.json` records `metadata.installedTimestamp` (ms) per extension (Cursor 3.32, 2026-11-26, read while
+  writing `scripts/live_check.py`).
+- From Python on Windows, Git for Windows' `ssh` hangs once a command prints more than a few kB (a 186 kB `tar` never
+  arrived); `C:\Windows\System32\OpenSSH\ssh.exe` works and reads the same `~/.ssh/config` (`live_check.py` uses it;
+  against gnosis, 2026-11-26).
 
 ## Implementer lessons
 <!-- One line per project-specific mistake seen in review. -->
