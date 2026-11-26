@@ -19,6 +19,7 @@ const {
 } = require('./lib/treeModel');
 const { holderName, copyRootOf, syncCopy, markCopySynced, resolveConflict, gcFiltered } = require('./lib/materialize');
 const { makeGit } = require('./lib/git');
+const { checkGit, gitCheckMessage, DOWNLOAD_URL } = require('./lib/gitCheck');
 const sync = require('./lib/sync');
 const contribute = require('./lib/contribute');
 const { pluginApi } = require('./lib/cursorApi');
@@ -47,6 +48,7 @@ const {
 
 const SECTION = 'teamPlugins';
 const VIEW_COMMAND = 'workbench.view.extension.teamPlugins';
+const WALKTHROUGH_ID = 'gettingStarted';
 const BUSY_TEXT = 'Another Cursor window is syncing the team plugins: try again in a moment.';
 const UNEXPECTED = { kind: 'error', message: 'unexpected error: see the log' };
 const COPY_RETRY_MS = 2000;
@@ -99,6 +101,7 @@ let draftsWatched = false; // whether the last startWatchers call watched the dr
 let debounceTimer = null;
 let queue = Promise.resolve();
 let storage = '';
+let lastGitCheck = null; // the result of the last Check git (Test mode reads it)
 let partialCopies = new Map(); // plugin name -> { plugin, ids, holder, copyRoot, conflicts: [{ rel, source, copy }] }
 let copyConflicts = []; // the conflicts of all partial copies, as given to buildConflictsNode
 let copyWatcher = null;
@@ -2420,6 +2423,30 @@ async function removeOriginals(shared, pluginName, remote) {
   }
 }
 
+// The Check git command. `teamPlugins.gitReady` completes the walkthrough's first step: only this command sets it,
+// never the activation (Cursor never completes a step whose context key is already true when it registers the
+// walkthrough). Returns the promise of the message chain so that a scenario can wait for it.
+async function checkGitCommand() {
+  try {
+    const gp = gitPath();
+    // `storage` is not inside a repository, so `git config --get` reads the user's global and system values.
+    const result = await checkGit({ run: makeGit(gp), cwd: storage });
+    lastGitCheck = result;
+    log(`git check: ${result.status}${result.version ? ' ' + result.version : ''}${result.error ? ': ' + result.error : ''}`);
+    await vscode.commands.executeCommand('setContext', 'teamPlugins.gitReady', result.status === 'ok');
+    const m = gitCheckMessage(result, { gitPath: gp, machine: remoteMachine() });
+    const show = { info: 'showInformationMessage', warning: 'showWarningMessage', error: 'showErrorMessage' }[m.level];
+    const buttons = m.actions.includes('downloadGit') ? ['Download git'] : [];
+    return ui[show](`Team plugins: ${m.message}`, ...buttons).then((choice) =>
+      choice === 'Download git' ? ui.openExternal(DOWNLOAD_URL) : undefined,
+    );
+  } catch (err) {
+    log(`git check failed: ${err.stack || err.message}`);
+    ui.showErrorMessage(`Team plugins: cannot run git: ${err.message}`);
+    return undefined;
+  }
+}
+
 function registerCommands(context) {
   const reg = (id, fn) => context.subscriptions.push(vscode.commands.registerCommand(id, fn));
 
@@ -2435,6 +2462,17 @@ function registerCommands(context) {
     }
   });
   reg('teamPlugins.showLog', () => output.show());
+  reg('teamPlugins.checkGit', checkGitCommand);
+  reg('teamPlugins.getStarted', () =>
+    vscode.commands.executeCommand(
+      'workbench.action.openWalkthrough',
+      {
+        category: `${context.extension.id}#${WALKTHROUGH_ID}`,
+        step: `${context.extension.id}#${WALKTHROUGH_ID}#checkGit`,
+      },
+      false,
+    ),
+  );
   reg('teamPlugins.addRepository', async () => {
     const value = await ui.showInputBox({
       prompt: 'Git URL of a team plugins repository',
@@ -3088,6 +3126,7 @@ function testHook(context) {
       })),
     status: () => ({ text: statusItem.text, tooltip: String(statusItem.tooltip || '') }),
     logLines: () => [...testLog],
+    gitCheck: () => lastGitCheck,
     storage,
     logUri: context.logUri.fsPath,
   };

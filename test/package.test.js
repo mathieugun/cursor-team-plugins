@@ -36,6 +36,9 @@ test('buildVsix', (t) => {
     'extension/lib/catalog.js',
     'extension/resources/activity.svg',
     'extension/resources/icon.png',
+    'extension/resources/walkthrough-git.md',
+    'extension/resources/walkthrough-repository.md',
+    'extension/resources/walkthrough-plugins.md',
   ]) {
     assert.ok(names.includes(n), n);
   }
@@ -55,5 +58,35 @@ test('the README links only to web pages', () => {
   const links = [...readme.matchAll(/\]\(([^)\s]+)\)/g)].map((m) => m[1]);
   for (const l of links) {
     assert.match(l, /^(https?|mailto):/i, `${l} can't be opened from the extension's details page`);
+  }
+});
+
+test("the walkthrough's files and commands exist", () => {
+  const root = path.join(__dirname, '..');
+  const pkg = require('../package.json');
+  const commands = new Set(pkg.contributes.commands.map((c) => c.command));
+  commands.add('workbench.view.extension.teamPlugins');
+  const commandLinks = (text) => [...text.matchAll(/\(command:([\w.]+)\)/g)].map((m) => m[1]);
+  assert.ok(pkg.contributes.walkthroughs.length > 0);
+  for (const w of pkg.contributes.walkthroughs) {
+    for (const s of w.steps) {
+      for (const file of [s.media.markdown, s.media.image].filter(Boolean)) {
+        assert.ok(fs.existsSync(path.join(root, file)), `${w.id}/${s.id}: ${file} is missing`);
+      }
+      if (s.media.markdown) {
+        const md = fs.readFileSync(path.join(root, s.media.markdown), 'utf8');
+        for (const l of [...md.matchAll(/\]\(([^)\s]+)\)/g)].map((m) => m[1])) {
+          assert.match(l, /^https:/i, `${s.media.markdown}: ${l}`);
+        }
+      }
+      for (const id of commandLinks(s.description)) {
+        assert.ok(commands.has(id), `${w.id}/${s.id}: unknown command ${id}`);
+      }
+    }
+  }
+  for (const v of pkg.contributes.viewsWelcome) {
+    for (const id of commandLinks(v.contents)) {
+      assert.ok(commands.has(id), `viewsWelcome: unknown command ${id}`);
+    }
   }
 });

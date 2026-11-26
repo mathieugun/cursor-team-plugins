@@ -57,14 +57,21 @@ reload the window. The team repositories are cloned on the remote machine, with 
 
 ## Getting started
 
+**Team Plugins: Get started** (command palette, or **Get started** in the view's **...** menu) opens a walkthrough of
+these steps; Cursor also opens it after the install.
+
 1. **Check that git can reach the team repository.** In a terminal, `git clone <team repository url>` must work
    without asking anything: the extension runs git in the background with your own credentials and never asks for a
-   password (see "Repository access" below). Git 2.38 or later is needed.
+   password (see "Repository access" below). Git 2.38 or later is needed. **Team Plugins: Check git** says whether git
+   is found and recent enough, and whether it knows your name and email (needed only to commit).
 2. **Add the repository.** Open the **Team Plugins** view in the activity bar and click **Add repository** (the `+` of
    the view's title bar, or add the URL to `teamPlugins.repositories`). The URL is checked at once, then the repository
    is cloned in the background. You can add several repositories (see "Several repositories").
 3. **Pick your plugins.** Tick the plugins or single items (skills, rules, commands, agents, MCP servers) you want.
    They are available to the agent right away, in new chats.
+
+The walkthrough ticks a step when you do it (check git, add a repository, tick a plugin); if you were set up before,
+use **Mark Done**.
 
 If a plugin with the same name is already installed from another marketplace (for example the team repository imported
 as a local marketplace), remove it: both would provide the same plugin.
@@ -317,6 +324,8 @@ terminal where git and SSH can ask their questions; then click **Sync now**.
   update, a failed sync, a repository that is not loaded or a failed registration; a plug-off icon means a server
   couldn't be reached.
 - "vscode.cursor.plugins is missing": this Cursor is too old for extension plugins; update Cursor.
+- "git was not found": install git (2.38 or later) and restart Cursor, or set `git.path`; **Team Plugins: Check git**
+  checks it again.
 
 | Message | What to do |
 | --- | --- |

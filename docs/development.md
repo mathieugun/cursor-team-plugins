@@ -52,7 +52,12 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
   - The hook (`activate`'s return value in Test mode only): `calls`, `clearCalls`, `respond` (the scripted answers of
     the recorder that replaces `ui`), `idle` (nothing in flight for 300 ms), `tree` (labels, icons, checkbox states),
     `check` (ticks or unticks a node like a click), `registrations`, `decoration`, `states` (per repository),
-    `status` (status bar), `logLines`, `storage` and `logUri`.
+    `status` (status bar), `logLines`, `gitCheck` (the result of the last **Check git**), `storage` and `logUri`.
+  - Scenario `walkthrough`: **Get started** opens the walkthrough tab (`Walkthrough: Team plugins`, run again until it
+    shows: Cursor registers the walkthrough a few seconds after startup, and before that the command opens the generic
+    Welcome tab), then **Check git** with the machine's git and with a `git.path` that doesn't exist. Step completion
+    can't be tested live: with `--extensionTestsPath` Cursor keeps its storage in memory, so a scenario can't read
+    the walkthrough's progress.
 - **By hand** (`test/manual-remote-checks.md`): what needs a real server or the real ssh and credential manager, and
   the look of the view (icons, colours).
 
@@ -219,6 +224,33 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
   set) the file system has no trash, so the button reads **Delete the original(s)** and deletes for good after a modal
   confirmation (`removeOriginals`).
 
+### Walkthrough
+
+- `contributes.walkthroughs` has one walkthrough, `gettingStarted` (`WALKTHROUGH_ID`), with three steps and their
+  `completionEvents`: `checkGit` (`onContext:teamPlugins.gitReady`), `addRepository`
+  (`onSettingChanged:teamPlugins.repositories` and `...localRepositories`) and `pickPlugins`
+  (`onSettingChanged:teamPlugins.enabled`). No `onCommand:` event: it would tick Check git even when git is missing, and
+  Add repository when the input is cancelled; and it fires only for a command that goes through the workbench (palette,
+  menu, command link), not for `executeCommand` from the extension host.
+- `teamPlugins.gitReady` is set only by **Check git** (`checkGitCommand`: true for a git 2.38 or later that runs), never
+  at activation or on a settings change. A context key that already matches when Cursor registers the walkthrough
+  never completes the step in that session: its `onContext` registration puts the event in `sessionEvents` and
+  `progressByEvent` skips events already there (read in `workbench.desktop.main.js`, Cursor 3.32.4). Registration
+  happens at startup and may wait up to 5 s, so it races with the `onStartupFinished` activation. As a result a step
+  does not tick for someone who is already set up: **Mark Done** is there.
+- **Get started** calls `workbench.action.openWalkthrough` with the object form `{ category:
+  '<extensionId>#gettingStarted', step: '<extensionId>#gettingStarted#checkGit' }, false`: the string form of the
+  category opens the generic Welcome page (a string with `#<stepId>` logs `Could not find category with ID`). Called
+  in the first seconds after startup, before the walkthrough is registered, it opens the Welcome page too.
+- The media pages are flat files in `resources/` (`walkthrough-git.md`, `-repository.md`, `-plugins.md`), because
+  `scripts/package.js` packages `resources/` non-recursively. Their links are `https:` only (`package.test.js`).
+- Cursor opens a walkthrough by itself only when the extension was installed in this session (not with a
+  `skipWalkthrough` install context), the walkthrough id is seen for the first time, the window had the last focus and
+  `workbench.welcomePage.walkthroughs.openOnInstall` is on. `updateAll` installs without `skipWalkthrough`, so an update
+  probably counts as an install (read in the bundle, not probed). With `--extensionDevelopmentPath` nothing opens.
+- Remote-SSH is not probed for the walkthrough: Check git runs on the remote machine, like every git command, and its
+  message names that machine.
+
 ## Remote windows (Remote-SSH)
 
 - Cursor's agent runs on the remote machine, so the extension (`extensionKind: ["workspace"]`) runs there too and must
@@ -287,6 +319,8 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
 - The commit includes every change of the managed clone (`git add -A`); there is no per-file choice.
 - A clone of a local or network-share path that copies for more than 2 minutes without output is stopped.
 - Switching a managed clone to an empty repository (no branch yet) is an error.
+- The getting started walkthrough was not probed in a Remote-SSH window. A sync that fails because git can't be
+  started doesn't point to **Check git**.
 - A symlink or junction created inside a partial copy is left out of the sync (see the log), never followed.
 - A frontmatter description written as a quoted string over several lines shows only as written on the first line.
 - After the window that did the timed fetches closes, the next timed update in another window can be up to half an

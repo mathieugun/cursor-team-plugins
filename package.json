@@ -2,7 +2,7 @@
   "name": "cursor-team-plugins",
   "displayName": "Team plugins",
   "description": "Keeps a team's Cursor plugins (rules, skills, commands, agents and MCP servers) in sync with the team's git repositories and registers the ones each user and project selected.",
-  "version": "0.8.2",
+  "version": "0.8.3",
   "publisher": "mathieugun",
   "author": "Mathieu Gunther",
   "license": "MIT",
@@ -184,6 +184,16 @@
         "icon": "$(output)"
       },
       {
+        "command": "teamPlugins.checkGit",
+        "title": "Check git",
+        "category": "Team Plugins"
+      },
+      {
+        "command": "teamPlugins.getStarted",
+        "title": "Get started",
+        "category": "Team Plugins"
+      },
+      {
         "command": "teamPlugins.addRepository",
         "title": "Add repository",
         "category": "Team Plugins",
@@ -337,6 +347,11 @@
           "command": "teamPlugins.newPlugin",
           "when": "view == teamPlugins.plugins",
           "group": "1_author@1"
+        },
+        {
+          "command": "teamPlugins.getStarted",
+          "when": "view == teamPlugins.plugins",
+          "group": "9_help@1"
         }
       ],
       "view/item/context": [
@@ -523,7 +538,37 @@
       {
         "view": "teamPlugins.plugins",
         "when": "teamPlugins.state == unconfigured",
-        "contents": "No team plugin repository is configured.\n[Add repository](command:teamPlugins.addRepository)\nPlugin authors can use their own clone instead:\n[Add a local clone](command:teamPlugins.addLocalRepository)"
+        "contents": "No team plugin repository is configured.\n[Add repository](command:teamPlugins.addRepository)\nPlugin authors can use their own clone instead:\n[Add a local clone](command:teamPlugins.addLocalRepository)\nNew here? [Get started](command:teamPlugins.getStarted)"
+      }
+    ],
+    "walkthroughs": [
+      {
+        "id": "gettingStarted",
+        "title": "Get started with Team plugins",
+        "description": "Follow your team's plugin repositories and pick the rules, skills, commands, agents and MCP servers you need.",
+        "steps": [
+          {
+            "id": "checkGit",
+            "title": "Check git",
+            "description": "Team plugins clones and updates the team repositories in the background, with your own git and its credentials: git 2.38 or later must reach the repository without asking anything.\n[Check git](command:teamPlugins.checkGit)",
+            "media": { "markdown": "resources/walkthrough-git.md" },
+            "completionEvents": ["onContext:teamPlugins.gitReady"]
+          },
+          {
+            "id": "addRepository",
+            "title": "Add a team repository",
+            "description": "Paste the Git URL of your team's plugin repository: it is cloned in the background and checked for updates every hour. You can follow several.\n[Add repository](command:teamPlugins.addRepository)\nPlugin authors can follow their own clone instead: [Add a local clone](command:teamPlugins.addLocalRepository).",
+            "media": { "markdown": "resources/walkthrough-repository.md" },
+            "completionEvents": ["onSettingChanged:teamPlugins.repositories", "onSettingChanged:teamPlugins.localRepositories"]
+          },
+          {
+            "id": "pickPlugins",
+            "title": "Pick your plugins",
+            "description": "Tick the plugins you want in the Team Plugins view: the agent uses them in every project, in new chats. Expand a plugin to pick single skills, rules, commands, agents or MCP servers.\n[Open the Team Plugins view](command:workbench.view.extension.teamPlugins)",
+            "media": { "markdown": "resources/walkthrough-plugins.md" },
+            "completionEvents": ["onSettingChanged:teamPlugins.enabled"]
+          }
+        ]
       }
     ]
   }
