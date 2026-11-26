@@ -42,4 +42,9 @@ When every step passed, or the user stops: `settings diff` (only the test's own 
 `settings diff` again (no difference), remove the fixtures you made, write the end of the report, and end with two
 lines: the result and where the report is. The installed build stays (the user decides).
 
+Whenever you finish or hand back, first send the main session a message with `SendMessage` (`to`: `<main session
+id>`, or the session that started you, as `ListAgents` lists it): the result (PASS, FAIL at step N, or the
+question), and the report's path. The app wakes the main session only for turns it started, not for the ones the
+user drives here, so without this message it doesn't know you are done.
+
 Never commit, never edit project files, never run what `.claude/implement.md` forbids.
