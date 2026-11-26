@@ -10,6 +10,7 @@ const {
   repoStatus,
   buildRepoNode,
   buildMissingNodes,
+  itemDecoration,
 } = require('../lib/treeModel');
 
 const child = (id, kind) => ({ id, kind, name: id.split('/').pop(), file: `/x/${id}`, description: '' });
@@ -339,4 +340,107 @@ test('item rows say their kind', () => {
   };
   const [k] = buildTree(cat, effective(cat, { enabled: ['K'], excluded: [] }, []), []);
   assert.deepEqual(k.children.map((c) => c.description), ['skill', 'rule', 'command', 'agent', 'MCP server']);
+});
+
+test('buildTree with the update summary', () => {
+  const now = new Date(2026, 10, 26, 12, 0, 0);
+  const commit = (author, hoursAgo) => ({ author, date: new Date(now.getTime() - hoursAgo * 3600 * 1000).toISOString() });
+  const updates = {
+    marks: new Map([
+      ['P1/skills/s1', 'updated'],
+      ['P1/rules/r1.mdc', 'new'],
+    ]),
+    last: new Map([
+      ['P1/skills/s1', commit('Alice', 2)],
+      ['P1', commit('Bob', 3)],
+    ]),
+    now,
+  };
+  const project = ['P1/skills/s1'];
+  const eff = effective(catalog, { enabled: ['P1'], excluded: [] }, project);
+  const [p1, p2] = buildTree(catalog, eff, project, { updates });
+  const [s1, s2, r1] = p1.children;
+  assert.equal(s1.description, 'skill · updated');
+  assert.equal(s1.mark, 'updated');
+  assert.equal(r1.description, 'rule · new');
+  assert.equal(r1.mark, 'new');
+  assert.equal(s2.description, 'skill');
+  assert.equal(s2.mark, null);
+  assert.equal(
+    s1.tooltip,
+    's1\nEnabled by this project (.vscode/settings.json)\nLast changed by Alice, 2 hours ago (2026-11-26 10:00)\nUpdated since you last looked',
+  );
+  assert.equal(r1.tooltip, 'r1.mdc\nNew since you last looked');
+  assert.equal(s2.tooltip, 's2');
+  assert.equal(p1.description, 'v1.0.0 · 1 new · 1 updated');
+  assert.equal(
+    p1.tooltip,
+    'First\nPartly enabled by this project (.vscode/settings.json)\nLast changed by Bob, 3 hours ago (2026-11-26 09:00)',
+  );
+  assert.equal(p2.description, '');
+  assert.equal(p2.tooltip, 'P2');
+
+  // a partial selection keeps its count before the marks
+  const partial = effective(catalog, { enabled: ['P1'], excluded: ['P1/skills/s2'] }, []);
+  assert.equal(buildTree(catalog, partial, [], { updates })[0].description, 'v1.0.0 · 2/3 · 1 new · 1 updated');
+  const onlyUpdated = { ...updates, marks: new Map([['P1/skills/s1', 'updated']]) };
+  assert.equal(buildTree(catalog, partial, [], { updates: onlyUpdated })[0].description, 'v1.0.0 · 2/3 · 1 updated');
+
+  // without the summary the nodes are as they were
+  const [plain] = buildTree(catalog, effective(catalog, { enabled: ['P1'], excluded: [] }, []), []);
+  assert.equal(plain.description, 'v1.0.0');
+  assert.equal(plain.tooltip, 'First');
+  assert.ok(plain.children.every((c) => c.mark === null && c.description === c.kind));
+});
+
+test('buildRepoNode with the update summary', () => {
+  const state = { lastResult: { kind: 'upToDate' } };
+  const node = buildRepoNode(MANAGED, state, [], { new: 2, updated: 1, removed: 0 });
+  assert.equal(node.description, 'up to date · 2 new · 1 updated');
+  const lines = node.tooltip.split('\n');
+  assert.equal(lines[lines.length - 2], 'Since you last looked: 2 new, 1 updated (What changed)');
+  assert.equal(lines[lines.length - 1], 'State: up to date');
+  const removed = buildRepoNode(MANAGED, state, [], { new: 0, updated: 0, removed: 1 });
+  assert.equal(removed.description, 'up to date · 1 removed');
+  const none = buildRepoNode(MANAGED, state, [], { new: 0, updated: 0, removed: 0 });
+  assert.equal(none.description, 'up to date');
+  assert.ok(!none.tooltip.includes('Since you last looked'), none.tooltip);
+  assert.equal(buildRepoNode(MANAGED, state, []).description, 'up to date');
+});
+
+test('itemDecoration', () => {
+  assert.equal(itemDecoration(null, null), null);
+  assert.deepEqual(itemDecoration('all', null), {
+    badge: 'P',
+    tooltip: 'Enabled by this project',
+    color: 'teamPlugins.projectItemForeground',
+  });
+  assert.deepEqual(itemDecoration('some', null), { badge: 'P', tooltip: 'Partly enabled by this project', color: null });
+  assert.deepEqual(itemDecoration(null, 'new'), {
+    badge: 'N',
+    tooltip: 'New since you last looked',
+    color: 'teamPlugins.newItemForeground',
+  });
+  assert.deepEqual(itemDecoration(null, 'updated'), {
+    badge: 'M',
+    tooltip: 'Updated since you last looked',
+    color: 'teamPlugins.updatedItemForeground',
+  });
+  assert.deepEqual(itemDecoration('all', 'updated'), {
+    badge: 'PM',
+    tooltip: 'Enabled by this project · Updated since you last looked',
+    color: 'teamPlugins.updatedItemForeground',
+  });
+  assert.deepEqual(itemDecoration('some', 'new'), {
+    badge: 'PN',
+    tooltip: 'Partly enabled by this project · New since you last looked',
+    color: 'teamPlugins.newItemForeground',
+  });
+  // FileDecoration accepts a badge of at most two characters
+  for (const project of [null, 'all', 'some']) {
+    for (const mark of [null, 'new', 'updated']) {
+      const d = itemDecoration(project, mark);
+      assert.ok(d === null || [...d.badge].length <= 2);
+    }
+  }
 });

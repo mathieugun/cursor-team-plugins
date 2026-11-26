@@ -16,11 +16,14 @@ const {
   repoStatus,
   buildRepoNode,
   buildMissingNodes,
+  itemDecoration,
+  KIND_LABELS,
 } = require('./lib/treeModel');
 const { holderName, copyRootOf, syncCopy, markCopySynced, resolveConflict, gcFiltered } = require('./lib/materialize');
 const { makeGit } = require('./lib/git');
 const { checkGit, gitCheckMessage, DOWNLOAD_URL } = require('./lib/gitCheck');
 const sync = require('./lib/sync');
+const updates = require('./lib/updates');
 const contribute = require('./lib/contribute');
 const { pluginApi } = require('./lib/cursorApi');
 const { Registrar } = require('./lib/registrar');
@@ -86,8 +89,11 @@ let api = null;
 let catalog = { plugins: [], warnings: [] }; // the merged catalog of the repositories that are loaded
 let descs = []; // assignNames(listRepos(...)) of the last apply: every configured repository
 let catalogs = new Map(); // repo key -> readCatalog result (kept for repositories that are syncing)
-// repo key -> { lastResult, lastCheck, syncing, changes, errorShown }. lastResult is the last sync (this window's or,
-// from the state file, another window's); changes: { files, ahead } of a managed clone, null for a local one.
+// repo key -> { lastResult, lastCheck, syncing, changes, errorShown, updates, updateNotice, updatesBaseline }. lastResult
+// is the last sync (this window's or, from the state file, another window's); changes: { files, ahead } of a managed
+// clone, null for a local one; updates: the update summary (refreshUpdates), null when there is none; updateNotice:
+// what a sync just fetched, waiting for the marks to be named; updatesBaseline: record everything as seen at the next
+// refreshUpdates (a new clone, a branch switch).
 const repoStates = new Map();
 let missing = []; // repositories this project uses and the user doesn't follow (with where they are)
 let unlocated = []; // names of repositories this project uses and its settings don't locate
@@ -128,7 +134,16 @@ function log(message) {
 function stateOf(key) {
   let s = repoStates.get(key);
   if (!s) {
-    s = { lastResult: null, lastCheck: null, syncing: false, changes: null, errorShown: false };
+    s = {
+      lastResult: null,
+      lastCheck: null,
+      syncing: false,
+      changes: null,
+      errorShown: false,
+      updates: null,
+      updateNotice: null,
+      updatesBaseline: false,
+    };
     repoStates.set(key, s);
   }
   return s;
@@ -426,7 +441,7 @@ async function syncRepo(d, run, { userInitiated, check }) {
   if (checkFailed) {
     // only the window the user is looking at answers a settings change
     if (vscode.window.state.focused) {
-      notifyAfterSync(s.lastResult, d, { hadClone, userInitiated: true, run });
+      notifyAfterSync(s.lastResult, d, { hadClone, userInitiated: true });
     } else {
       log(`repository check failed for ${d.url}: ${s.lastResult.message}`);
     }
@@ -437,7 +452,10 @@ async function syncRepo(d, run, { userInitiated, check }) {
     if (s.lastResult.kind === 'cloned') {
       startWatchers(); // the clone watcher was created before the folder existed
     }
-    notifyAfterSync(s.lastResult, d, { hadClone, userInitiated, run });
+    if (s.lastResult.kind === 'cloned' || s.lastResult.kind === 'switched') {
+      s.updatesBaseline = true; // another clone or branch: nothing there is new to the user
+    }
+    notifyAfterSync(s.lastResult, d, { hadClone, userInitiated });
     if (s.lastResult.kind === 'switched') {
       log(`managed clone of ${labelOf(d)} now follows ${d.url} (${s.lastResult.branch})`);
     }
@@ -530,7 +548,7 @@ function scheduleOfflineRetry() {
   }
 }
 
-function notifyAfterSync(result, d, { hadClone, userInitiated, run }) {
+function notifyAfterSync(result, d, { hadClone, userInitiated }) {
   const s = stateOf(d.key);
   if (!['error', 'busy', 'offline'].includes(result.kind)) {
     s.errorShown = false; // a recovery re-arms the error notice
@@ -554,19 +572,8 @@ function notifyAfterSync(result, d, { hadClone, userInitiated, run }) {
       }
       break;
     case 'updated':
-      ask(
-        'showInformationMessage',
-        `Team plugins: ${name} updated (${result.commits} new commit(s)). Start a new chat to use the changes.${
-          result.kept > 0 ? ' Your local changes were kept.' : ''
-        }`,
-        'What changed',
-      ).then(async (choice) => {
-        if (choice === 'What changed') {
-          const text = await sync.changesBetween({ run, repoDir: d.dir, from: result.from, to: result.to });
-          output.appendLine(`${name}:\n${text}`);
-          output.show();
-        }
-      });
+      // refreshUpdates says who changed what, in the apply that follows: it needs the marks
+      s.updateNotice = { from: result.from, to: result.to, commits: result.commits, kept: result.kept };
       break;
     case 'conflict': {
       const key = `${d.key}|conflict:${result.head}|${result.upstream || ''}|${result.files.join(',')}`;
@@ -731,6 +738,7 @@ async function doApply() {
     startWatchers(); // the drafts folder was created (by this window or another one) after the watchers started
   }
   await refreshChanges();
+  await refreshUpdates();
   updateStatus();
 }
 
@@ -891,6 +899,393 @@ function changesUnreadable(state, d) {
     return true;
   }
   return false;
+}
+
+// ---- update summary ----------------------------------------------------------------------------------------------
+
+// What the user has seen of a repository: <storage>/seen/<key>.json (outside state/, which is watched too, so that
+// marking an item seen applies in every window).
+function seenFile(d) {
+  return path.join(storage, 'seen', `${d.key}.json`);
+}
+
+// A repository the update summary follows: its plugins are loaded and it is a clone (the drafts are not tracked).
+function tracksUpdates(d) {
+  return isActive(d) && (d.kind === 'managed' || d.kind === 'local');
+}
+
+function updateCounts(marks, removed) {
+  const counts = { new: 0, updated: 0, removed: removed.length };
+  for (const mark of marks.values()) {
+    counts[mark]++;
+  }
+  return counts;
+}
+
+function countTotal(counts) {
+  return counts.new + counts.updated + counts.removed;
+}
+
+function logOnce(key, message) {
+  if (!loggedWarnings.has(key)) {
+    loggedWarnings.add(key);
+    log(message);
+  }
+}
+
+// The marks of every followed repository (after refreshChanges, in every apply), the notification of a sync, and the
+// number on the view's icon.
+async function refreshUpdates() {
+  const run = makeGit(gitPath());
+  for (const d of descs) {
+    const s = stateOf(d.key);
+    if (!tracksUpdates(d) || s.syncing) {
+      continue; // git is busy in that clone: the view keeps what it showed
+    }
+    try {
+      await updateRepo(d, s, run);
+    } catch (err) {
+      s.updates = null;
+      logOnce(`updates:${d.key}:${err.message}`, `cannot read the updates of ${labelOf(d)}: ${err.message}`);
+    }
+    if (s.updateNotice) {
+      const notice = s.updateNotice;
+      s.updateNotice = null;
+      try {
+        await showUpdateNotice(d, s, notice, run);
+      } catch (err) {
+        log(`cannot name the updates of ${labelOf(d)}: ${err.message}`);
+      }
+    }
+  }
+  updateBadge();
+  treeProvider.refresh();
+}
+
+// Reads git at HEAD (once per HEAD), compares it with what the user has seen and stores the result in s.updates.
+async function updateRepo(d, s, run) {
+  const cat = catalogs.get(d.key);
+  if (!cat) {
+    return;
+  }
+  const items = updates.updateItems(cat.plugins, d.dir);
+  const mcpKey = [...new Set(items.filter((i) => i.kind === 'mcp').map((i) => i.path))].sort().join('\n');
+  const head = await run(['rev-parse', 'HEAD'], d.dir);
+  let git = null;
+  if (head.code === 0 && head.stdout !== '') {
+    const cached = s.updates && s.updates.git;
+    git =
+      cached && cached.head === head.stdout && cached.mcpKey === mcpKey
+        ? cached
+        : await updates.readGitData({ run, repoDir: d.dir, items });
+    if (git) {
+      git.mcpKey = mcpKey;
+    }
+  }
+  if (!git || git.tree.size === 0) {
+    s.updates = null; // no commit yet, or git could not list it: no marks rather than wrong ones
+    return;
+  }
+  const file = seenFile(d);
+  const record = s.updatesBaseline ? null : updates.readSeen(file);
+  const fps = updates.fingerprints(items, git.tree, git.mcpTexts);
+  const paths = new Map(items.map((i) => [i.id, i.path]));
+  for (const p of cat.plugins) {
+    paths.set(p.name, updates.pluginPath(p, d.dir));
+  }
+  for (const [id, entry] of Object.entries((record && record.items) || {})) {
+    if (!paths.has(id) && entry && typeof entry.path === 'string') {
+      paths.set(id, entry.path); // a removed item: its last change is the one that removed it
+    }
+  }
+  const last = updates.lastChanges(paths, git.commits);
+  const result = updates.computeMarks({
+    items,
+    fps,
+    record,
+    last,
+    self: git.self,
+    head: git.head,
+    renamed: cat.renamed,
+    plugins: cat.plugins,
+  });
+  s.updatesBaseline = false;
+  if (result.changed) {
+    writeSeenRecord(d, result.record);
+  }
+  s.updates = {
+    git,
+    items,
+    fps,
+    last,
+    marks: result.marks,
+    removed: result.removed,
+    record: result.record,
+    counts: updateCounts(result.marks, result.removed),
+  };
+}
+
+function writeSeenRecord(d, record) {
+  try {
+    updates.writeSeen(seenFile(d), record);
+  } catch (err) {
+    logOnce(`seen:${d.key}:${err.message}`, `cannot write what you have seen of ${labelOf(d)}: ${err.message}`);
+  }
+}
+
+// The ids (without the repository's name) of the items of d that the user's selection includes.
+function enabledLocalIds(d) {
+  const eff = selection.effective(catalog, userSelection(), projectList());
+  const prefix = `${d.name}:`;
+  const ids = new Set();
+  for (const p of catalog.plugins.filter((x) => x.repoKey === d.key)) {
+    const e = eff.get(p.name);
+    for (const id of e ? e.included : []) {
+      if (id.startsWith(prefix)) {
+        ids.add(id.slice(prefix.length));
+      }
+    }
+  }
+  return ids;
+}
+
+// The notification of a sync that fetched commits: who changed which items (the enabled ones first). Commits that
+// touch no item keep the plain message; commits that are all the user's own say nothing.
+async function showUpdateNotice(d, s, notice, run) {
+  const u = s.updates;
+  const range = await updates.rangeHashes({ run, repoDir: d.dir, from: notice.from, to: notice.to });
+  const entries = u
+    ? updates.noticeEntries({ marks: u.marks, removed: u.removed, last: u.last, range, items: u.items, enabled: enabledLocalIds(d) })
+    : [];
+  const message = updates.noticeMessage({
+    repoName: labelOf(d),
+    entries,
+    kept: notice.kept,
+    count: notice.commits,
+    range,
+    commits: u ? u.git.commits : [],
+    self: u ? u.git.self : '',
+  });
+  if (!message) {
+    return;
+  }
+  ui
+    .showInformationMessage(message.text, ...(message.button ? ['What changed'] : []))
+    .then((choice) => (choice === 'What changed' ? vscode.commands.executeCommand('teamPlugins.whatChanged', { repo: d.key }) : undefined))
+    .then(undefined, (err) => log(`cannot show what changed in ${labelOf(d)}: ${err.message}`));
+}
+
+// The number on the view's icon: the items new, updated or removed since the user last looked, in every repository.
+function updateBadge() {
+  if (!treeView) {
+    return;
+  }
+  let total = 0;
+  for (const d of descs) {
+    const u = tracksUpdates(d) ? stateOf(d.key).updates : null;
+    total += u ? countTotal(u.counts) : 0;
+  }
+  treeView.badge =
+    total > 0 ? { value: total, tooltip: `${total} new or updated team plugin item(s) since you last looked` } : undefined;
+}
+
+// Marks items of d as seen: ids are local ids of marked or removed items. The record is written, the view follows
+// at once and the other windows through the seen/ watcher.
+function markItemsSeen(d, ids) {
+  const u = stateOf(d.key).updates;
+  if (!u) {
+    return;
+  }
+  let record = updates.readSeen(seenFile(d)) || u.record;
+  let touched = false;
+  for (const id of ids) {
+    const item = u.items.find((i) => i.id === id);
+    if (u.marks.has(id) && item && u.fps.has(id)) {
+      record = updates.markSeen(record, id, { oid: u.fps.get(id), commit: u.git.head, path: item.path, kind: item.kind, name: item.name });
+      u.marks.delete(id);
+      touched = true;
+    } else if (u.removed.some((r) => r.id === id)) {
+      record = updates.markSeen(record, id, null);
+      u.removed = u.removed.filter((r) => r.id !== id);
+      touched = true;
+    }
+  }
+  if (touched) {
+    afterMarkedSeen(d, u, record);
+  }
+}
+
+// Mark all as seen: everything as it is now.
+function markAllSeen(d) {
+  const u = stateOf(d.key).updates;
+  if (!u) {
+    return;
+  }
+  u.marks.clear();
+  u.removed = [];
+  afterMarkedSeen(d, u, updates.baselineRecord(u.items, u.fps, u.git.head));
+}
+
+function afterMarkedSeen(d, u, record) {
+  u.record = record;
+  u.counts = updateCounts(u.marks, u.removed);
+  writeSeenRecord(d, record);
+  updateBadge();
+  treeProvider.refresh();
+  debouncedApply();
+}
+
+// An item node of the view ({ kind, key }, key = merged id): its repository, summary and item; null when the update
+// summary does not know it.
+function updateItemOf(node) {
+  if (!node || typeof node.key !== 'string') {
+    return null;
+  }
+  const repo = repoOfId(node.key);
+  const d = descs.find((x) => tracksUpdates(x) && x.name === repo);
+  const u = d && stateOf(d.key).updates;
+  const id = node.key.slice(repo.length + 1);
+  const item = u && u.items.find((i) => i.id === id);
+  return item ? { d, u, item } : null;
+}
+
+// What an item's diff shows: the content of the version the user last saw ('' for an item that is new) against HEAD
+// ('' for an item that was removed). verb: 'new' | 'updated' | 'removed'.
+function seenDiff(u, id, verb) {
+  if (verb === 'new') {
+    return { leftRev: '', rightRev: 'HEAD' };
+  }
+  const entry = verb === 'removed' ? u.removed.find((r) => r.id === id) : u.record.items[id];
+  return { leftRev: (entry && entry.commit) || '', rightRev: verb === 'removed' ? '' : 'HEAD' };
+}
+
+function commitTitle(name, commit) {
+  return commit ? `${name} (${commit.author}, ${updates.ago(commit.date, new Date())})` : `${name} (changes since you last looked)`;
+}
+
+// Opens the diff of an item between two revisions of its repository: one file as a diff, a skill with several files
+// as a multi-file diff. item: { kind, name, path }; a revision of '' is an absent side.
+async function openItemDiff(d, item, { leftRev, rightRev, title }) {
+  const side = (rev, file) => gitUri(d.dir, rev, file, item.kind === 'mcp' ? item.name : undefined);
+  const diff = (file) => vscode.commands.executeCommand('vscode.diff', side(leftRev, file), side(rightRev, file), title);
+  if (item.kind !== 'skill') {
+    await diff(item.path);
+    return;
+  }
+  const run = makeGit(gitPath());
+  const [before, after] = await Promise.all(
+    [leftRev, rightRev].map((rev) => updates.treeFiles({ run, repoDir: d.dir, rev, dir: item.path })),
+  );
+  const files = [...new Set([...before, ...after])].sort();
+  if (files.length <= 1) {
+    await diff(files.length === 1 ? files[0] : `${item.path}/SKILL.md`);
+    return;
+  }
+  // vscode.changes takes [label, left, right] and needs both sides: an absent one is a document with an empty rev
+  await vscode.commands.executeCommand(
+    'vscode.changes',
+    title,
+    files.map((f) => [after.includes(f) ? side(rightRev, f) : side(leftRev, f), side(leftRev, f), side(rightRev, f)]),
+  );
+}
+
+// The diff of a marked or removed item since the user last saw it; the item counts as seen once it is open.
+async function openSeenDiff(d, u, entry) {
+  const { leftRev, rightRev } = seenDiff(u, entry.id, entry.verb);
+  await openItemDiff(d, entry, { leftRev, rightRev, title: commitTitle(entry.name, u.last.get(entry.id)) });
+  markItemsSeen(d, [entry.id]);
+}
+
+// The marked and the removed items of a repository, in the order the view shows them.
+function changedEntries(u) {
+  const entries = [];
+  for (const item of u.items) {
+    if (u.marks.has(item.id)) {
+      entries.push({ id: item.id, kind: item.kind, name: item.name, path: item.path, verb: u.marks.get(item.id) });
+    }
+  }
+  for (const r of u.removed) {
+    entries.push({ id: r.id, kind: r.kind, name: r.name, path: r.path, verb: 'removed' });
+  }
+  return entries;
+}
+
+const VERB_WORDS = { new: 'added', updated: 'updated', removed: 'removed' };
+
+async function whatChangedCommand(arg) {
+  const hasUpdates = (d) => {
+    const u = tracksUpdates(d) ? stateOf(d.key).updates : null;
+    return !!u && countTotal(u.counts) > 0;
+  };
+  let d = repoFromArg(arg);
+  if (!d) {
+    if (!listConfigured().some(hasUpdates)) {
+      ui.showInformationMessage('Nothing new since you last looked.');
+      return;
+    }
+    d = await pickRepo(undefined, { filter: hasUpdates, placeHolder: 'Which repository?' });
+    if (!d) {
+      return;
+    }
+  }
+  const u = tracksUpdates(d) ? stateOf(d.key).updates : null;
+  if (!u || countTotal(u.counts) === 0) {
+    ui.showInformationMessage(`Nothing new in ${labelOf(d)} since you last looked.`);
+    return;
+  }
+  const entries = changedEntries(u);
+  if (entries.length === 1) {
+    await openSeenDiff(d, u, entries[0]);
+    return;
+  }
+  const MARK_ALL = '$(check-all) Mark all as seen';
+  const now = new Date();
+  const picks = entries.map((e) => {
+    const commit = u.last.get(e.id);
+    const plugin = e.id.split('/')[0];
+    const what = `${plugin} · ${KIND_LABELS[e.kind] || e.kind}`;
+    return {
+      label: `$(${e.verb === 'removed' ? 'trash' : TREE_ICONS[e.kind]}) ${e.name}`,
+      description: commit ? `${what} · ${VERB_WORDS[e.verb]} by ${commit.author}, ${updates.ago(commit.date, now)}` : `${what} · ${VERB_WORDS[e.verb]}`,
+      detail: commit ? commit.subject : undefined,
+      entry: e,
+    };
+  });
+  const picked = await ui.showQuickPick([{ label: MARK_ALL }, ...picks], {
+    placeHolder: `${labelOf(d)}: ${entries.length} change(s) since you last looked`,
+  });
+  if (!picked) {
+    return;
+  }
+  if (picked.label === MARK_ALL) {
+    markAllSeen(d);
+  } else if (picked.entry) {
+    await openSeenDiff(d, u, picked.entry);
+  }
+}
+
+// Show changes on an item: its diff since the user last saw it, or (not marked) its last change.
+async function showChangesCommand(node) {
+  const found = updateItemOf(node);
+  if (!found) {
+    return;
+  }
+  const { d, u, item } = found;
+  if (u.marks.has(item.id)) {
+    await openSeenDiff(d, u, { id: item.id, kind: item.kind, name: item.name, path: item.path, verb: u.marks.get(item.id) });
+    return;
+  }
+  const commit = u.last.get(item.id);
+  if (!commit) {
+    ui.showInformationMessage(`No commit of ${labelOf(d)} has changed ${item.name} yet.`);
+    return;
+  }
+  const parent = await makeGit(gitPath())(['rev-parse', `${commit.hash}^`], d.dir);
+  await openItemDiff(d, item, {
+    leftRev: parent.code === 0 ? parent.stdout : '',
+    rightRev: 'HEAD',
+    title: `${item.name}: last change (${commit.author}, ${updates.ago(commit.date, new Date())})`,
+  });
 }
 
 // A partial copy left behind (its plugin is now fully enabled, disabled or selected differently) is no longer synced:
@@ -1189,19 +1584,20 @@ const ITEM_KINDS = ['skill', 'rule', 'command', 'agent', 'mcp'];
 // team-plugins:/<key> resourceUri, which no other decoration provider touches.
 const ITEM_SCHEME = 'team-plugins';
 const decorationEmitter = new vscode.EventEmitter();
-let projectStates = new Map(); // item uri -> 'all' | 'some'
+let projectStates = new Map(); // item uri -> { project: 'all' | 'some' | null, mark: 'new' | 'updated' | null }
 
 function itemUri(key) {
   return vscode.Uri.from({ scheme: ITEM_SCHEME, path: `/${key}` });
 }
 
-// Records the project state of the plugin and item nodes; tells the decoration service only when it changed.
+// Records the project state and the mark of the plugin and item nodes; tells the decoration service only when it
+// changed.
 function updateProjectStates(nodes) {
   const next = new Map();
   for (const n of nodes.filter((x) => x.kind === 'plugin')) {
     for (const m of [n, ...n.children]) {
-      if (m.project) {
-        next.set(itemUri(m.key).toString(), m.project);
+      if (m.project || m.mark) {
+        next.set(itemUri(m.key).toString(), { project: m.project || null, mark: m.mark || null });
       }
     }
   }
@@ -1219,14 +1615,15 @@ const projectDecorations = {
       return undefined;
     }
     const state = projectStates.get(uri.toString());
-    if (state === 'all') {
-      const color = new vscode.ThemeColor('teamPlugins.projectItemForeground');
-      return new vscode.FileDecoration('P', 'Enabled by this project', color);
+    const decoration = state ? itemDecoration(state.project, state.mark) : null;
+    if (!decoration) {
+      return undefined;
     }
-    if (state === 'some') {
-      return new vscode.FileDecoration('P', 'Partly enabled by this project');
-    }
-    return undefined;
+    return new vscode.FileDecoration(
+      decoration.badge,
+      decoration.tooltip,
+      decoration.color ? new vscode.ThemeColor(decoration.color) : undefined,
+    );
   },
 };
 
@@ -1269,9 +1666,18 @@ class PluginTree {
         buildChangesNode(s.changes, d.key),
       ].filter((n) => n);
       let plugins = [];
+      const summary = isActive(d) && d.kind !== 'drafts' ? s.updates : null;
       if (isActive(d)) {
+        // the summary has the repository's own ids; the merged catalog prefixes them with its name
+        const prefix = `${d.name}:`;
+        const upd = summary && {
+          marks: new Map([...summary.marks].map(([id, mark]) => [prefix + id, mark])),
+          last: new Map([...summary.last].map(([id, commit]) => [prefix + id, commit])),
+          now: new Date(),
+        };
         plugins = buildTree({ plugins: catalog.plugins.filter((p) => p.repoKey === d.key) }, eff, project, {
           draft: d.kind === 'drafts',
+          updates: upd,
         });
         pluginNodes.push(...plugins);
         children.push(...plugins);
@@ -1287,7 +1693,7 @@ class PluginTree {
           children: [],
         });
       }
-      return buildRepoNode({ ...d, name: labelOf(d) }, s, children);
+      return buildRepoNode({ ...d, name: labelOf(d) }, s, children, summary ? summary.counts : undefined);
     });
     updateProjectStates(pluginNodes);
     return [...buildMissingNodes(missing, unlocated), ...repoNodes];
@@ -1543,6 +1949,14 @@ function startWatchers() {
   w.onDidCreate(onState);
   w.onDidChange(onState);
   watchers.push(w);
+
+  // what the user has seen: another window marking items seen reaches this one
+  const seenDir = path.join(storage, 'seen');
+  fs.mkdirSync(seenDir, { recursive: true });
+  const seenWatcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(vscode.Uri.file(seenDir), '*.json'));
+  seenWatcher.onDidCreate(() => debouncedApply());
+  seenWatcher.onDidChange(() => debouncedApply());
+  watchers.push(seenWatcher);
 
   // an edit inside a clone (an agent's, another window's partial copy, a direct edit) reaches this window's catalog,
   // partial copies and Local changes
@@ -2490,13 +2904,20 @@ function registerCommands(context) {
   );
   reg('teamPlugins.addToProject', (node) => addToProjectCommand(node));
   reg('teamPlugins.removeFromProject', (node) => removeFromProjectCommand(node));
-  reg('teamPlugins.openItem', (node) => {
+  reg('teamPlugins.openItem', async (node) => {
     if (node && node.file) {
       // like the Explorer's single click: a preview that leaves the focus in the view, so F2 still renames the row
-      return vscode.window.showTextDocument(vscode.Uri.file(node.file), { preview: true, preserveFocus: true });
+      const editor = await vscode.window.showTextDocument(vscode.Uri.file(node.file), { preview: true, preserveFocus: true });
+      const found = updateItemOf(node);
+      if (found && found.u.marks.has(found.item.id)) {
+        markItemsSeen(found.d, [found.item.id]); // opening an item counts as seeing it
+      }
+      return editor;
     }
     return undefined;
   });
+  reg('teamPlugins.whatChanged', whatChangedCommand);
+  reg('teamPlugins.showChanges', showChangesCommand);
   reg('teamPlugins.discardLocalChanges', async (arg) => {
     if (!listConfigured().some(isManaged)) {
       ui.showInformationMessage(NO_CLONE);
@@ -2581,17 +3002,21 @@ function registerCommands(context) {
           const request = JSON.parse(decodeURIComponent(uri.query));
           const d =
             request && typeof request.repo === 'string' && request.repo
-              ? listConfigured().find((x) => isManaged(x) && samePath(x.dir, request.repo))
+              ? listConfigured().find((x) => (isManaged(x) || (x.kind === 'local' && !x.duplicateOf)) && samePath(x.dir, request.repo))
               : undefined;
           if (!d) {
             return '';
           }
-          const args = sync.headFileArgs(request, d.dir);
+          const args = sync.revFileArgs(request, d.dir);
           if (!args) {
             return '';
           }
           const r = await makeGit(gitPath())(args, d.dir, undefined, { trim: false });
-          return r.code === 0 ? r.stdout : '';
+          if (r.code !== 0) {
+            return '';
+          }
+          // an MCP server's diff shows its entry alone, not the whole file
+          return typeof request.server === 'string' ? updates.serverText(r.stdout, request.server) : r.stdout;
         } catch {
           return '';
         }
@@ -2606,11 +3031,13 @@ const GIT_SCHEME = 'team-plugins-git';
 const NOT_MANAGED = 'With a local clone, commit and push with your own git tools.';
 const NO_CLONE = 'There is no managed clone: a local clone is never changed by this extension.';
 
-function gitUri(repo, rev, file) {
+// server: the name of an MCP server, when the document is that server's entry in the MCP file `file`.
+function gitUri(repo, rev, file, server) {
+  const request = server === undefined ? { repo, rev, path: file } : { repo, rev, path: file, server };
   return vscode.Uri.from({
     scheme: GIT_SCHEME,
     path: `/${file}`,
-    query: encodeURIComponent(JSON.stringify({ repo, rev, path: file })),
+    query: encodeURIComponent(JSON.stringify(request)),
   });
 }
 
@@ -3063,6 +3490,7 @@ function testTree() {
         id: item.id,
         label: String(item.label),
         description: item.description,
+        tooltip: typeof item.tooltip === 'string' ? item.tooltip : '',
         icon: (item.iconPath && item.iconPath.id) || null,
         checked: box === undefined || box === null ? null : state === vscode.TreeItemCheckboxState.Checked,
         contextValue: item.contextValue,
@@ -3112,6 +3540,11 @@ function testHook(context) {
     decoration: (key) => {
       const d = projectDecorations.provideFileDecoration(itemUri(key));
       return d ? { badge: d.badge, tooltip: d.tooltip, color: d.color && d.color.id } : null;
+    },
+    badge: () => (treeView.badge ? { value: treeView.badge.value, tooltip: treeView.badge.tooltip } : null),
+    updates: (key) => {
+      const s = stateOf(key).updates;
+      return s ? { counts: s.counts, marks: Object.fromEntries(s.marks), removed: s.removed.map((r) => r.id) } : null;
     },
     states: () =>
       [...repoStates].map(([key, s]) => ({

@@ -50,8 +50,9 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
     (`teamPlugins.syncNow`) to get an error message reliably (a sync that isn't user-initiated shows it once, and the
     check after a settings change only when the window has focus).
   - The hook (`activate`'s return value in Test mode only): `calls`, `clearCalls`, `respond` (the scripted answers of
-    the recorder that replaces `ui`), `idle` (nothing in flight for 300 ms), `tree` (labels, icons, checkbox states),
-    `check` (ticks or unticks a node like a click), `registrations`, `decoration`, `states` (per repository),
+    the recorder that replaces `ui`), `idle` (nothing in flight for 300 ms), `tree` (labels, descriptions, tooltips,
+    icons, checkbox states), `check` (ticks or unticks a node like a click), `registrations`, `decoration`, `badge` (the
+    number on the view's icon), `updates` (a repository's counts, marks and removed items), `states` (per repository),
     `status` (status bar), `logLines`, `gitCheck` (the result of the last **Check git**), `storage` and `logUri`.
   - Scenario `walkthrough`: **Get started** opens the walkthrough tab (`Walkthrough: Team plugins`, run again until it
     shows: Cursor registers the walkthrough a few seconds after startup, and before that the command opens the generic
@@ -254,6 +255,41 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
 - Remote-SSH is not probed for the walkthrough: Check git runs on the remote machine, like every git command, and its
   message names that machine.
 
+### Update summary
+
+- What the user has seen is one file per repository, `<storage>/seen/<key>.json` (`{ version: 1, items: { <local id>: {
+  oid, commit, path, kind, name } } }`): the item's fingerprint when last seen, HEAD then (the left side of its diff)
+  and what it needs to list the item when it is gone. It lives outside `state/` and has its own watcher in
+  `startWatchers` (`state/*.json` triggers a full apply too, but this one only needs the marks again): marking an item
+  seen in one window applies in every window. `writeSeen` writes only when the JSON text differs from the file's, so
+  the watcher never loops. A missing, damaged or other-version file is "never seen": a baseline.
+- Fingerprints (`lib/updates.js`) are read at HEAD, so uncommitted edits never mark: the object id of a skill's folder,
+  rule, command or agent file (one `git ls-tree -r -t -z HEAD` per HEAD), and for an MCP server the SHA-1 of its entry
+  in the MCP file at HEAD (`git show HEAD:<file>`; two servers of a file change independently).
+- The git pass is cached per HEAD (and per set of MCP files) in `s.updates.git`: the tree, the MCP files, the last 1000
+  commits with their paths (`git log -z --name-only`, parsed by `parseLog`), and the user's email. A plain `rev-parse
+  HEAD` runs at every apply. "Own" changes are those whose author email equals `git var GIT_AUTHOR_IDENT`'s: it honours
+  the `GIT_AUTHOR_*` environment, unlike `git config user.email`; with no identity (exit 128) nothing is own.
+- `computeMarks` compares fingerprints with the record. Baseline (no record, or a clone or a branch switch, flagged
+  `updatesBaseline` by `syncRepo`): everything is recorded, nothing marked. Otherwise an item whose fingerprint
+  differs is `updated`, one without a record is `new`, a record without an item is `removed` (listed with its stored
+  path and kind), and a change whose last commit is the user's own is recorded instead of marked. A record id that a
+  `renamed` entry of `marketplace.json` leads to an item moves to it. An item that is not committed is left alone.
+- The sync's notification is not shown by `notifyAfterSync` any more: it only stores `s.updateNotice` (`from`, `to`,
+  the commit count, the kept files). `refreshUpdates` shows it once the marks of the apply that follows are computed,
+  naming the marked items whose last commit is in `from..to`, the enabled ones first (`noticeEntries`, `noticeText`).
+  Commits that touch no item keep the old text, without a button; commits that are all the user's own show nothing.
+  Only the window that synced shows it; the marks show in every window.
+- **What changed** (`whatChangedCommand`) and **Show changes** (`showChangesCommand`) open diffs through
+  `team-plugins-git:` documents. The content provider serves `git show <rev>:<path>` for `HEAD` or a full commit hash
+  (`revFileArgs`; an empty rev is an absent side) of any managed or local repository, and, when the request has a
+  `server`, only that server's entry (`serverText`). A skill with several files opens `vscode.changes(title, [[label,
+  left, right], ...])`: the handler wants both sides of every entry, so an absent side is a `team-plugins-git:` URI
+  with an empty rev (Cursor 3.32, VS Code 1.147). `vscode.diff` is used for a single file.
+- Marks are file decorations too (`itemDecoration`): the badge holds at most two characters (`FileDecoration.validate`
+  throws on more), so a project item with a mark reads `PN` or `PM`. The number on the view's icon is
+  `TreeView.badge`, set after every `refreshUpdates`.
+
 ## Remote windows (Remote-SSH)
 
 - Cursor's agent runs on the remote machine, so the extension (`extensionKind: ["workspace"]`) runs there too and must
@@ -289,7 +325,8 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
   1.128): a partly enabled plugin stays unticked, with a `pie-chart` icon and a checkbox tooltip giving the count.
 - Project items are marked with a file decoration: plugin, skill and rule rows carry a `team-plugins:/<key>`
   `resourceUri`, and the extension's `FileDecorationProvider` returns the colour (`teamPlugins.projectItemForeground`)
-  and the `P` badge. Custom tree views apply `explorer.decorations.colors`/`badges` to them.
+  and the `P` badge (and the `N`/`M` marks of the update summary). Custom tree views apply
+  `explorer.decorations.colors`/`badges` to them.
 - A selected row loses the project colour while the view has the keyboard focus. Cursor's stylesheet has
   `.monaco-list:focus .selected .monaco-icon-label, ...:after { color: inherit !important }` (label and badge take the
   selection foreground) and `.customview-tree .monaco-list-row.selected ... .custom-view-tree-node-item-icon.codicon
@@ -328,6 +365,12 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
 - A frontmatter description written as a quoted string over several lines shows only as written on the first line.
 - After the window that did the timed fetches closes, the next timed update in another window can be up to half an
   interval late.
+- Update summary: two servers of one MCP file changed by different people are both credited to whoever last changed
+  the file. Content behind a symlinked skill folder is not seen (git stores the link, not its target). A rename
+  (recorded in `marketplace.json`) moves the record, but the renamed item usually shows as updated. An item whose last
+  change is older than the last 1000 commits has no "Last changed by" line. A version that a force-push made
+  unreachable (and git pruned) diffs against an empty left side. The notification shows only in the window that
+  synced; the marks show in every window.
 - A plugin with the same name installed from a marketplace conflicts with the one this extension registers.
 - A company index repository (one entry that lists the team repositories) and per-repository update intervals are not
   done: follow-ups.
