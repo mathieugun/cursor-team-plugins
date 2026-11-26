@@ -40,16 +40,23 @@ The install needs the user's OK (it changes the Cursor they use). The team repos
 `teamPlugins.repositories` (a second one built with `--name team-two`). Test names stay generic: no company or team
 names in fixtures, settings or test data.
 
-Hand checks run in a separate session: brief `.claude/live-test-brief.md`, model Sonnet, report
-`requests/NN-<name>.live.md` (not committed). Run `scripts/live-test.js` here first; the session gets only what the
+Hand checks (the skill's checklist, step 7): template `.claude/hand-check-template.md`, file
+`requests/NN-<name>.live.md` (not committed). Run `scripts/live-test.js` first; the checklist holds only what the
 scenarios can't show.
-Writing hand-check steps (request 16, 2026-11-26): a file edit the session can make itself, it makes (the user
-said "you need to do it yourself"); a step that needs Cursor's own agent names it as "Cursor's chat panel (`Ctrl+L`
-in Cursor), not this Claude session", and the setup asks first whether the user has Cursor usage left (step 3 of
-request 16 could not run without it). **Commit and push** is the view title's cloud icon or the Local changes row,
-not the repository row.
-The main session's cleanup check after PASS: `python scripts/live_check.py settings diff <backup dir from the report>`
-prints no difference.
+- 📋 lines are checked with `live_check.py status --since install` (logs and registrations across reloads), the
+  files the plan names, or git.
+- Setup: install, `settings backup`, every fixture repository the tests need configured together
+  (`teamPlugins.repositories` is application scope: one list for every window, a project folder can't change it; each
+  fixture its own `--name`), one project folder per project setup under the scratchpad (`projectPlugins` /
+  `projectRepositories` in its `.vscode/settings.json`, the resource-scope settings; a test names the folder to open
+  with `Ctrl+R`), git identities in the test clones. The managed clone and partial copies are shared by every window:
+  tests that change them come last.
+- **Ping me** cases here: a teammate's push arriving, an edit of a registered copy or of the clone.
+- The user is almost always out of Cursor usage: never ask. A test that needs Cursor's own agent goes in the optional
+  group, named as "Cursor's chat panel (`Ctrl+L` in Cursor), not this Claude session".
+- Cleanup: `settings diff` (only the test's changes), `settings restore`, `settings diff` (no difference), fixtures and
+  project folders removed. The installed build stays.
+- **Commit and push** is the view title's cloud icon or the Local changes row, not the repository row.
 
 Tools (`python scripts/live_check.py`, from the repo root; `--host <ssh host>` for Remote-SSH):
 - `status [--since install|host|10m|07:10] [--grep <regex>]`: the installed version and whether its files match the
