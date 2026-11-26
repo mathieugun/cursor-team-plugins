@@ -283,8 +283,16 @@ An edited `marketplace.json` or `mcp.json` is rewritten with two-space indentati
 ## Staying up to date
 
 The repositories are checked at startup, every `teamPlugins.updateIntervalMinutes` (60 by default, at least 5; `0`
-means only at startup) and when you click **Sync now** (the sync icon of the view). After an update, **What changed**
-in the notification lists the new commits. Start a new chat to use the new versions.
+means only at startup) and when you click **Sync now** (the sync icon of the view). Start a new chat to use the new
+versions.
+
+After an update, the notification says who changed what ("Alice updated code-review"). The view marks the items added
+or updated since you last looked (`new` or `updated` after the item's kind, a coloured `N` or `M`), shows the counts on
+the plugin and repository rows and a number on the view's icon. **What changed** (in the notification, on a
+repository's right-click menu, or in the command palette) lists them and opens each one's diff against the version you
+last saw; **Show changes** on an item does the same, or shows its last change when it has no mark. Opening an item's
+diff or its file marks it seen, and **Mark all as seen** clears a repository. Your own changes are never marked. The
+tooltip of an item or plugin says who last changed it, and when.
 
 When the server can't be reached (offline, VPN down), the plugins already cloned keep working and the update is
 retried a few minutes later.
@@ -369,6 +377,8 @@ terminal where git and SSH can ask their questions; then click **Sync now**.
 - Writing a plugin rewrites the formatting of the `marketplace.json` or `mcp.json` it edits.
 - Share with team copies only rules, skills, commands and agents (not the MCP servers of `.cursor/mcp.json`, nor
   `AGENTS.md`); links from the item to other project files are copied as they are and may break.
+- An MCP server is credited to whoever last changed its plugin's MCP file.
+- Who last changed an item is read from the last 1000 commits.
 
 ## Contributing
 

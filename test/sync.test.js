@@ -83,8 +83,6 @@ test('sync lifecycle: clone, upToDate, updated, discard', async (t) => {
   assert.equal(r.from, sha0);
   assert.equal(r.to, sha1);
   assert.equal(git(['rev-parse', 'HEAD'], args.managedRepo), sha1);
-  const log = await sync.changesBetween({ run: args.run, repoDir: args.managedRepo, from: r.from, to: r.to });
-  assert.ok(log.includes('second commit'));
 
   fs.appendFileSync(path.join(args.managedRepo, 'p', 'notes.txt'), ' local edit');
   const d = await sync.discardLocalChanges({ run: args.run, managedRepo: args.managedRepo, lockFile: args.lockFile });
@@ -725,22 +723,28 @@ test('localChanges reports a failing status', async (t) => {
   await assert.rejects(sync.localChanges({ run, repo: 'x' }), /git status failed: fatal: boom/);
 });
 
-test('headFileArgs serves only HEAD of the managed clone', (t) => {
+test('revFileArgs serves only HEAD or a commit of the repository', (t) => {
   const root = tmpDir();
   t.after(() => rmDir(root));
   const M = path.join(root, 'store', 'repo');
   const ok = ['show', 'HEAD:p/skills/s/SKILL.md'];
   const req = (extra) => ({ repo: M, rev: 'HEAD', path: 'p/skills/s/SKILL.md', ...extra });
-  assert.deepEqual(sync.headFileArgs(req(), M), ok);
-  assert.deepEqual(sync.headFileArgs(req({ repo: M + path.sep }), M), ok);
-  assert.deepEqual(sync.headFileArgs(req({ repo: path.join(M, '.') }), M), ok);
-  assert.equal(sync.headFileArgs(req({ rev: '--output=x' }), M), null);
-  assert.equal(sync.headFileArgs(req({ rev: '' }), M), null);
-  assert.equal(sync.headFileArgs(req({ rev: 'HEAD~1' }), M), null);
-  assert.equal(sync.headFileArgs(req({ repo: path.join(root, 'other') }), M), null);
-  assert.equal(sync.headFileArgs(req({ path: '' }), M), null);
-  assert.equal(sync.headFileArgs(req({ path: 5 }), M), null);
-  assert.equal(sync.headFileArgs(null, M), null);
+  assert.deepEqual(sync.revFileArgs(req(), M), ok);
+  assert.deepEqual(sync.revFileArgs(req({ repo: M + path.sep }), M), ok);
+  assert.deepEqual(sync.revFileArgs(req({ repo: path.join(M, '.') }), M), ok);
+  const hash = 'b952'.repeat(10);
+  assert.deepEqual(sync.revFileArgs(req({ rev: hash }), M), ['show', `${hash}:p/skills/s/SKILL.md`]);
+  const hash256 = 'ab12'.repeat(16);
+  assert.deepEqual(sync.revFileArgs(req({ rev: hash256 }), M), ['show', `${hash256}:p/skills/s/SKILL.md`]);
+  assert.equal(sync.revFileArgs(req({ rev: hash.toUpperCase() }), M), null);
+  assert.equal(sync.revFileArgs(req({ rev: hash.slice(1) }), M), null);
+  assert.equal(sync.revFileArgs(req({ rev: '--output=x' }), M), null);
+  assert.equal(sync.revFileArgs(req({ rev: '' }), M), null);
+  assert.equal(sync.revFileArgs(req({ rev: 'HEAD~1' }), M), null);
+  assert.equal(sync.revFileArgs(req({ repo: path.join(root, 'other') }), M), null);
+  assert.equal(sync.revFileArgs(req({ path: '' }), M), null);
+  assert.equal(sync.revFileArgs(req({ path: 5 }), M), null);
+  assert.equal(sync.revFileArgs(null, M), null);
 });
 
 test('a missing branch at the first clone is reported', async (t) => {

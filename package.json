@@ -2,7 +2,7 @@
   "name": "cursor-team-plugins",
   "displayName": "Team plugins",
   "description": "Keeps a team's Cursor plugins (rules, skills, commands, agents and MCP servers) in sync with the team's git repositories and registers the ones each user and project selected.",
-  "version": "0.8.3",
+  "version": "0.8.4",
   "publisher": "mathieugun",
   "author": "Mathieu Gunther",
   "license": "MIT",
@@ -162,6 +162,26 @@
           "highContrast": "charts.purple",
           "highContrastLight": "charts.purple"
         }
+      },
+      {
+        "id": "teamPlugins.newItemForeground",
+        "description": "Colour of the items added since you last looked, in the Team Plugins view.",
+        "defaults": {
+          "dark": "gitDecoration.addedResourceForeground",
+          "light": "gitDecoration.addedResourceForeground",
+          "highContrast": "gitDecoration.addedResourceForeground",
+          "highContrastLight": "gitDecoration.addedResourceForeground"
+        }
+      },
+      {
+        "id": "teamPlugins.updatedItemForeground",
+        "description": "Colour of the items updated since you last looked, in the Team Plugins view.",
+        "defaults": {
+          "dark": "gitDecoration.modifiedResourceForeground",
+          "light": "gitDecoration.modifiedResourceForeground",
+          "highContrast": "gitDecoration.modifiedResourceForeground",
+          "highContrastLight": "gitDecoration.modifiedResourceForeground"
+        }
       }
     ],
     "commands": [
@@ -314,6 +334,17 @@
         "command": "teamPlugins.shareWithTeam",
         "title": "Share with team...",
         "category": "Team Plugins"
+      },
+      {
+        "command": "teamPlugins.whatChanged",
+        "title": "What changed",
+        "category": "Team Plugins",
+        "icon": "$(diff)"
+      },
+      {
+        "command": "teamPlugins.showChanges",
+        "title": "Show changes",
+        "category": "Team Plugins"
       }
     ],
     "menus": {
@@ -402,6 +433,16 @@
           "command": "teamPlugins.keepCopyVersion",
           "when": "view == teamPlugins.plugins && viewItem == conflict",
           "group": "1_conflict@2"
+        },
+        {
+          "command": "teamPlugins.whatChanged",
+          "when": "view == teamPlugins.plugins && viewItem =~ /^repo\\.(managed|local)$/",
+          "group": "0_updates@1"
+        },
+        {
+          "command": "teamPlugins.showChanges",
+          "when": "view == teamPlugins.plugins && viewItem =~ /^child(\\.project)?$/",
+          "group": "0_updates@1"
         },
         {
           "command": "teamPlugins.openRepo",
@@ -506,6 +547,10 @@
         },
         {
           "command": "teamPlugins.rename",
+          "when": "false"
+        },
+        {
+          "command": "teamPlugins.showChanges",
           "when": "false"
         }
       ]

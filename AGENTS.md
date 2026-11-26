@@ -1,6 +1,6 @@
 # cursor-team-plugins: developer notes
 
-Cursor (VS Code) extension, version in `package.json` (0.8.3). Plain JavaScript, CommonJS, no npm dependency, no
+Cursor (VS Code) extension, version in `package.json` (0.8.4). Plain JavaScript, CommonJS, no npm dependency, no
 build step. User documentation: `README.md` (for Cursor users: what it does, install, usage; it shows
 only the current version, with no history). Internals, platform notes, detailed limits and the release process:
 `docs/development.md`.
@@ -15,11 +15,14 @@ only the current version, with no history). Internals, platform notes, detailed 
   (takes the `drafts` folder), `assignNames`, `mergeCatalogs`, `normalizeIds`, `followRenames`, `rememberNames`,
   `originUrl`, `migratedSettings`, `missingRepos`, `unlocatedRepos`, `projectRepoEntry`,
   `withProjectRepo`, `withoutProjectRepo`), `selection` (selection model, on the merged catalog), `treeModel` (`buildTree`,
-  `buildChangesNode`, `buildConflictsNode`, `repoStatus`, `buildRepoNode`, `buildMissingNodes`), `materialize`
+  `buildChangesNode`, `buildConflictsNode`, `repoStatus`, `buildRepoNode`, `buildMissingNodes`, `itemDecoration`), `materialize`
   (`holderName`, `copyRootOf`, `syncCopy`, `markCopySynced`, `resolveConflict`, `hashCache`: partial plugin copies kept
   in sync both ways), `git`, `sync` (managed clone: `syncManaged`, `localChanges`, `checkConflicts`, `gitVersionOf`, `parseStatusZ`,
   `discardLocalChanges`, `withLock`, `withLockSync`, `removeStaleIndexLock`, `removeLeftovers`, `recentlySynced`,
-  `headFileArgs`, `checkRemote`), `contribute` (`commitAndPush`, `pushToBranch`, `defaultBranchName`), `pullRequest` (`parseRemote`,
+  `revFileArgs`, `checkRemote`), `updates` (`parseLsTree`, `parseLog`, `parseIdent`, `itemPath`, `pluginPath`, `updateItems`, `serverEntry`,
+  `serverText`, `fingerprints`, `lastChanges`, `baselineRecord`, `computeMarks`, `markSeen`, `readSeen`, `writeSeen`,
+  `noticeEntries`, `noticeText`, `noticeMessage`, `ago`, `shortDate`, `lastLine`, `readGitData`, `rangeHashes`,
+  `treeFiles`: the update summary), `contribute` (`commitAndPush`, `pushToBranch`, `defaultBranchName`), `pullRequest` (`parseRemote`,
   `pullRequestPage`: the hosting service's new pull request page of a pushed branch), `cursorApi`,
   `registrar`, `remoteErrors` (`classify`, `remoteHost`, `describeRemote`, `remoteResult`: classified git failures with
   a message and the actions to offer), `authoring` (scaffolds and drafts: `nameError`, `serverNameError`, `yamlScalar`,
@@ -234,6 +237,14 @@ On a Linux machine with a Cursor server (a Remote-SSH host), the suite runs with
   activation, and the other steps tick on `onSettingChanged`. `onCommand` of an extension's own command fires only
   through the workbench, so it is not used. Right after startup `Get started` opens the generic Welcome page until
   Cursor has registered the walkthrough (a few seconds).
+- What the user has seen is `<storage>/seen/<key>.json` (outside `state/`, watched: marking an item seen applies in
+  every window); marks compare fingerprints at HEAD (tree or blob ids, an MCP server's entry hash), so uncommitted
+  edits never mark; the user's own changes (author email = `git var GIT_AUTHOR_IDENT`, which honours the
+  environment unlike `git config user.email`) are recorded, not marked.
+- `vscode.changes` takes `[label, left, right]` and both sides are required (an absent side is a
+  `team-plugins-git:` URI with an empty rev); a `FileDecoration` badge is at most 2 characters (`PN`, `PM`).
+- The update notification is shown by `refreshUpdates` (after the apply that follows the sync), not by
+  `notifyAfterSync`: it needs the marks.
 
 ## Rules
 
