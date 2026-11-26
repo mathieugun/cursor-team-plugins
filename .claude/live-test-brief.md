@@ -20,9 +20,10 @@ fix.
 
 ## Run it
 - Do the plan's setup and check it worked (`status`) before the first step.
-- For each step: write in your message, as bullets, exactly what the user does, where, and what they should see
-  (anything they type, press or pick in backticks), then ask for the outcome with a question card. When they answer,
-  check it yourself (`status`, the files the plan names) before the next step.
+- For each step: first send the instructions as visible text, one bullet per action in order, then what the user
+  should see (anything they type, press or pick in backticks); then ask for the outcome with a question card. Your
+  thinking is not shown to the user, and the card only asks for the outcome: never put the instructions in either.
+  When they answer, check it yourself (`status`, the files the plan names) before the next step.
 - Record each step in the report file as you go.
 - Anything the plan's setup and the notes don't cover (another machine, settings beyond `teamPlugins.*`): ask first.
 

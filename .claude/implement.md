@@ -43,6 +43,8 @@ names in fixtures, settings or test data.
 Hand checks run in a separate session: brief `.claude/live-test-brief.md`, model Sonnet, report
 `requests/NN-<name>.live.md` (not committed). Run `scripts/live-test.js` here first; the session gets only what the
 scenarios can't show.
+The main session's cleanup check after PASS: `python scripts/live_check.py settings diff <backup dir from the report>`
+prints no difference.
 
 Tools (`python scripts/live_check.py`, from the repo root; `--host <ssh host>` for Remote-SSH):
 - `status [--since install|host|10m|07:10] [--grep <regex>]`: the installed version and whether its files match the
