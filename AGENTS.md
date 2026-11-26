@@ -1,6 +1,6 @@
 # cursor-team-plugins: developer notes
 
-Cursor (VS Code) extension, version in `package.json` (0.8.4). Plain JavaScript, CommonJS, no npm dependency, no
+Cursor (VS Code) extension, version in `package.json` (0.8.5). Plain JavaScript, CommonJS, no npm dependency, no
 build step. User documentation: `README.md` (for Cursor users: what it does, install, usage; it shows
 only the current version, with no history). Internals, platform notes, detailed limits and the release process:
 `docs/development.md`.
@@ -10,15 +10,18 @@ only the current version, with no history). Internals, platform notes, detailed 
 - `extension.js`: the only file that requires `vscode` (activation, tree view, status bar, commands, timers,
   watchers). Not covered by the tests: check its syntax with the command below.
 - `lib/`: pure logic, never requires `vscode`, tested with node: `catalog` (read one repository: `name`, `plugins`,
-  `renamed` (the `renamed` record of `marketplace.json`), `mcpServerNames`, `filterMcpJson`; its plugins carry
-  `customPaths`, the kinds `plugin.json` declares), `repos` (the list of repositories: `normalizeUrl`, `listRepos`
+  `renamed` (the `renamed` record of `marketplace.json`), `mcpServerNames`, `filterMcpJson`, `frontmatterField`;
+  `problems` on the catalog, its plugins and its items (see `checks`); its plugins carry `customPaths`, the kinds
+  `plugin.json` declares), `checks` (`splitFrontmatter`, `lintFrontmatter`, `checkItemText`, `conflictMarkerLine`,
+  `parseJsonc`, `checkJsonText`, `skillKey`, `pushProblems`: problems Cursor would drop or misread, shown in the view, as
+  diagnostics and before a push), `repos` (the list of repositories: `normalizeUrl`, `listRepos`
   (takes the `drafts` folder), `assignNames`, `mergeCatalogs`, `normalizeIds`, `followRenames`, `rememberNames`,
   `originUrl`, `migratedSettings`, `missingRepos`, `unlocatedRepos`, `projectRepoEntry`,
   `withProjectRepo`, `withoutProjectRepo`), `selection` (selection model, on the merged catalog), `treeModel` (`buildTree`,
   `buildChangesNode`, `buildConflictsNode`, `repoStatus`, `buildRepoNode`, `buildMissingNodes`, `itemDecoration`), `materialize`
   (`holderName`, `copyRootOf`, `syncCopy`, `markCopySynced`, `resolveConflict`, `hashCache`: partial plugin copies kept
   in sync both ways), `git`, `sync` (managed clone: `syncManaged`, `localChanges`, `checkConflicts`, `gitVersionOf`, `parseStatusZ`,
-  `discardLocalChanges`, `withLock`, `withLockSync`, `removeStaleIndexLock`, `removeLeftovers`, `recentlySynced`,
+  `discardLocalChanges`, `changedPaths`, `withLock`, `withLockSync`, `removeStaleIndexLock`, `removeLeftovers`, `recentlySynced`,
   `revFileArgs`, `checkRemote`), `updates` (`parseLsTree`, `parseLog`, `parseIdent`, `itemPath`, `pluginPath`, `updateItems`, `serverEntry`,
   `serverText`, `fingerprints`, `lastChanges`, `baselineRecord`, `computeMarks`, `markSeen`, `readSeen`, `writeSeen`,
   `noticeEntries`, `noticeText`, `noticeMessage`, `ago`, `shortDate`, `lastLine`, `readGitData`, `rangeHashes`,
@@ -243,6 +246,17 @@ On a Linux machine with a Cursor server (a Remote-SSH host), the suite runs with
   environment unlike `git config user.email`) are recorded, not marked.
 - `vscode.changes` takes `[label, left, right]` and both sides are required (an absent side is a
   `team-plugins-git:` URI with an empty rev); a `FileDecoration` badge is at most 2 characters (`PN`, `PM`).
+- Cursor drops a skill, rule, command or agent whose frontmatter gray-matter can't parse, silently (no log line), and
+  keeps one with no frontmatter or no description (an agent with an empty body is dropped too). Our own YAML checker
+  (`lintFrontmatter`) is calibrated against gray-matter 4.0.3 / js-yaml 3 (tabs are not flagged, `yes` is a string) and
+  must never flag valid YAML: when in doubt it says nothing.
+- `plugin.json` and `marketplace.json` are strict JSON in Cursor (a BOM makes it ignore them); `mcp.json` is JSONC
+  (comments, trailing commas): `parseJsonc` reads it, `checkJsonText` reports what Cursor would ignore.
+- The agent's `ReadLints` tool reads an extension's diagnostics of any file by absolute path (code reading, not seen
+  live yet; only errors and warnings;
+  markers older than an open document's version are dropped): `updateDiagnostics` runs at every apply, sets the
+  collection again when the problems or an open document's version changed, and mirrors them on the partial-copy file,
+  which is the path the agent edits.
 - The update notification is shown by `refreshUpdates` (after the apply that follows the sync), not by
   `notifyAfterSync`: it needs the marks.
 

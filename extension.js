@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { readCatalog } = require('./lib/catalog');
+const checks = require('./lib/checks');
 const authoring = require('./lib/authoring');
 const share = require('./lib/share');
 const rename = require('./lib/rename');
@@ -110,6 +111,8 @@ let storage = '';
 let lastGitCheck = null; // the result of the last Check git (Test mode reads it)
 let partialCopies = new Map(); // plugin name -> { plugin, ids, holder, copyRoot, conflicts: [{ rel, source, copy }] }
 let copyConflicts = []; // the conflicts of all partial copies, as given to buildConflictsNode
+let diagnostics = null; // the DiagnosticCollection of the problems of lib/checks.js
+let diagnosticsKey = ''; // what it holds, to replace it only when that changes
 let copyWatcher = null;
 let copyDebounce = null;
 let copyRetryTimer = null;
@@ -720,6 +723,7 @@ async function doApply() {
   warnDroppedConflicts(partialCopies, copies);
   partialCopies = copies;
   updateConflicts();
+  updateDiagnostics();
   for (const [name, p] of [...desired]) {
     if (p === null) {
       desired.delete(name);
@@ -1322,6 +1326,82 @@ function warnDroppedConflicts(before, after) {
   }
 }
 
+// Publishes the problems of the catalogs (lib/checks.js) as diagnostics: on the file in the repository and, for a
+// plugin that has a partial copy, on the same file in the copy (the one an agent edits). The collection is replaced only
+// when its content changes.
+function updateDiagnostics() {
+  if (!diagnostics) {
+    return;
+  }
+  const all = [];
+  for (const cat of catalogs.values()) {
+    all.push(...(cat.problems || []));
+    for (const plugin of cat.plugins || []) {
+      all.push(...(plugin.problems || []));
+      for (const child of plugin.children || []) {
+        all.push(...(child.problems || []));
+      }
+    }
+  }
+  const byFile = new Map();
+  const add = (file, p) => {
+    if (!byFile.has(file)) {
+      byFile.set(file, []);
+    }
+    byFile.get(file).push(p);
+  };
+  for (const p of all) {
+    if (p.file) {
+      add(p.file, p);
+    }
+  }
+  for (const { plugin, copyRoot } of partialCopies.values()) {
+    for (const [file, list] of [...byFile]) {
+      const rel = path.relative(plugin.dir, file);
+      if (rel.startsWith('..') || path.isAbsolute(rel)) {
+        continue;
+      }
+      const mirror = path.join(copyRoot, rel);
+      if (fs.existsSync(mirror)) {
+        for (const p of list) {
+          add(mirror, p);
+        }
+      }
+    }
+  }
+  // a marker records the version of the file's open document when it is set, and Cursor's ReadLints drops a marker
+  // older than the document: an edit of an open file sets the diagnostics again even when they read the same
+  const norm = (f) => (process.platform === 'win32' ? path.resolve(f).toLowerCase() : path.resolve(f));
+  const versions = new Map(vscode.workspace.textDocuments.map((doc) => [norm(doc.uri.fsPath), doc.version]));
+  const key = JSON.stringify(
+    [...byFile]
+      .flatMap(([file, list]) =>
+        list.map((p) => JSON.stringify([file, versions.get(norm(file)) || 0, p.line, p.severity, p.message])),
+      )
+      .sort(),
+  );
+  if (key === diagnosticsKey) {
+    return;
+  }
+  diagnosticsKey = key;
+  diagnostics.clear();
+  diagnostics.set(
+    [...byFile].map(([file, list]) => [
+      vscode.Uri.file(file),
+      list.map((p) => {
+        const row = Math.max(p.line, 1) - 1;
+        const d = new vscode.Diagnostic(
+          new vscode.Range(row, 0, row, 10000),
+          p.message,
+          p.severity === 'error' ? vscode.DiagnosticSeverity.Error : vscode.DiagnosticSeverity.Warning,
+        );
+        d.source = 'Team plugins';
+        return d;
+      }),
+    ]),
+  );
+}
+
 // Rebuilds the list of partial-copy conflicts from partialCopies and announces the new ones. Returns whether the list
 // changed.
 function updateConflicts() {
@@ -1693,7 +1773,13 @@ class PluginTree {
           children: [],
         });
       }
-      return buildRepoNode({ ...d, name: labelOf(d) }, s, children, summary ? summary.counts : undefined);
+      return buildRepoNode(
+        { ...d, name: labelOf(d) },
+        s,
+        children,
+        summary ? summary.counts : undefined,
+        isActive(d) ? (catalogs.get(d.key) || {}).problems : undefined,
+      );
     });
     updateProjectStates(pluginNodes);
     return [...buildMissingNodes(missing, unlocated), ...repoNodes];
@@ -1725,6 +1811,12 @@ class PluginTree {
     } else if (node.kind === 'changes' && node.error) {
       item.iconPath = new vscode.ThemeIcon('warning');
       item.command = { command: 'teamPlugins.showLog', title: 'Show log' };
+    } else if (node.problem) {
+      const isError = node.problem === 'error';
+      item.iconPath = new vscode.ThemeIcon(
+        isError ? 'error' : 'warning',
+        new vscode.ThemeColor(isError ? 'list.errorForeground' : 'list.warningForeground'),
+      );
     } else if (TREE_ICONS[node.kind]) {
       item.iconPath = new vscode.ThemeIcon(node.kind === 'plugin' && node.partial ? 'pie-chart' : TREE_ICONS[node.kind]);
     }
@@ -3221,12 +3313,83 @@ async function pickToContribute(arg, { placeHolder, nothingText }) {
   return d;
 }
 
+// The text of a small file, null when it is missing, a folder, over 1 MB or binary (a NUL in its first 8000 bytes).
+function readSmallText(file) {
+  try {
+    const stat = fs.statSync(file);
+    if (!stat.isFile() || stat.size > 1024 * 1024) {
+      return null;
+    }
+    const text = fs.readFileSync(file, 'utf8');
+    return text.slice(0, 8000).includes('\0') ? null : text;
+  } catch {
+    return null;
+  }
+}
+
+// Before a push: checks the plugins the push changes (lib/checks.js). Returns true to go on: no problem, or the user
+// chose "Push anyway". "Open files" opens the files of the problems and stops.
+async function confirmChecks(d) {
+  let problems;
+  try {
+    const changed = await sync.changedPaths({ run: makeGit(gitPath()), repo: d.dir });
+    problems = checks.pushProblems({ catalog: readCatalog(d.dir), repoDir: d.dir, changed, readFile: readSmallText });
+  } catch (err) {
+    log(`check before pushing ${labelOf(d)}: ${err.message}`);
+    return true;
+  }
+  if (problems.length === 0) {
+    return true;
+  }
+  log(`check before pushing ${labelOf(d)}: ${problems.length} problem(s)`);
+  const shown = (p) => (p.file ? path.relative(d.dir, p.file).split(path.sep).join('/') : '(repository)');
+  for (const p of problems) {
+    log(`  ${shown(p)}${p.line > 0 ? `:${p.line}` : ''}: ${p.message}`);
+  }
+  const lines = problems.slice(0, 10).map((p) => `${shown(p)}${p.line > 0 ? `:${p.line}` : ''}: ${p.message}`);
+  if (problems.length > 10) {
+    lines.push(`and ${problems.length - 10} more`);
+  }
+  const choice = await ui.showWarningMessage(
+    `${problems.length} problem(s) in your changes to ${labelOf(d)}: Cursor drops or misreads these files, for you and for every teammate who gets them.`,
+    { modal: true, detail: lines.join('\n') },
+    'Push anyway',
+    'Open files',
+  );
+  if (choice === 'Push anyway') {
+    return true;
+  }
+  if (choice === 'Open files') {
+    const first = new Map();
+    for (const p of problems) {
+      if (p.file && !first.has(p.file) && fs.existsSync(p.file)) {
+        first.set(p.file, p.line);
+      }
+    }
+    for (const [file, line] of [...first].slice(0, 10)) {
+      try {
+        const row = Math.max(line, 1) - 1;
+        await vscode.window.showTextDocument(vscode.Uri.file(file), {
+          preview: false,
+          selection: new vscode.Range(row, 0, row, 0),
+        });
+      } catch (err) {
+        log(`cannot open ${file}: ${err.message}`);
+      }
+    }
+  }
+  return false;
+}
+
 async function commitAndPushCommand(arg) {
   const d = await pickToContribute(arg, {
     placeHolder: 'Repository to commit and push',
     nothingText: 'Nothing to commit or push.',
   });
   if (!d) {
+    return;
+  }
+  if (!(await confirmChecks(d))) {
     return;
   }
   const { changes } = stateOf(d.key);
@@ -3271,6 +3434,9 @@ async function pushToBranchCommand(arg) {
   const wantsPage = !!(arg && arg.openPullRequest);
   const d = await pickToContribute(arg, { placeHolder: 'Repository to push', nothingText: 'Nothing to push.' });
   if (!d) {
+    return;
+  }
+  if (!(await confirmChecks(d))) {
     return;
   }
   const { changes } = stateOf(d.key);
@@ -3537,6 +3703,19 @@ function testHook(context) {
       return queueCheckboxChange({ items: [[node, state]] });
     },
     registrations: () => Object.fromEntries(registrar ? registrar.current : []),
+    diagnostics: () => {
+      const out = {};
+      if (diagnostics) {
+        diagnostics.forEach((uri, list) => {
+          out[uri.fsPath] = list.map((d) => ({
+            line: d.range.start.line + 1,
+            severity: d.severity === vscode.DiagnosticSeverity.Error ? 'error' : 'warning',
+            message: d.message,
+          }));
+        });
+      }
+      return out;
+    },
     decoration: (key) => {
       const d = projectDecorations.provideFileDecoration(itemUri(key));
       return d ? { badge: d.badge, tooltip: d.tooltip, color: d.color && d.color.id } : null;
@@ -3585,6 +3764,9 @@ function activate(context) {
   statusItem.text = '$(plug) Team plugins';
   statusItem.show();
   context.subscriptions.push(statusItem);
+
+  diagnostics = vscode.languages.createDiagnosticCollection('Team plugins');
+  context.subscriptions.push(diagnostics);
 
   treeProvider = new PluginTree();
   treeView = vscode.window.createTreeView('teamPlugins.plugins', {

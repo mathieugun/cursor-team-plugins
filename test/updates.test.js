@@ -77,6 +77,7 @@ test('serverEntry and serverText', () => {
   assert.equal(updates.serverEntry(top, 'author'), undefined);
   assert.equal(updates.serverEntry(table, 'nope'), undefined);
   assert.equal(updates.serverEntry('{ not json', 'lint'), undefined);
+  assert.deepEqual(updates.serverEntry('{ // c\n "mcpServers": {"lint": {"command": "x"},},\n}', 'lint'), { command: 'x' });
   assert.equal(updates.serverEntry(undefined, 'lint'), undefined);
   assert.equal(updates.serverText(table, 'tickets'), '{\n  "tickets": {\n    "url": "http://t"\n  }\n}\n');
   assert.equal(updates.serverText(table, 'nope'), '');

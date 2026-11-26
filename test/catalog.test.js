@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { readCatalog, frontmatterDescription, mcpServerNames, filterMcpJson } = require('../lib/catalog');
+const { readCatalog, frontmatterDescription, frontmatterField, mcpServerNames, filterMcpJson } = require('../lib/catalog');
 const { tmpDir, rmDir, writeFile, makePlugin } = require('./helpers');
 
 function fixture(t) {
@@ -377,4 +377,156 @@ test('readCatalog reads renamed from a marketplace.json without plugins, and war
   assert.deepEqual(bad.renamed, {});
   assert.deepEqual(bad.warnings, ['marketplace.json: "renamed" is not an object']);
   assert.deepEqual(bad.plugins.map((p) => p.name), ['a']);
+});
+
+// ---- problems (lib/checks.js) ------------------------------------------------------------------------------------
+
+test('a skill with broken YAML is listed with a problem', (t) => {
+  const root = fixture(t);
+  makePlugin(root, 'p', { skills: ['ok'] });
+  const file = writeFile(root, 'p/skills/bad/SKILL.md', '---\nname: bad\ndescription: Use when: x\n---\nBody\n');
+  const { plugins } = readCatalog(root);
+  const bad = plugins[0].children.find((c) => c.id === 'p/skills/bad');
+  assert.ok(bad);
+  assert.equal(bad.description, frontmatterField(fs.readFileSync(file, 'utf8'), 'description'));
+  assert.equal(bad.problems.length, 1);
+  assert.equal(bad.problems[0].severity, 'error');
+  assert.equal(bad.problems[0].file, file);
+  assert.equal(bad.problems[0].line, 3);
+  assert.equal(plugins[0].children.find((c) => c.id === 'p/skills/ok').problems, undefined);
+});
+
+test('skills (and rules) of one plugin with the same name: the later ones get a problem', (t) => {
+  const root = fixture(t);
+  makePlugin(root, 'p', {});
+  const skill = (name) => (name ? `---\nname: ${name}\ndescription: d\n---\nb\n` : '---\ndescription: d\n---\nb\n');
+  writeFile(root, 'p/skills/a-first/SKILL.md', skill('dup'));
+  writeFile(root, 'p/skills/b-second/SKILL.md', skill('Dup'));
+  writeFile(root, 'p/skills/dup/SKILL.md', skill(''));
+  const { plugins } = readCatalog(root);
+  const by = (id) => plugins[0].children.find((c) => c.id === id);
+  assert.equal(by('p/skills/a-first').problems, undefined);
+  assert.deepEqual(by('p/skills/b-second').problems.map((p) => p.message), [
+    'Same name as a-first ("dup"), so Cursor loads only one of them',
+  ]);
+  assert.equal(by('p/skills/b-second').problems[0].line, 1);
+  assert.equal(by('p/skills/b-second').problems[0].severity, 'error');
+  assert.deepEqual(by('p/skills/dup').problems.map((p) => p.message), [
+    'Same name as a-first ("dup"), so Cursor loads only one of them',
+  ]);
+
+  const rules = fixture(t);
+  makePlugin(rules, 'p', { rules: ['a.md', 'a.mdc', 'b.mdc'] });
+  const r = readCatalog(rules).plugins[0].children;
+  assert.equal(r.find((c) => c.id === 'p/rules/a.md').problems, undefined);
+  assert.deepEqual(r.find((c) => c.id === 'p/rules/a.mdc').problems.map((p) => p.message), [
+    'Same name as a.md ("a"), so Cursor loads only one of them',
+  ]);
+  assert.equal(r.find((c) => c.id === 'p/rules/b.mdc').problems, undefined);
+  // skills and rules are compared within their own kind
+  const mixed = fixture(t);
+  makePlugin(mixed, 'p', { skills: ['x'], rules: ['x.mdc'] });
+  assert.ok(readCatalog(mixed).plugins[0].children.every((c) => !c.problems));
+});
+
+test('an mcp.json with comments and a trailing comma gives its servers, no warning and no problem', (t) => {
+  const root = fixture(t);
+  makePlugin(root, 'p', {
+    extra: { 'mcp.json': '{\n  // servers\n  "mcpServers": {\n    "a": {"command": "x"}, /* c */\n  },\n}\n' },
+  });
+  const { plugins, warnings, problems } = readCatalog(root);
+  assert.deepEqual(plugins[0].children.map((c) => `${c.kind}:${c.name}`), ['mcp:a']);
+  assert.deepEqual(warnings, []);
+  assert.deepEqual(problems, []);
+  assert.equal(plugins[0].problems, undefined);
+});
+
+test('an mcp.json that does not parse is a warning and a problem of the plugin', (t) => {
+  const root = fixture(t);
+  makePlugin(root, 'p', { extra: { 'mcp.json': "{'a': 1}" } });
+  const { plugins, warnings } = readCatalog(root);
+  assert.equal(warnings.length, 1);
+  assert.ok(warnings[0].startsWith('p: mcp.json:'));
+  assert.equal(plugins[0].problems.length, 1);
+  assert.ok(plugins[0].problems[0].message.startsWith('mcp.json is not valid JSON, so Cursor may not load its MCP servers: '));
+  assert.equal(plugins[0].problems[0].file, path.join(root, 'p', 'mcp.json'));
+});
+
+test('a plugin.json that starts with a BOM is a problem, and is still read', (t) => {
+  const root = fixture(t);
+  makePlugin(root, 'p', { manifest: false });
+  writeFile(root, 'p/.cursor-plugin/plugin.json', '﻿' + JSON.stringify({ name: 'p', displayName: 'Pretty' }));
+  const { plugins, warnings } = readCatalog(root);
+  assert.equal(plugins[0].displayName, 'Pretty');
+  assert.deepEqual(warnings, []);
+  assert.equal(plugins[0].problems.length, 1);
+  assert.equal(
+    plugins[0].problems[0].message,
+    'plugin.json starts with a byte order mark (BOM), so Cursor ignores it (its name, display name and declared folders): save it as UTF-8 without BOM',
+  );
+  assert.equal(plugins[0].problems[0].line, 1);
+});
+
+test('a marketplace.json that does not parse is a repository problem, the plugins are found by folder', (t) => {
+  const root = fixture(t);
+  makePlugin(root, 'a', {});
+  const file = writeFile(root, '.cursor-plugin/marketplace.json', '{\n  "name": "t",\n  "plugins": [],\n}\n');
+  const c = readCatalog(root);
+  assert.equal(c.problems.length, 1);
+  assert.equal(c.problems[0].file, file);
+  assert.ok(c.problems[0].line >= 1);
+  assert.ok(c.problems[0].message.startsWith('marketplace.json is not valid JSON, so Cursor ignores it (the plugin list and the repository name): '));
+  assert.equal(c.warnings.length, 1);
+  assert.ok(c.warnings[0].startsWith('marketplace.json: '));
+  assert.deepEqual(c.plugins.map((p) => p.name), ['a']);
+});
+
+test('the warnings that are not about a loaded plugin are repository problems too', (t) => {
+  const root = fixture(t);
+  makePlugin(root, 'a', {});
+  const file = writeFile(
+    root,
+    '.cursor-plugin/marketplace.json',
+    JSON.stringify({ plugins: [{ name: 'a', source: './a' }, { name: 'x', source: './missing' }, { name: 'y' }], renamed: 3 }),
+  );
+  const c = readCatalog(root);
+  assert.deepEqual(c.problems.map((p) => [p.file, p.line, p.severity, p.message]).sort(), [
+    [file, 0, 'error', 'plugin "x": folder not found: missing'],
+    [file, 0, 'error', 'plugin "y": unsupported source (only folders of this repository)'],
+    [file, 0, 'warning', 'marketplace.json: "renamed" is not an object'],
+  ].sort());
+  const notArray = fixture(t);
+  const f2 = writeFile(notArray, '.cursor-plugin/marketplace.json', JSON.stringify({ plugins: 3 }));
+  assert.deepEqual(readCatalog(notArray).problems, [
+    { file: f2, line: 0, severity: 'error', message: 'marketplace.json: "plugins" is not an array' },
+  ]);
+  const gone = readCatalog(path.join(root, 'nowhere'));
+  assert.equal(gone.problems.length, 1);
+  assert.equal(gone.problems[0].file, '');
+  assert.ok(gone.problems[0].message.startsWith('repository folder not found'));
+  const dup = fixture(t);
+  makePlugin(dup, 'one', { name: 'same' });
+  makePlugin(dup, 'two', { name: 'same' });
+  const d = readCatalog(dup);
+  assert.deepEqual(d.problems.map((p) => [p.file, p.message]), [
+    [path.join(dup, 'two', '.cursor-plugin', 'plugin.json'), 'duplicate plugin name "same" (two): skipped'],
+  ]);
+});
+
+test('the fixture repository has no problem', () => {
+  const c = readCatalog(path.join(__dirname, 'fixtures', 'team-repo'));
+  assert.deepEqual(c.problems, []);
+  assert.deepEqual(c.warnings, []);
+  assert.ok(c.plugins.length > 0);
+  for (const p of c.plugins) {
+    assert.equal(p.problems, undefined, p.name);
+    for (const child of p.children) {
+      assert.equal(child.problems, undefined, child.id);
+    }
+  }
+});
+
+test('filterMcpJson reads comments and trailing commas', () => {
+  const text = '{\n  // c\n  "mcpServers": {"a": {"command": "x"}, "b": {"command": "y"},},\n}';
+  assert.deepEqual(JSON.parse(filterMcpJson(text, ['a'])), { mcpServers: { b: { command: 'y' } } });
 });

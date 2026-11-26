@@ -828,3 +828,33 @@ test('checkRemote', async (t) => {
     empty: true,
   });
 });
+
+test('changedPaths lists what a push carries, once each and sorted', async (t) => {
+  if (!gitAvailable()) {
+    return t.skip('git is not available');
+  }
+  const f = await setupFiles(t);
+  writeFile(f.clone, 'a.md', 'local\n');
+  writeFile(f.clone, 'new/dir/x.md', 'x\n');
+  git(['mv', 'b.md', 'moved.md'], f.clone);
+  assert.deepEqual(await sync.changedPaths({ run: f.args.run, repo: f.clone }), ['a.md', 'b.md', 'moved.md', 'new/dir/x.md']);
+  git(['add', '-A'], f.clone);
+  git([...IDENTITY, 'commit', '-m', 'local'], f.clone);
+  writeFile(f.clone, 'a.md', 'again\n');
+  writeFile(f.clone, 'untracked.md', 'u\n');
+  // the committed rename lists both paths (--no-renames): the push carries the deletion of the old one too
+  assert.deepEqual(await sync.changedPaths({ run: f.args.run, repo: f.clone }), [
+    'a.md',
+    'b.md',
+    'moved.md',
+    'new/dir/x.md',
+    'untracked.md',
+  ]);
+  git(['branch', '--unset-upstream'], f.clone);
+  assert.deepEqual(await sync.changedPaths({ run: f.args.run, repo: f.clone }), ['a.md', 'untracked.md']);
+});
+
+test('changedPaths throws when git status fails', async () => {
+  const run = async () => ({ code: 128, stdout: '', stderr: 'not a repository' });
+  await assert.rejects(() => sync.changedPaths({ run, repo: '/nowhere' }), /git status failed/);
+});

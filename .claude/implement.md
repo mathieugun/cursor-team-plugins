@@ -43,6 +43,11 @@ names in fixtures, settings or test data.
 Hand checks run in a separate session: brief `.claude/live-test-brief.md`, model Sonnet, report
 `requests/NN-<name>.live.md` (not committed). Run `scripts/live-test.js` here first; the session gets only what the
 scenarios can't show.
+Writing hand-check steps (request 16, 2026-11-26): a file edit the session can make itself, it makes (the user
+said "you need to do it yourself"); a step that needs Cursor's own agent names it as "Cursor's chat panel (`Ctrl+L`
+in Cursor), not this Claude session", and the setup asks first whether the user has Cursor usage left (step 3 of
+request 16 could not run without it). **Commit and push** is the view title's cloud icon or the Local changes row,
+not the repository row.
 The main session's cleanup check after PASS: `python scripts/live_check.py settings diff <backup dir from the report>`
 prints no difference.
 
@@ -183,6 +188,12 @@ under the temp folder, nothing installed) may be run without asking.
 - From Python on Windows, Git for Windows' `ssh` hangs once a command prints more than a few kB (a 186 kB `tar` never
   arrived); `C:\Windows\System32\OpenSSH\ssh.exe` works and reads the same `~/.ssh/config` (`live_check.py` uses it;
   against gnosis, 2026-11-26).
+
+- Cursor's own parsers can be run without a window: `resources/app/node_modules/gray-matter` (4.0.3, js-yaml 3.14.1,
+  the same as the agent host's bundled module 70890) calibrates a frontmatter check against what Cursor loads; the
+  agent host's loaders (`cursor-agent-host/dist/main.js` + chunks) run under `ELECTRON_RUN_AS_NODE=1 Cursor.exe` once
+  webpack's `require` is captured (the entry module itself throws "Cannot convert object to primitive value"; ignore
+  it). Request 16, Cursor 3.32.4, 2026-11-26.
 
 ## Implementer lessons
 <!-- One line per project-specific mistake seen in review. -->

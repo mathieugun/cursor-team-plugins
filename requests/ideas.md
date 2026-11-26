@@ -12,8 +12,8 @@ Ranked for adoption. Two people must say yes before the walkthrough even starts:
 fills the team repository, and each **teammate**, who installs the extension and must see why it's worth it. The
 walkthrough assumes a team repository URL already exists. The first two picks cover what comes before it (no
 repository yet, getting teammates in) and together make a two-minute demo; the third is the gate for an
-organisation-wide rollout; the fourth keeps an adopted repository healthy. The update summary, which kept the value
-visible after day one, is request 15.
+organisation-wide rollout. The update summary, which kept the value visible after day one, is request 15; the check
+before pushing, which keeps an adopted repository healthy, is request 16.
 
 1. **Create a team repository from what you already have.** A **Create team repository** command, and a walkthrough
    branch "I don't have a team repository yet". It scans the open projects (and the user-level folders) for
@@ -32,26 +32,17 @@ visible after day one, is request 15.
    and ask before applying it. Today a team commit reaches everyone's agent with no check. Not a convincer for one
    developer, but what a lead or security team asks before rolling the extension out widely. Follow-up: pin a tag or
    commit, and roll back the last update.
-4. **Check before pushing.** Cursor fails silently on a broken team file (a skill never fires, a server vanishes), and
-   a push hands that file to every teammate; the agent wrote most of these edits and the author rarely reads them
-   closely. **Commit and push** and **Push to a branch** check the changed plugins first and stop with the list and a
-   "Push anyway" button. The checks, by value: JSON that doesn't parse in `marketplace.json`, `plugin.json` or
-   `mcp.json` (drops a whole plugin or all its servers; `catalog` already finds it but only logs it), conflict
-   markers, a skill, rule, command or agent whose frontmatter is missing or not valid YAML, an empty `description`
-   (the agent picks a skill by it). The same results show in the view, on the plugin or item row, which replaces
-   showing the catalog warnings only in the log. Diagnostics in the Problems panel while editing only if the agent
-   sees them on files outside the workspace (the clones are under the global storage): then it fixes its own
-   mistakes before the push. To probe first: what Cursor does with a skill whose frontmatter is broken (skipped, or
-   loaded without a description), and whether the agent reads diagnostics of a file outside the workspace. Left out:
-   a skill folder that doesn't match its `name` (unless the probe shows Cursor cares), relative links to missing
-   files (little harm, needs a markdown link parser).
-5. **One repository for Cursor and Claude Code** (to check). Claude Code's plugin format
+4. **One repository for Cursor and Claude Code** (to check). Claude Code's plugin format
    (`.claude-plugin/marketplace.json`, skills, commands, agents, `.mcp.json`) is close to Cursor's: a repository that
    serves both lets a team using both tools adopt it as its one source of truth. Writing both manifests (when creating
    a repository or a plugin) looks cheap; syncing into Claude Code itself is out of scope. First check how far the two
    formats really match.
 
 ## Smaller follow-ups
+
+- **Confirm that Cursor's agent reads the Team plugins diagnostics** (request 16, hand check step 3 not run: no Cursor
+  usage left): ask Cursor's own agent to call `ReadLints` on a broken skill of the managed clone and of its partial
+  copy (absolute paths), and see whether it calls it on its own after editing one. Code reading says yes.
 
 - **MCP server readiness.** Show on an MCP server item what it needs and is missing: an environment variable it
   references (a token), its command not on PATH (`npx`, `uvx`, `docker`). Today such a server fails silently in Cursor.
@@ -62,7 +53,7 @@ visible after day one, is request 15.
 - Search and filter in the view.
 - **Pick the files to commit**: checkboxes in Local changes, so **Commit and push** leaves half-done edits out.
 - Show in the view the `projectPlugins` entries that match nothing, instead of only in the log (the catalog warnings
-  go with top pick 4).
+  show in the view since request 16).
 - Sync when the window gets focus again, if the last check is older than a few minutes.
 - Isolated live runs in a Remote-SSH window (not probed).
 - Hiding Cursor's sign-in screen during the isolated live runs.

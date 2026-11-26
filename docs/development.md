@@ -51,7 +51,8 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
     check after a settings change only when the window has focus).
   - The hook (`activate`'s return value in Test mode only): `calls`, `clearCalls`, `respond` (the scripted answers of
     the recorder that replaces `ui`), `idle` (nothing in flight for 300 ms), `tree` (labels, descriptions, tooltips,
-    icons, checkbox states), `check` (ticks or unticks a node like a click), `registrations`, `decoration`, `badge` (the
+    icons, checkbox states), `check` (ticks or unticks a node like a click), `registrations`, `diagnostics` (the
+    problems published to the Problems panel, by path), `decoration`, `badge` (the
     number on the view's icon), `updates` (a repository's counts, marks and removed items), `states` (per repository),
     `status` (status bar), `logLines`, `gitCheck` (the result of the last **Check git**), `storage` and `logUri`.
   - Scenario `walkthrough`: **Get started** opens the walkthrough tab (`Walkthrough: Team plugins`, run again until it
@@ -290,6 +291,42 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
   throws on more), so a project item with a mark reads `PN` or `PM`. The number on the view's icon is
   `TreeView.badge`, set after every `refreshUpdates`.
 
+### Checks
+
+- `lib/checks.js` (pure) finds what Cursor silently drops or misreads. A problem is `{ file, line, severity, message }`
+  (`error`: dropped or ignored; `warning`: loaded but degraded). `readCatalog` computes them per file it reads: an item
+  carries `problems` (frontmatter, description, agent body, conflict markers, same name as an earlier skill or rule), a
+  plugin carries those of its `plugin.json` and MCP files, the catalog those of `marketplace.json` and of the warnings
+  that are not about one loaded plugin. `warnings` keep their texts (they are logged).
+- `pushProblems` (before **Commit and push** and **Push to a branch**, `confirmChecks` in `extension.js`) keeps the
+  repository-level problems, those of the plugins that contain a path the push carries (`sync.changedPaths`: the status
+  files, and the files of the unpushed commits) and, for a changed file outside any item, a conflict marker check. The
+  modal offers **Push anyway** and **Open files**.
+- `doApply` ends with `updateDiagnostics`: every problem with a file goes to one `DiagnosticCollection` ("Team plugins"),
+  mirrored on the same file of a partial copy (the path an agent edits). The collection is replaced only when its content
+  changed.
+- Why our own YAML checker: Cursor reads each item with gray-matter 4.0.3 (js-yaml 3 `safeLoad`) inside a `try`, so a
+  throw drops the item without a log line, and the checker needs no dependency. It is line based and was calibrated
+  against Cursor's own gray-matter on 86 frontmatter texts (0 false positives; 1 known miss: a plain value with a ` #`
+  comment followed by an indented `b: c` line). Facts measured on Cursor 3.32.4 (2026-11-26, the agent host's loader run
+  on probe plugins):
+  - A frontmatter gray-matter can't parse drops a skill, rule, command or agent. No frontmatter, an empty one, a missing,
+    empty or non-string `description`, a folded `>` value, a BOM or CRLF load fine. A `---` that is never closed makes
+    the whole file the frontmatter (dropped unless it holds only `key: value` lines). Tabs in indentation are valid
+    (js-yaml 3), `yes` is a string, `12`, `2024-01-01`, `true` are not.
+  - A skill without a description is listed to the agent by path only; skills of a plugin are de-duplicated by their
+    normalised name (frontmatter `name`, else the folder), rules too; an agent with an empty body is dropped. A rule
+    without `description`, `globs` or `alwaysApply` is manual only: not flagged (it can be intended).
+  - `plugin.json` and `marketplace.json` are read with strict `JSON.parse` (a comment, a trailing comma or a BOM makes
+    Cursor ignore the file); `mcp.json` and `.mcp.json` with jsonc-parser (comments and trailing commas are fine), so the
+    catalog reads them as JSONC (`parseJsonc`).
+  - Diagnostics: the agent's `ReadLints` tool takes absolute paths and reads the workbench's marker service without a
+    workspace filter, so an extension's diagnostics of a file outside the workspace reach it (code reading of the
+    Cursor 3.32.4 bundles; not yet seen live: the hand check of 0.8.5 confirmed the Problems panel, on the clone and
+    the copy paths, but couldn't run the agent); only errors and warnings are returned, and for an open document markers older than its version
+    are dropped. A marker records the open document's version when it is set, so `updateDiagnostics` (at every apply)
+    compares the problems together with the open documents' versions and sets the collection again when either changed.
+
 ## Remote windows (Remote-SSH)
 
 - Cursor's agent runs on the remote machine, so the extension (`extensionKind: ["workspace"]`) runs there too and must
@@ -348,8 +385,19 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
 - An MCP file with some servers left out is generated in the partial copy (rewritten as `JSON.stringify(..., 2)`): it
   only goes from the repository to the copy. An edit or deletion made there never reaches the repository; an edited one
   is kept and reported in the log (and then no longer updated until removed), a deleted one is written again.
-- An `mcp.json` or `.mcp.json` that is not valid JSON gives a catalog warning; its servers are not selectable and the
-  file always comes with the plugin.
+- An MCP file is read as JSONC like Cursor (comments, trailing commas), so the servers of such a file are selectable
+  and a partial copy of it (generated) loses its comments. One that doesn't parse even so gives a warning and a
+  problem; its servers are not selectable and the file always comes with the plugin.
+- Checks: the YAML checker flags only the forms it knows (a plain value with `: `, a value starting with `*`, `[`, `@`,
+  `` ` ``, `%`, `!`, text after a closing quote or bracket, a quote or bracket never closed, a duplicate key, bad
+  indentation) and may miss rarer errors (a plain value with a ` #` comment followed by an indented `key: value` line,
+  errors inside nested maps beyond a plain `key: value`). A rule without a description that is neither `alwaysApply`
+  nor glob-attached and a command without a description are not flagged. A skill folder that differs from its `name`
+  and relative links to missing files are not checked. Hooks, scripts and other assets get only the conflict marker
+  check, and only in changed files at push time. `lib/authoring.js` (Add MCP server) and `lib/rename.js` still parse MCP
+  files strictly: on a file with comments they fail as before (rewriting would drop the comments). Diagnostics and
+  `ReadLints` were not probed in a Remote-SSH window. The problems of a repository that is not loaded (listed twice,
+  hidden by name) are not shown or published.
 - With a local repository outside a `.cursor/plugins` folder, Cursor may list the skills among the rules; the agent
   still gets them.
 - Enterprise teams whose admin turned off "Allow Local Plugin Imports": not tested whether it also blocks extension
