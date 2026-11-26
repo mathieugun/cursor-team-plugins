@@ -276,15 +276,20 @@ test('http: a push denied by a read-only server', async (t) => {
   const args = s.sargs();
   assert.equal((await sync.syncManaged(args)).kind, 'cloned');
   writeFile(args.managedRepo, 'a.txt', 'mine\n');
-  const r = await commitAndPush({
+  const push = {
     run: s.run,
     repo: args.managedRepo,
     message: 'x',
     lockFile: args.lockFile,
     stateFile: args.stateFile,
     repoUrl: args.repoUrl,
-  });
+  };
+  const r = await commitAndPush(push);
   assert.equal(r.kind, 'error');
   assert.equal(r.reason, 'denied');
-  assert.deepEqual(r.actions, ['pushToBranch', 'showLog']);
+  assert.deepEqual(r.actions, ['pullRequest', 'showLog']);
+  const b = await pushToBranch({ ...push, branch: 'live/y' });
+  assert.equal(b.kind, 'error');
+  assert.equal(b.reason, 'denied');
+  assert.deepEqual(b.actions, ['showLog']);
 });

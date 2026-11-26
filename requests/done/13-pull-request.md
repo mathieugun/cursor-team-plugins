@@ -21,4 +21,4 @@ From `ideas.md` (top pick 2):
   ask the admins.
 - The Azure DevOps page form (`pullrequestcreate?sourceRef=&targetRef=`) could not be confirmed from Microsoft's docs:
   included, and flagged as unverified in `docs/development.md`.
-- Version 0.9.0.
+- Version 0.8.2.

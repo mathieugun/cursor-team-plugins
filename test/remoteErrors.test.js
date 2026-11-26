@@ -111,12 +111,30 @@ test('remoteResult', () => {
   assert.equal(rejected.kind, 'error');
   assert.equal(
     rejected.message,
-    'the server refused the push to main (GitLab: You are not allowed to push code to protected branches on this project.): a protected branch or a server rule. Push your changes to a branch instead, and open a pull request from it.',
+    'the server refused the push to main (GitLab: You are not allowed to push code to protected branches on this project.): a protected branch or a server rule. Open a pull request instead: your changes go to a new branch, and the hosting service\'s page to propose them opens.',
   );
-  assert.deepEqual(rejected.actions, ['pushToBranch', 'showLog']);
+  assert.deepEqual(rejected.actions, ['pullRequest', 'showLog']);
+
+  const refusedBranch = remoteResult(
+    { code: 1, stderr: GITLAB_REJECTED },
+    { url: 'git@h:o/r.git', branch: 'team-plugins/x', op: 'branch' },
+    'fb',
+  );
+  assert.equal(
+    refusedBranch.message,
+    'the server refused the new branch team-plugins/x (GitLab: You are not allowed to push code to protected branches on this project.): a server rule on branch names, or on who may create branches. Try another branch name, or ask the repository\'s admins.',
+  );
+  assert.deepEqual(refusedBranch.actions, ['pushToBranch', 'showLog']);
 
   const ctx = { url: 'https://github.com/o/r.git', branch: 'main' };
-  assert.deepEqual(remoteResult({ stderr: DENIED_403 }, { ...ctx, op: 'push' }, 'fb').actions, ['pushToBranch', 'showLog']);
+  assert.deepEqual(remoteResult({ stderr: DENIED_403 }, { ...ctx, op: 'push' }, 'fb').actions, ['pullRequest', 'showLog']);
+  const deniedBranch = remoteResult({ stderr: DENIED_403 }, { ...ctx, op: 'branch' }, 'fb');
+  assert.deepEqual(deniedBranch.actions, ['showLog']);
+  assert.ok(deniedBranch.message.startsWith('you have no write access to https://github.com/o/r.git'), deniedBranch.message);
+  assert.ok(
+    deniedBranch.message.includes(': the server refused a new branch too. Ask for write access (pull requests from a fork are not supported).'),
+    deniedBranch.message,
+  );
   assert.deepEqual(remoteResult({ stderr: DENIED_403 }, { ...ctx, op: 'read' }, 'fb').actions, ['repositories', 'showLog']);
 
   const stalled = remoteResult(
@@ -152,7 +170,7 @@ test('a push refused by a GitHub ruleset quotes the server, not the progress', (
   assert.equal(r.reason, 'pushRejected');
   assert.equal(
     r.message,
-    'the server refused the push to main (error: GH013: Repository rule violations found for refs/heads/main.): a protected branch or a server rule. Push your changes to a branch instead, and open a pull request from it.',
+    'the server refused the push to main (error: GH013: Repository rule violations found for refs/heads/main.): a protected branch or a server rule. Open a pull request instead: your changes go to a new branch, and the hosting service\'s page to propose them opens.',
   );
 });
 

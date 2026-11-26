@@ -1,6 +1,6 @@
 # cursor-team-plugins: developer notes
 
-Cursor (VS Code) extension, version in `package.json` (0.8.1). Plain JavaScript, CommonJS, no npm dependency, no
+Cursor (VS Code) extension, version in `package.json` (0.8.2). Plain JavaScript, CommonJS, no npm dependency, no
 build step. User documentation: `README.md` (for Cursor users: what it does, install, usage; it shows
 only the current version, with no history). Internals, platform notes, detailed limits and the release process:
 `docs/development.md`.
@@ -19,7 +19,8 @@ only the current version, with no history). Internals, platform notes, detailed 
   (`holderName`, `copyRootOf`, `syncCopy`, `markCopySynced`, `resolveConflict`, `hashCache`: partial plugin copies kept
   in sync both ways), `git`, `sync` (managed clone: `syncManaged`, `localChanges`, `checkConflicts`, `gitVersionOf`, `parseStatusZ`,
   `discardLocalChanges`, `withLock`, `withLockSync`, `removeStaleIndexLock`, `removeLeftovers`, `recentlySynced`,
-  `headFileArgs`, `checkRemote`), `contribute` (`commitAndPush`, `pushToBranch`, `defaultBranchName`), `cursorApi`,
+  `headFileArgs`, `checkRemote`), `contribute` (`commitAndPush`, `pushToBranch`, `defaultBranchName`), `pullRequest` (`parseRemote`,
+  `pullRequestPage`: the hosting service's new pull request page of a pushed branch), `cursorApi`,
   `registrar`, `remoteErrors` (`classify`, `remoteHost`, `describeRemote`, `remoteResult`: classified git failures with
   a message and the actions to offer), `authoring` (scaffolds and drafts: `nameError`, `serverNameError`, `yamlScalar`,
   `itemFile`, `createItem`, `splitCommandLine`, `mcpEntry`, `addMcpServer`, `pluginLocation`, `createPlugin`,
@@ -170,6 +171,9 @@ On a Linux machine with a Cursor server (a Remote-SSH host), the suite runs with
   agent: `Permission denied (publickey).`); Windows' own OpenSSH and plink wait silently: network commands have no total
   limit but stop after 2 minutes without output (`--progress` keeps a transfer talking), and the stop kills the process
   tree (`taskkill /T /F`: killing git alone leaves ssh running).
+- `vscode.env.openExternal` is given the URL as a string, through `ui.openExternal`: Cursor re-encodes a `Uri` with
+  `encodeURI(uri.toString(true))`, which decodes the `%26`/`%2B`/`%23` of a branch name; a string is opened as is (read
+  in the Cursor 3.32 bundles; checked by hand: `source=team-plugins%2Fa%2Bb%26c` reached the browser unchanged).
 - A deleted upstream branch: `fetch --prune` succeeds, then `HEAD...@{u}` fails with "no such branch": check
   `refs/remotes/origin/<branch>`.
 - `offline` (server unreachable) is quiet when a clone exists, never counts as a sync for `recentlySynced`, retried after

@@ -134,6 +134,14 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
   to a branch, discard, partial-copy syncs, which take the lock in local mode too since windows with the same selection
   share a copy), and the other windows notice the new state through the files of `state/`. An edit in a managed clone
   (another window's partial copy, or by hand) reaches this window's partial copies and view within a second.
+- Push to a branch returns the page from `pullRequest.pullRequestPage`: built from the repository URL for `github.com`
+  (`compare/<target>...<branch>?quick_pull=1`), `gitlab.com`
+  (`-/merge_requests/new?merge_request[source_branch]=…&merge_request[target_branch]=…`) and Azure DevOps
+  (`dev.azure.com`, `ssh.dev.azure.com`, `*.visualstudio.com`, `vs-ssh.visualstudio.com`:
+  `…/_git/<repo>/pullrequestcreate?sourceRef=…&targetRef=…`), with the followed branch as the target; otherwise the
+  first `remote:` URL of the push output that names the branch (GitHub Enterprise, self-hosted GitLab, Bitbucket Cloud
+  and Azure DevOps Services print one); the URL is logged. A refused Commit and push offers **Open a pull request**
+  (Push to a branch, then the page opens at once).
 - Updates: the team's new commits are rebased under the local changes. Conflicts are found first with
   `git merge-tree --write-tree` (hence git 2.38). With several windows open, only one fetches per interval (a timed
   update leaves out each repository that another window synced less than half an interval ago, by its state file).
@@ -298,6 +306,15 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
   plugin are not followed. An editor open on a renamed file is not reopened on the new path. The F2 binding is not
   tested by the live scenarios (key presses can't be automated): without a tree element the command takes
   `treeView.selection[0]`.
+- Pull requests from a fork (a user with no write access at all) are not supported: the message says to ask for write
+  access.
+- The page of a branch pushed earlier (after the notification closed) is not offered again: its URL stays in the log.
+- Hosts other than GitHub, GitLab and Azure DevOps get a page only when the server prints one on the push (Bitbucket
+  Server, Azure DevOps Server and Gitea without the message get none: the message says to open the pull request on the
+  hosting service). A printed page targets the server's default branch, not necessarily the branch the clone follows.
+- An SSH host alias (`github.com-work` in `~/.ssh/config`) is an unknown host: only a printed URL is used.
+- The Azure DevOps page form (`pullrequestcreate?sourceRef=&targetRef=`) is not confirmed by Microsoft's docs
+  (2026-11-26): check it on a real Azure DevOps repository.
 - Upgrade from 0.4: the clone of 0.4 (`.cursor/plugins/repo`) is reused by the entry whose URL equals its origin URL,
   with its local changes. A clone that 0.4 left half-switched (origin still the old URL) is not reused: the entry is
   cloned again under `repos/` and the old folder stays. The partial copies move to new holder folders once (the hash

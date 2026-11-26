@@ -202,8 +202,10 @@ Cursor asks which one when several have changes. To share them:
 - **Commit and push** (the cloud icon in the view's title bar, or the icon of the group) asks for a message, commits
   every local change of that repository, rebases it on the team's latest commits and pushes it with your git
   credentials. Your teammates get it at their next sync.
-- **Push to a branch** pushes your changes to a new branch instead (for a protected branch, or to open a pull request)
-  and puts the clone back on the team version.
+- **Push to a branch** pushes your changes to a new branch instead (for a protected branch, or to have them reviewed)
+  and puts the clone back on the team version. Its message offers **Open pull request**, which opens the hosting
+  service's page to propose the branch as a pull request (GitHub, GitLab and Azure DevOps; other servers when they
+  print that page's address on the push).
 - **Discard local changes** throws them away, after a confirmation that lists what would be lost.
 
 Updates never overwrite your changes: they are kept on top of the team's new commits. Only a real conflict, where a
@@ -325,7 +327,7 @@ terminal where git and SSH can ask their questions; then click **Sync now**.
 | No access to, or repository not found | Check its URL in `teamPlugins.repositories` and ask for access. |
 | Branch not found | Check its `branch` in `teamPlugins.repositories` (none: the default branch). |
 | No answer for 2 minutes | git was waiting for a question: Open terminal, answer it, Sync now. |
-| The server refused the push | A protected branch or no write access: **Push to a branch**, then open a pull request. |
+| The server refused the push | A protected branch or no write access: **Open a pull request** pushes your changes to a new branch and opens the page to propose them. With no write access at all, ask for it (pull requests from a fork are not supported). |
 
 ## Upgrading from 0.4
 

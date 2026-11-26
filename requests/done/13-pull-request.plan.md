@@ -3,7 +3,7 @@
 ## Context
 
 - Repository: cursor-team-plugins (Cursor extension, plain JavaScript, CommonJS, no dependency, no build).
-- Request: `requests/13-pull-request.md`. Version 0.8.1 -> **0.9.0**.
+- Request: `requests/13-pull-request.md`. Version 0.8.1 -> **0.8.2**.
 - Branch: `request/13-pull-request` (already created; don't commit).
 - Files and functions involved today:
   - `lib/contribute.js`: `pushToBranch` (line 122) pushes the local changes to a new branch, then resets the clone;
@@ -311,8 +311,8 @@ Run (follow `contribute.live.js` and `remote-errors.live.js` for the helpers):
 
 ## Keep in step
 
-- `package.json`: `version` `0.9.0`.
-- `AGENTS.md`: version `0.9.0` in the first line; Layout: add `pullRequest` (`parseRemote`, `pullRequestPage`: the
+- `package.json`: `version` `0.8.2`.
+- `AGENTS.md`: version `0.8.2` in the first line; Layout: add `pullRequest` (`parseRemote`, `pullRequestPage`: the
   hosting service's new pull request page of a pushed branch) to the `lib/` list (after `contribute`), and in the
   "Why the code is shaped this way" list one bullet: `vscode.env.openExternal` is given the URL as a string (a `Uri` is
   re-encoded by Cursor with `encodeURI(uri.toString(true))`, which decodes `%26`/`%2B`/`%23` of a branch name; a string
@@ -360,3 +360,9 @@ Hand check: `ELECTRON_RUN_AS_NODE=1 "$LOCALAPPDATA/Programs/cursor/Cursor.exe" -
 - Never call `vscode.window.*` dialogs or `vscode.env.openExternal` directly from feature code: through `ui`.
 - Don't pass a `vscode.Uri` to `openExternal` (fact 1).
 - Don't change the wording of messages other than those listed.
+
+## Changes after review
+
+- Version 0.8.2 instead of 0.9.0 (user's decision).
+- `test/remoteErrors.test.js` "a push refused by a GitHub ruleset quotes the server, not the progress" also expects the
+  new `pushRejected` text (the plan missed it).

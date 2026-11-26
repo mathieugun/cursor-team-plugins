@@ -145,5 +145,14 @@ under the temp folder, nothing installed) may be run without asking.
   keybinding (`focusedView == ...`) then no longer fires, F2 goes to the editor. Open with `preserveFocus: true` (hand
   check, Cursor 3.32.4, 2026-11-26; request 12).
 
+- `vscode.env.openExternal` given a **string** opens it exactly; a `Uri` is re-encoded with
+  `encodeURI(uri.toString(true))` (decodes `%26`, `%2B`, `%23`). Read in the Cursor 3.32 bundles
+  (`extensionHostProcess.js` `openUri`, `workbench.desktop.main.js` `$openUri`/`_doOpenExternal`), then checked by hand
+  (installed 0.8.2, 2026-11-26): `https://example.com/pull/new?source=team-plugins%2Fa%2Bb%26c` reached the browser
+  unchanged. The live scenarios record `ui.openExternal` and never open a browser.
+- A hand check of a push needs a pre-receive hook in a local bare fixture (refuse `main`, print a URL on `remote:` lines);
+  a hook's stderr reaches a local `git push --progress` as `remote:` lines, padded with trailing spaces (request 13,
+  2026-11-26).
+
 ## Implementer lessons
 <!-- One line per project-specific mistake seen in review. -->

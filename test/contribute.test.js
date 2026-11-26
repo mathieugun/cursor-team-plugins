@@ -142,7 +142,7 @@ test('commitAndPush reports a rejected push', async (t) => {
   assert.equal(r.kind, 'error');
   assert.equal(r.step, 'push');
   assert.equal(r.reason, 'pushRejected');
-  assert.ok(r.actions.includes('pushToBranch'));
+  assert.ok(r.actions.includes('pullRequest'));
   assert.ok(r.message.includes('You are not allowed to push code to protected branches'), r.message);
 });
 
@@ -152,7 +152,7 @@ test('a push refused on main goes through Push to a branch', async (t) => {
   }
   const f = await setup(t);
   const hook =
-    '#!/bin/sh\nwhile read old new ref; do\n  if [ "$ref" = refs/heads/main ]; then echo "protected branch" >&2; exit 1; fi\ndone\nexit 0\n';
+    '#!/bin/sh\nwhile read old new ref; do\n  if [ "$ref" = refs/heads/main ]; then echo "protected branch" >&2; exit 1; fi\n  echo "     https://git.example.test/o/r/pull/new/${ref#refs/heads/}" >&2\ndone\nexit 0\n';
   writeFile(f.origin, 'hooks/pre-receive', hook);
   fs.chmodSync(path.join(f.origin, 'hooks', 'pre-receive'), 0o755);
   writeFile(f.clone, 'g.md', 'mine\n');
@@ -161,6 +161,24 @@ test('a push refused on main goes through Push to a branch', async (t) => {
   const b = await pushToBranch({ ...f.args, branch: 'team-plugins/x', message: 'mine' });
   assert.equal(b.kind, 'pushedBranch');
   assert.ok(git(['rev-parse', 'team-plugins/x'], f.origin));
+  assert.equal(b.target, 'main');
+  assert.deepEqual(b.pullRequest, { url: 'https://git.example.test/o/r/pull/new/team-plugins/x', target: null });
+});
+
+test('pushToBranch reports a refused new branch', async (t) => {
+  if (!gitAvailable()) {
+    return t.skip('git is not available');
+  }
+  const f = await setup(t);
+  writeFile(f.origin, 'hooks/pre-receive', '#!/bin/sh\necho "branch names must start with feature/" >&2\nexit 1\n');
+  fs.chmodSync(path.join(f.origin, 'hooks', 'pre-receive'), 0o755);
+  writeFile(f.clone, 'g.md', 'mine\n');
+  const r = await pushToBranch({ ...f.args, branch: 'team-plugins/y', message: 'mine' });
+  assert.equal(r.kind, 'error');
+  assert.equal(r.step, 'push');
+  assert.equal(r.reason, 'pushRejected');
+  assert.deepEqual(r.actions, ['pushToBranch', 'showLog']);
+  assert.ok(r.message.includes('the server refused the new branch team-plugins/y'), r.message);
 });
 
 test('commitAndPush reports an unreachable server', async (t) => {
@@ -218,6 +236,7 @@ test('pushToBranch gets out of a conflict', async (t) => {
   assert.equal(r.kind, 'pushedBranch');
   assert.equal(r.branch, 'team-plugins/t1');
   assert.equal(r.remote, 'origin');
+  assert.equal(r.pullRequest, null);
   assert.equal(git(['log', '-1', '--format=%s', 'team-plugins/t1'], f.origin), 'mine');
   assert.equal(git(['show', 'team-plugins/t1:f.md'], f.origin).split('\n')[0], 'mine');
   assert.equal(git(['status', '--porcelain'], f.clone), '');
