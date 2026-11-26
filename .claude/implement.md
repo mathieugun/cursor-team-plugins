@@ -154,5 +154,16 @@ under the temp folder, nothing installed) may be run without asking.
   a hook's stderr reaches a local `git push --progress` as `remote:` lines, padded with trailing spaces (request 13,
   2026-11-26).
 
+- Walkthroughs (Cursor 3.32.4, 2026-11-26, request 14; isolated probe runs, storage `memento/gettingStartedService`
+  read from `state.vscdb` + `-wal` of a run without `--extensionTestsPath`, plus the bundle read):
+  `workbench.action.openWalkthrough` needs the object form `{ category: '<ext>#<id>', step: '<ext>#<id>#<step>' }`
+  (tab `Walkthrough: <displayName>`); called before Cursor has registered the walkthrough (a few seconds after
+  startup, registration may wait 5 s for the experiment service) it opens the generic Welcome tab. A step's
+  `onContext` key already true at registration never completes it in that session; `onCommand:` of the extension's
+  own command fires only through the workbench (link, palette, `runCommands`), not `executeCommand` from the extension
+  host. With `--extensionTestsPath` storage is in memory: progress can't be read in a live scenario.
+- `scripts/package.js` packages `resources/` non-recursively: a new resource goes directly in `resources/`
+  (request 14, read in `vsixEntries`).
+
 ## Implementer lessons
 <!-- One line per project-specific mistake seen in review. -->

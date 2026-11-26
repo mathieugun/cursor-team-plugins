@@ -31,7 +31,6 @@ request 13.)
   of skill descriptions. A rule's tooltip says how it applies (always, globs, agent-requested).
 - **Presets and project suggestions.** `marketplace.json` declares named presets ("backend", "data") and file patterns
   per plugin (for example `**/*.py`): a new user picks a preset in one click, a matching project suggests the plugin.
-- **Getting started walkthrough** (`contributes.walkthroughs`): check git, add a repository, pick plugins.
 - **Switch branch** on a repository row: the `{ url, branch }` entry already gives per-user channels (stable, beta);
   only the command is missing.
 - Search and filter in the view.

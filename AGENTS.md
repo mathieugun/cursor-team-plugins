@@ -1,6 +1,6 @@
 # cursor-team-plugins: developer notes
 
-Cursor (VS Code) extension, version in `package.json` (0.8.2). Plain JavaScript, CommonJS, no npm dependency, no
+Cursor (VS Code) extension, version in `package.json` (0.8.3). Plain JavaScript, CommonJS, no npm dependency, no
 build step. User documentation: `README.md` (for Cursor users: what it does, install, usage; it shows
 only the current version, with no history). Internals, platform notes, detailed limits and the release process:
 `docs/development.md`.
@@ -26,7 +26,8 @@ only the current version, with no history). Internals, platform notes, detailed 
   `itemFile`, `createItem`, `splitCommandLine`, `mcpEntry`, `addMcpServer`, `pluginLocation`, `createPlugin`,
   `movePlugin`, `renameIds`, `declaredPathsError`, `clashError`), `share` (`shareKind`, `shareableItem`, `projectItems`,
   `suggestName`, `shareNameError`, `shareItem`, `renameSkillName`: copying a project item into a plugin), `rename`
-  (`renamePlugin`, `renameItem`, `recordRename`: renaming a plugin or an item and recording it in `marketplace.json`). `git` also
+  (`renamePlugin`, `renameItem`, `recordRename`: renaming a plugin or an item and recording it in `marketplace.json`),
+  `gitCheck` (`checkGit`, `gitCheckMessage`: the Check git command's check and message). `git` also
   has `cleanProgress`.
 - `scripts/`: `test.js` (test runner), `zip.js` + `package.js` (VSIX writer), `make-test-repo.js` (bare test team
   repository for live tests, from `test/fixtures/team-repo`; `--name` gives a copy another repository name),
@@ -226,6 +227,11 @@ On a Linux machine with a Cursor server (a Remote-SSH host), the suite runs with
 - The isolated instance exits 0 even when the runner fails, so the result is a file. Settings written during a run
   persist in the profile, so the script rewrites them.
 - In `remote.test.js` the HTTP server runs in the test process, so a synchronous git against it deadlocks.
+- Walkthrough steps tick only from a change after Cursor registered the walkthrough (it puts an already-matching
+  `onContext` in `sessionEvents` and never progresses it): `teamPlugins.gitReady` is set only by Check git, never at
+  activation, and the other steps tick on `onSettingChanged`. `onCommand` of an extension's own command fires only
+  through the workbench, so it is not used. Right after startup `Get started` opens the generic Welcome page until
+  Cursor has registered the walkthrough (a few seconds).
 
 ## Rules
 
