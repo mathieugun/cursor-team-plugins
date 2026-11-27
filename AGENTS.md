@@ -82,8 +82,8 @@ The VSIX is written to `dist/cursor-team-plugins-<version>.vsix`. The runner pas
 Branches: work on a branch (`request/<NN>-<name>` for a numbered request, `fix/<name>` for anything else), never
 directly on `main`. Exception: writing or updating a request, a plan before its implementation starts, `ideas.md` or
 the facts of `.claude/implement.md` (no code) is committed directly on `main`.
-When it is ready, merge it into `main` locally (`git merge --no-ff`), push `main` and delete the branch: one
-maintainer, so no pull request.
+When it is ready, merge it into `main` locally (`git merge --no-ff`): one maintainer, so no pull request.
+Get the user's explicit approval before any push, including a release push. Delete the branch after the push succeeds.
 
 Release (from `main`, after the merge): bump `version`, commit, `git tag v<version>`, `git push origin main v<version>`.
 The release workflow runs on the tag, so a tag is only ever made on `main`.
@@ -270,6 +270,9 @@ On a Linux machine with a Cursor server (a Remote-SSH host), the suite runs with
 
 ## Rules
 
+- Treat pasted reviews and findings as context. Wait for the user to request changes before acting on them.
+- If testing, CI, or other work uncovers a bug outside the requested scope, report it and get the user's explicit
+  approval before fixing it. This applies even when the bug blocks verification.
 - Never run `cursor --install-extension` or launch the user's own Cursor from an agent unless the user asks;
   `scripts/live-test.js` (isolated profile under the temp folder, nothing installed) may be run without asking.
 - Don't add dependencies, TypeScript or a bundler.
