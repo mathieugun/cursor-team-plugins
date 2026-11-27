@@ -80,8 +80,12 @@ The VSIX is written to `dist/cursor-team-plugins-<version>.vsix`. The runner pas
 `--test`: with Cursor's runtime a directory argument fails.
 
 Branches: work on a branch (`request/<NN>-<name>` for a numbered request, `fix/<name>` for anything else), never
-directly on `main`. Exception: writing or updating a request, a plan before its implementation starts, `ideas.md` or
-the facts of `.claude/implement.md` (no code) is committed directly on `main`.
+directly on `main`. Everything a change needs is written on its branch and lands in its commit: the request, its plan,
+the `ideas.md` entry it takes, and the lines of the docs, `AGENTS.md` and `.claude/implement.md` it changes. A branch
+holds one commit when it is merged: fold follow-up fixes and doc edits into it (`git commit --amend`, or
+`git reset --soft <base>` and commit again) while the branch is unpushed. Exception: a change with no code that
+belongs to no feature (a review, a batch of new requests, an idea, a project rule) is one commit directly on `main`.
+Never rewrite a pushed commit.
 When it is ready, merge it into `main` locally (`git merge --no-ff`), push `main` and delete the branch: one
 maintainer, so no pull request.
 
