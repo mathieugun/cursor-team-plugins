@@ -27,13 +27,14 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
 - Run `biome lint extension.js lib scripts test` from the repository root. This read-only check uses Biome's
   recommended correctness rules, with undeclared variables and unused bindings treated as errors. Warnings,
   including unused function parameters, are advisory.
-- `.github/workflows/checks.yml` runs the tests and the same lint command on every branch push. CI verifies the
-  Linux binary's SHA-256 before running it. Lint still runs after a test failure unless the job is cancelled.
+- `.github/workflows/checks.yml` runs the same lint command on Ubuntu on every branch push and release tag. CI
+  verifies the Linux binary's SHA-256 before running it. Lint still runs after a test failure unless the job is
+  cancelled.
 
 ## Tests
 
 - **Unit tests** (`scripts/test.js`, `test/*.test.js`): one file per module, `node:test`, only local bare git
-  repositories, no network. CI runs them on branch pushes and `v*` release tags.
+  repositories, no network. CI runs them on Ubuntu and Windows with Node 22 on branch pushes and `v*` release tags.
 - **`test/remote.test.js`** stands in for a real server, with real git: a fake ssh script (`test/fake-ssh.js`, set
   through `core.sshCommand`; it prints the real ssh messages for an unknown or changed host key and a refused login, or
   stays silent) and a node `http` server that runs `git http-backend` behind basic auth (`test/remote-helpers.js`). It
