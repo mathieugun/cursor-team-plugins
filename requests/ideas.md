@@ -40,14 +40,8 @@ before pushing, which keeps an adopted repository healthy, is request 16.
 
 ## Smaller follow-ups
 
-- **Confirm that Cursor's agent reads the Team plugins diagnostics** (request 16, hand check step 3 not run: no Cursor
-  usage left): ask Cursor's own agent to call `ReadLints` on a broken skill of the managed clone and of its partial
-  copy (absolute paths), and see whether it calls it on its own after editing one. Code reading says yes.
-
 - **MCP server readiness.** Show on an MCP server item what it needs and is missing: an environment variable it
   references (a token), its command not on PATH (`npx`, `uvx`, `docker`). Today such a server fails silently in Cursor.
-- **Context cost of the selection.** Per plugin and in total: the size of always-applied rules, the number and length
-  of skill descriptions. A rule's tooltip says how it applies (always, globs, agent-requested).
 - **Switch branch** on a repository row: the `{ url, branch }` entry already gives per-user channels (stable, beta);
   only the command is missing.
 - Search and filter in the view.

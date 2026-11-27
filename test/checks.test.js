@@ -107,10 +107,12 @@ test('lintFrontmatter: verdicts of gray-matter', () => {
 
 test('lintFrontmatter keeps the kind and the value of each key', () => {
   const { keys } = lint('name: x # c\ndescription: "q"\ntools:\n  - a\nmore: >\n  b');
-  assert.deepEqual(keys.get('name'), { kind: 'plain', line: 0, value: 'x' });
-  assert.deepEqual(keys.get('description'), { kind: 'quoted', line: 1, value: '' });
+  assert.deepEqual(keys.get('name'), { kind: 'plain', line: 0, end: 1, value: 'x' });
+  assert.deepEqual(keys.get('description'), { kind: 'quoted', line: 1, end: 2, value: '' });
   assert.equal(keys.get('tools').kind, 'nested');
+  assert.equal(keys.get('tools').end, 4);
   assert.equal(keys.get('more').kind, 'block');
+  assert.equal(keys.get('more').end, 6);
 });
 
 test('splitFrontmatter', () => {

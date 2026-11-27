@@ -537,3 +537,69 @@ test('buildRepoNode shows the problems of the repository', () => {
   assert.equal(buildRepoNode(MANAGED, state, [], undefined, []).description, 'up to date');
   assert.equal(buildRepoNode(MANAGED, state, []).description, 'up to date');
 });
+
+const withContext = (id, kind, apply, chars) => ({ ...child(id, kind), context: { apply, chars } });
+const costCatalog = {
+  plugins: [
+    {
+      name: 'C',
+      displayName: 'C',
+      version: '1.0',
+      description: 'Cost',
+      dir: '/repo/C',
+      children: [
+        withContext('C/skills/a', 'skill', 'description', 60),
+        withContext('C/skills/b', 'skill', 'description', 59),
+        withContext('C/rules/r.mdc', 'rule', 'always', 42),
+      ],
+    },
+    {
+      name: 'D',
+      displayName: 'D',
+      version: '1.0',
+      description: 'Mixed',
+      dir: '/repo/D',
+      children: [withContext('D/skills/a', 'skill', 'description', 60), child('D/commands/c.md', 'command')],
+    },
+  ],
+  warnings: [],
+};
+
+test('the tree shows what a selection costs in the context', () => {
+  const ALL = '~41 tokens (1 always-applied rule ~11, 2 descriptions ~30)';
+  const [c] = buildTree(costCatalog, effective(costCatalog, { enabled: ['C'], excluded: [] }, []), []);
+  assert.equal(c.description, 'v1.0 · ~41 tokens');
+  assert.equal(c.tooltip, `Cost\nIn every chat: ${ALL}`);
+  const [a, , r] = c.children;
+  assert.equal(r.description, 'rule · always');
+  assert.equal(r.tooltip, 'r.mdc\nApplies always: the whole rule is in every chat (~11 tokens)');
+  assert.equal(a.description, 'skill');
+  assert.equal(a.tooltip, 'a\nIn every chat: its description (~15 tokens)');
+
+  // not enabled: no tokens in the row, the tooltip says what enabling it would cost
+  const [off] = buildTree(costCatalog, effective(costCatalog, { enabled: [], excluded: [] }, []), []);
+  assert.equal(off.description, 'v1.0');
+  assert.equal(off.tooltip, `Cost\nIf enabled, in every chat: ${ALL}`);
+
+  // partial: only the ticked items count
+  const [part] = buildTree(costCatalog, effective(costCatalog, { enabled: ['C/skills/a'], excluded: [] }, []), []);
+  assert.equal(part.description, 'v1.0 · 1/3 · ~15 tokens');
+  assert.equal(part.tooltip, 'Cost\nIn every chat: ~15 tokens (1 description ~15)');
+
+  // partial with only an item that has no context ticked
+  const [, d] = buildTree(costCatalog, effective(costCatalog, { enabled: ['D/commands/c.md'], excluded: [] }, []), []);
+  assert.equal(d.description, 'v1.0 · 1/2');
+  assert.equal(d.tooltip, 'Mixed\nIn every chat: nothing');
+});
+
+test('the cost lines come before the update lines', () => {
+  const now = new Date(2026, 10, 26, 12, 0, 0);
+  const updates = { marks: new Map([['C/rules/r.mdc', 'new']]), last: new Map(), now };
+  const [c] = buildTree(costCatalog, effective(costCatalog, { enabled: ['C'], excluded: [] }, []), [], { updates });
+  assert.equal(c.description, 'v1.0 · ~41 tokens · 1 new');
+  assert.equal(c.children[2].description, 'rule · always · new');
+  assert.equal(
+    c.children[2].tooltip,
+    'r.mdc\nApplies always: the whole rule is in every chat (~11 tokens)\nNew since you last looked',
+  );
+});

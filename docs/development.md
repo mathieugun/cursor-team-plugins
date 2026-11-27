@@ -327,6 +327,37 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
     are dropped. A marker records the open document's version when it is set, so `updateDiagnostics` (at every apply)
     compares the problems together with the open documents' versions and sets the collection again when either changed.
 
+### Context cost
+
+- `lib/context.js` (pure; requires `checks` only, because `catalog` requires it) estimates what the selection puts in
+  every chat, at 4 characters per token. `itemContext` runs in `readCatalog` (`itemChild`) for each skill and rule and
+  stores `context` on the child: `{ apply, chars, globs? }` with `apply` `always`, `globs`, `agent` or `manual` for a
+  rule, `always`, `description` or `hidden` for a skill; it is `null` (no field) for a command, an agent, and a
+  frontmatter Cursor drops or our checker can't read. It reads the frontmatter keys through `lintFrontmatter`, whose
+  `keys` entries carry `end` (the 0-based line just after the value) so a `globs` list over several lines can be read.
+- `costOf` sums a set of children into buckets (always-applied, descriptions, matching files) and rounds each bucket to
+  tokens once; `costLines` writes the tooltip lines, `itemLine` an item's line, `selectionCost` the cost of the ticked
+  items of the active plugins. `buildTree` shows a plugin's cost in its row and tooltip and an item's line in its
+  tooltip; `updateStatus` (end of every `doApply`) adds the total to the status bar tooltip and sets the view's
+  `description`.
+- Facts measured on Cursor 3.32.4 (2026-11-27), read in the agent host bundle
+  (`resources/app/extensions/cursor-agent-host/dist/4846.js`) and the YAML values run through Cursor's own gray-matter
+  4.0.3:
+  1. A plugin rule's type: `alwaysApply` the boolean `true` -> always; else a non-empty `globs` -> for matching files;
+     else a non-empty string `description` -> the agent fetches it; else manual (only when mentioned).
+  2. `alwaysApply` must be a boolean (`true`, `True`, `TRUE` are; `yes` and `"true"` are strings). `globs` is a string
+     split on commas outside `{...}`, or an array of strings; anything else is ignored. `description` counts only as a
+     string. The rule's content is the whole file text.
+  3. Skills go through the same function: a skill with `alwaysApply: true` becomes an always-applied rule with its whole
+     content and is left out of the skill list; every other skill is sent with its description and a
+     `disableModelInvocation` flag (`disable-model-invocation: true`).
+  4. Descriptions of skills and agent-requested rules are cut at 1536 characters.
+  5. Cursor builds the prompt on its server: how a description is wrapped, whether a `disable-model-invocation` skill is
+     listed and whether subagent descriptions are in every chat can't be seen, hence an estimate.
+- Not counted: MCP tool definitions, subagent descriptions, commands, the project's own rules and skills, the user rules,
+  `globs` on a skill, the paths a `plugin.json` declares for skills or rules (the default folders are read, as in the
+  view), and a non-string `description` (read as text).
+
 ## Remote windows (Remote-SSH)
 
 - Cursor's agent runs on the remote machine, so the extension (`extensionKind: ["workspace"]`) runs there too and must

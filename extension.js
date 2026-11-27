@@ -10,6 +10,7 @@ const authoring = require('./lib/authoring');
 const share = require('./lib/share');
 const rename = require('./lib/rename');
 const selection = require('./lib/selection');
+const contextCost = require('./lib/context'); // not `context`: activate and others take a parameter of that name
 const {
   buildTree,
   buildChangesNode,
@@ -1632,6 +1633,8 @@ function updateStatus() {
   if (lastApplyErrors > 0) {
     lines.push(`Registration errors: ${lastApplyErrors} (see the log)`);
   }
+  const cost = contextCost.selectionCost(catalog, selection.effective(catalog, userSelection(), projectList()));
+  lines.push(...contextCost.statusLines(cost));
   if (registrar) {
     const { filteredRoot } = paths();
     const names = [...registrar.current].map(
@@ -1640,6 +1643,9 @@ function updateStatus() {
     lines.push(`Active: ${names.join(', ') || 'none'}`);
   }
   statusItem.tooltip = lines.join('\n');
+  if (treeView) {
+    treeView.description = contextCost.viewDescription(cost);
+  }
 }
 
 // ---- tree --------------------------------------------------------------------------------------------------------
@@ -3721,6 +3727,7 @@ function testHook(context) {
       return d ? { badge: d.badge, tooltip: d.tooltip, color: d.color && d.color.id } : null;
     },
     badge: () => (treeView.badge ? { value: treeView.badge.value, tooltip: treeView.badge.tooltip } : null),
+    viewDescription: () => (treeView && treeView.description) || '',
     updates: (key) => {
       const s = stateOf(key).updates;
       return s ? { counts: s.counts, marks: Object.fromEntries(s.marks), removed: s.removed.map((r) => r.id) } : null;

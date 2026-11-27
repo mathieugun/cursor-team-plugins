@@ -33,8 +33,9 @@ only the current version, with no history). Internals, platform notes, detailed 
   `movePlugin`, `renameIds`, `declaredPathsError`, `clashError`), `share` (`shareKind`, `shareableItem`, `projectItems`,
   `suggestName`, `shareNameError`, `shareItem`, `renameSkillName`: copying a project item into a plugin), `rename`
   (`renamePlugin`, `renameItem`, `recordRename`: renaming a plugin or an item and recording it in `marketplace.json`),
-  `gitCheck` (`checkGit`, `gitCheckMessage`: the Check git command's check and message). `git` also
-  has `cleanProgress`.
+  `gitCheck` (`checkGit`, `gitCheckMessage`: the Check git command's check and message), `context` (`itemContext`,
+  `splitGlobs`, `formatTokens`, `costOf`, `costLines`, `selectionCost`, `statusLines`, `viewDescription`, `itemLine`: the
+  context cost estimate). `git` also has `cleanProgress`.
 - `scripts/`: `test.js` (test runner), `zip.js` + `package.js` (VSIX writer), `make-test-repo.js` (bare test team
   repository for live tests, from `test/fixtures/team-repo`; `--name` gives a copy another repository name),
   `live-test.js` (isolated-Cursor scenario runner, one launch per scenario, root `%TEMP%\tp-live`), `live_check.py`
@@ -259,6 +260,9 @@ On a Linux machine with a Cursor server (a Remote-SSH host), the suite runs with
   which is the path the agent edits.
 - The update notification is shown by `refreshUpdates` (after the apply that follows the sync), not by
   `notifyAfterSync`: it needs the marks.
+- A rule's type is decided in Cursor's agent host in the order `alwaysApply` (boolean `true`) > `globs` > `description` >
+  manual, skills too (an `alwaysApply` skill is a whole-text rule), and descriptions are cut at 1536 characters; the
+  prompt is built server side, so the context cost (`lib/context.js`) is an estimate.
 
 ## Rules
 

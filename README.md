@@ -166,6 +166,27 @@ An item is `<repository>:<plugin>`, `<repository>:<plugin>/skills/<skill folder>
 `<repository>:<plugin>/agents/<file name>` or `<repository>:<plugin>/mcp/<server name>`: the repository is its
 name (see "The team repository") and the plugin is the `name` from its `plugin.json`.
 
+### Context cost
+
+Everything the agent reads in every chat takes room in its context. The view estimates what your selection costs:
+
+- Next to the view's title: `~41 tokens per chat`, the total of this window's selection (your choice and the project's
+  together). The status bar tooltip gives the same total with its breakdown.
+- An enabled plugin's row ends with its own `~41 tokens`. Its tooltip says where that comes from:
+  `In every chat: ~41 tokens (1 always-applied rule ~11, 2 descriptions ~30)`, then a `For matching files` line for the
+  rules that apply only to some files. An unticked plugin's tooltip says what it would cost: `If enabled, in every
+  chat: ...`. A partly enabled plugin counts only its ticked items.
+- A rule's tooltip says how it applies: always, to files matching its globs, when the agent asks for it, or only when
+  you mention it. A rule that applies always reads `rule · always` in the view.
+- A skill's tooltip says what it costs in every chat: its description.
+
+What counts in every chat: the text of always-applied rules (and of a skill with `alwaysApply: true`), and the
+descriptions of skills and of agent-requested rules (Cursor cuts a description at 1536 characters). A rule that applies
+to matching files is shown apart and is not in the total. A skill with `disable-model-invocation: true` is not offered to
+the agent and does not count.
+
+It is an estimate, at 4 characters per token: Cursor builds the prompt on its server.
+
 ### Plugins a project needs
 
 A project can require plugins for everyone who opens it. With the project's folder open, right-click an item in the view
@@ -389,6 +410,9 @@ terminal where git and SSH can ask their questions; then click **Sync now**.
   `AGENTS.md`); links from the item to other project files are copied as they are and may break.
 - An MCP server is credited to whoever last changed its plugin's MCP file.
 - Who last changed an item is read from the last 1000 commits.
+- The context cost counts only the team plugins' skills and rules: not the tool definitions of MCP servers, the
+  descriptions of agents, commands, nor your project's own rules and skills and your user rules; the text Cursor adds
+  around each description is not counted, and `globs` on a skill is ignored (the skill counts by its description).
 
 ## Contributing
 
