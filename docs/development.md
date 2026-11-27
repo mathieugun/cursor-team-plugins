@@ -9,19 +9,31 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
   running it with Cursor's runtime when node is not installed).
 - Changes are made on a branch and merged into `main` when ready (see `AGENTS.md`). Release from `main`: bump
   `version` in `package.json`, commit, then push a tag `v<version>` (`git tag v<version>`,
-  `git push origin main v<version>`). `.github/workflows/release.yml` checks that the tag matches the version, runs the
-  tests, attaches the VSIX to a GitHub release and publishes it to Open VSX, which Cursor's marketplace mirrors (a new
-  extension appeared there about 7 minutes after Open VSX listed it; new versions of existing extensions show up at
-  once).
+  `git push origin main v<version>`). `.github/workflows/release.yml` requires the shared tests and lint to pass before
+  it validates the tag and builds the VSIX. It attaches the VSIX to a GitHub release and publishes it to Open VSX,
+  which Cursor's marketplace mirrors (a new extension appeared there about 7 minutes after Open VSX listed it;
+  new versions of existing extensions show up at once).
 - Open VSX setup (done once): an open-vsx.org account signed in with GitHub, linked to an Eclipse Foundation account
   with the publisher agreement accepted; the namespace `mathieugun` (equal to `publisher` in `package.json`); an access
   token stored as the repository secret `OVSX_PAT`. Without the secret the workflow only makes the GitHub release.
 - The README is the extension's details page in Cursor and on Open VSX: a change reaches users with the next release.
 
+## JavaScript lint
+
+- Download standalone Biome 2.6.9. Use `biome-win32-x64.exe` on Windows x64 or `biome-linux-x64` on Linux x64.
+  On another supported architecture, choose the matching asset. Rename it to `biome.exe` on Windows or `biome` on
+  Linux. On Linux, run `chmod +x biome` in the directory containing the binary. Put that directory on `PATH` and
+  check the version with `biome --version`. [Biome 2.6.9 release](https://github.com/biomejs/biome/releases/tag/%40biomejs%2Fbiome%402.6.9)
+- Run `biome lint extension.js lib scripts test` from the repository root. This read-only check uses Biome's
+  recommended correctness rules, with undeclared variables and unused bindings treated as errors. Warnings,
+  including unused function parameters, are advisory.
+- `.github/workflows/checks.yml` runs the tests and the same lint command on every branch push. CI verifies the
+  Linux binary's SHA-256 before running it. Lint still runs after a test failure unless the job is cancelled.
+
 ## Tests
 
 - **Unit tests** (`scripts/test.js`, `test/*.test.js`): one file per module, `node:test`, only local bare git
-  repositories, no network. CI runs them on a release tag.
+  repositories, no network. CI runs them on branch pushes and `v*` release tags.
 - **`test/remote.test.js`** stands in for a real server, with real git: a fake ssh script (`test/fake-ssh.js`, set
   through `core.sshCommand`; it prints the real ssh messages for an unknown or changed host key and a refused login, or
   stays silent) and a node `http` server that runs `git http-backend` behind basic auth (`test/remote-helpers.js`). It

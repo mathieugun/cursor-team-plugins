@@ -1,6 +1,6 @@
 # 18 — Check JavaScript with Biome
 
-Catch basic JavaScript mistakes during development and on branch pushes. Today the release workflow runs tests when a version tag is pushed. A misspelled variable in a rarely used Cursor command can pass the syntax check and reach that point without executing. [Release workflow](../.github/workflows/release.yml#L6)
+Catch basic JavaScript mistakes during development and on branch pushes. Today the release workflow runs tests when a version tag is pushed. A misspelled variable in a rarely used Cursor command can pass the syntax check and reach that point without executing. [Release workflow](../../.github/workflows/release.yml#L6)
 
 ## Proposal
 
@@ -12,7 +12,7 @@ ESLint with its recommended rules and Node/CommonJS configuration is a viable al
 
 ## Trial on 0.8.6
 
-At `545159c`, Biome 2.6.9 checked all 60 tracked JavaScript files. The trial ran only the two named rules. It found zero undeclared variables and two unused bindings, `fromRoot` in conflict resolution and `err` in the removal fallback. A wider correctness preset will need its own baseline. [Conflict resolver](../lib/materialize.js#L513) · [Removal fallback](../lib/sync.js#L12)
+At `545159c`, Biome 2.6.9 checked all 60 tracked JavaScript files. The trial ran only the two named rules. It found zero undeclared variables and two unused bindings, `fromRoot` in conflict resolution and `err` in the removal fallback. A wider correctness preset will need its own baseline. [Conflict resolver](../../lib/materialize.js#L513) · [Removal fallback](../../lib/sync.js#L12)
 
 ## Acceptance
 

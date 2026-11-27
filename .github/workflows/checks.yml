@@ -1,0 +1,32 @@
+name: Checks
+
+on:
+  push:
+    branches: ['**']
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Test
+        run: node scripts/test.js
+
+      - name: Lint JavaScript with Biome
+        if: ${{ !cancelled() }}
+        run: |
+          biome="$RUNNER_TEMP/biome"
+          curl --fail --silent --show-error --location \
+            --output "$biome" https://github.com/biomejs/biome/releases/download/%40biomejs%2Fbiome%402.6.9/biome-linux-x64
+          printf '%s  %s\n' 5409e32eb17b47e0d1d9bbf213b749eba1f9c35d8b18fbd2ee55971157918a57 "$biome" | sha256sum --check
+          chmod +x "$biome"
+          "$biome" lint extension.js lib scripts test

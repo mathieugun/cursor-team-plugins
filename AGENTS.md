@@ -51,16 +51,19 @@ only the current version, with no history). Internals, platform notes, detailed 
   user's config. `live/` (`runner.js`, the scenarios `*.live.js`) needs Cursor's extension host and is not run by
   `scripts/test.js`. `manual-remote-checks.md` is the short hand checklist for what these can't cover (the real ssh and
   credential manager, a protected branch on a real server).
-- `.github/workflows/release.yml`: on a `v*` tag, checks the tag against `package.json`, runs the tests, packages,
-  makes a GitHub release with the VSIX and publishes it to Open VSX when the `OVSX_PAT` secret is set (`curl` to
-  `https://open-vsx.org/api/-/publish?token=`; no npm).
+- `biome.json`: read-only JavaScript correctness checks for `extension.js`, `lib/`, `scripts/` and `test/`.
+- `.github/workflows/checks.yml`: runs tests and lint on all branch pushes and when called by the release workflow.
+- `.github/workflows/release.yml`: on a `v*` tag, requires the shared checks to pass, checks the tag against
+  `package.json`, builds the VSIX, makes a GitHub release and publishes to Open VSX when the `OVSX_PAT` secret is set
+  (`curl` to `https://open-vsx.org/api/-/publish?token=`).
 - `requests/`: requests being worked on (`NN-<name>.md`) with their plans (`NN-<name>.plan.md`), finished ones in
   `done/`, ideas not picked yet in `ideas.md` (the `/implement` skill's layout; not packaged).
 
 ## Commands
 
-With node on PATH: `node scripts/test.js`, `node scripts/package.js`. Without node, with Cursor's runtime (Git Bash,
-from the repository root):
+Run `biome lint extension.js lib scripts test` with standalone Biome 2.6.9 on `PATH` (see `docs/development.md`).
+With node on `PATH`, run `node --check extension.js`, `node scripts/test.js` and `node scripts/package.js`.
+Without node, use Cursor's runtime (Git Bash, from the repository root):
 
 ```
 ELECTRON_RUN_AS_NODE=1 "$LOCALAPPDATA/Programs/cursor/Cursor.exe" scripts/test.js

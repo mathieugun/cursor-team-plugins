@@ -2,7 +2,7 @@
 
 ## Context
 
-- Request: `requests/18-javascript-lint.md`. Workflow notes: `.claude/implement.md`.
+- Request: `requests/done/18-javascript-lint.md`. Workflow notes: `.claude/implement.md`.
 - Extension version: 0.8.6 for this development-only change. The next release uses the usual version and tag process.
 - Entry points: local lint invocation, GitHub Actions on branch and release-tag pushes, and the existing VSIX packager.
 
@@ -78,3 +78,18 @@
 - Do not install the extension in the user's Cursor, publish a release, or create a tag.
 - The implementer owns `biome.json`, the two workflows, the two source cleanup files, `docs/development.md` and
   `AGENTS.md`. The main agent owns the request, plan, review link, and Git operations.
+
+## Verification
+
+- Biome 2.6.9 checked all 60 JavaScript files and exited 0 with eight unused-parameter warnings. In a disposable
+  copy, an undeclared name in `teamPlugins.syncNow` passed `node --check extension.js` and failed Biome with exit 1
+  at `extension.js:2965:73` under `lint/correctness/noUndeclaredVariables`. Restoring the file returned lint to
+  exit 0 with eight warnings.
+- Actionlint 1.7.7 passed on both workflows. The Linux asset downloaded from the exact CI URL matched the pinned
+  digest. The release job depends on the reusable checks job.
+- The four package tests passed. Both VSIX builds contained the same 30 entries in the same order. After line
+  ending normalization, only the two intended JavaScript modules differed in content.
+- The full Windows suite outside the sandbox matched the baseline (345 passed, one existing Windows-only
+  draft-removal test failed). The individual failing case passed using Cursor's embedded Node runtime.
+- `node --check extension.js` and `git diff --check` passed. Review confirmed the version, documentation,
+  original line endings, and planned file scope.
