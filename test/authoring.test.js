@@ -292,24 +292,29 @@ test('movePlugin copies a draft into a repository and deletes it', (t) => {
   assert.ok(fs.existsSync(path.join(src, 'skills', 's', 'SKILL.md')));
 });
 
-// Windows: a file another handle keeps open is only "delete pending", so its folder is still listed (as when Cursor
-// watches a registered draft): the draft is reported as left over.
-test('movePlugin reports a draft it could not remove', { skip: process.platform !== 'win32' }, (t) => {
-  const drafts = fixture(t);
-  const target = fixture(t);
-  makePlugin(drafts, 'tool', { skills: ['s'] });
-  teamRepo(target);
-  const src = path.join(drafts, 'tool');
-  const fd = fs.openSync(path.join(src, 'skills', 's', 'SKILL.md'), 'r');
-  let r;
-  try {
-    r = movePlugin(src, 'tool', '', target);
-  } finally {
-    fs.closeSync(fd);
-  }
-  assert.deepEqual(r, { dir: path.join(target, 'tool'), leftover: src });
-  assert.ok(fs.existsSync(path.join(target, 'tool', 'skills', 's', 'SKILL.md')));
-});
+for (const removal of ['throws EPERM', 'returns with the draft still listed']) {
+  test(`movePlugin reports a leftover when draft removal ${removal}`, (t) => {
+    const drafts = fixture(t);
+    const target = fixture(t);
+    makePlugin(drafts, 'tool', { skills: ['s'] });
+    teamRepo(target);
+    const src = path.join(drafts, 'tool');
+    const originalRmSync = fs.rmSync;
+    t.mock.method(fs, 'rmSync', (file, options) => {
+      if (file !== src) {
+        return originalRmSync(file, options);
+      }
+      // Windows can also leave a delete-pending directory listed after removal returns.
+      if (removal === 'throws EPERM') {
+        throw Object.assign(new Error('Draft removal denied'), { code: 'EPERM' });
+      }
+    });
+
+    const r = movePlugin(src, 'tool', '', target);
+    assert.deepEqual(r, { dir: path.join(target, 'tool'), leftover: src });
+    assert.equal(readText(r.dir, 'skills', 's', 'SKILL.md'), readText(src, 'skills', 's', 'SKILL.md'));
+  });
+}
 
 test('renameIds', () => {
   assert.deepEqual(

@@ -210,9 +210,10 @@ under the temp folder, nothing installed) may be run without asking.
   `disable-model-invocation`, subagent descriptions). Find it with `grep -o ".\{300\}alwaysApply.\{300\}" 4846.js`.
 - In Git Bash, `cd "$UNSET_VAR"` succeeds and stays in the current folder: a probe written after `cd "$X" || cd <scratch>`
   lands in the repository. Use the scratchpad's literal path (2026-11-27).
-- The Windows-only `movePlugin reports a draft it could not remove` test passed with Cursor's embedded Node 24.22.1
-  and failed with standalone Node 24.22.3 outside the sandbox because the result had no `leftover` path
-  (request 18 baseline and final checks, 2026-11-27). The test is skipped on Linux.
+- On Windows with standalone Node 24.22.3, `fs.openSync` allowed removal of the draft directory while the open file
+  handle could still read its contents. The old test assumed the open handle kept the directory listed. A native
+  `CreateFileW` hold with only `FILE_SHARE_READ` blocked removal, and `movePlugin` returned `leftover` after copying
+  the draft. The tests simulate both a removal error and a directory still listed after removal returns.
 
 ## Implementer lessons
 <!-- One line per project-specific mistake seen in review. -->

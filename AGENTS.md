@@ -52,7 +52,8 @@ only the current version, with no history). Internals, platform notes, detailed 
   `scripts/test.js`. `manual-remote-checks.md` is the short hand checklist for what these can't cover (the real ssh and
   credential manager, a protected branch on a real server).
 - `biome.json`: read-only JavaScript correctness checks for `extension.js`, `lib/`, `scripts/` and `test/`.
-- `.github/workflows/checks.yml`: runs tests and lint on all branch pushes and when called by the release workflow.
+- `.github/workflows/checks.yml`: runs tests on Ubuntu and Windows and lint on Ubuntu on all branch pushes and when
+  called by the release workflow.
 - `.github/workflows/release.yml`: on a `v*` tag, requires the shared checks to pass, checks the tag against
   `package.json`, builds the VSIX, makes a GitHub release and publishes to Open VSX when the `OVSX_PAT` secret is set
   (`curl` to `https://open-vsx.org/api/-/publish?token=`).
