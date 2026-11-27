@@ -53,6 +53,10 @@ before pushing, which keeps an adopted repository healthy, is request 16.
 - Hiding Cursor's sign-in screen during the isolated live runs.
 - Running `scripts/live-test.js` on Linux or macOS (not checked: the Cursor path and the kill are written for both, but
   never run).
+- **Refresh cost on a large catalog** (2026-11-27 review). Each apply rereads every catalog synchronously, and each
+  skill or rule parses and lints its frontmatter three times (`frontmatterField`, `checkItemText`, `itemContext` in
+  `catalog.itemChild`). Measure an apply on a catalog of a few hundred items first; reuse one parse result only if it
+  shows.
 
 ## Parked
 
