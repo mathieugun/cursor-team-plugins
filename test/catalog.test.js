@@ -396,6 +396,22 @@ test('a skill with broken YAML is listed with a problem', (t) => {
   assert.equal(plugins[0].children.find((c) => c.id === 'p/skills/ok').problems, undefined);
 });
 
+test('skills and rules carry their context cost, commands do not', (t) => {
+  const root = fixture(t);
+  makePlugin(root, 'p', {});
+  writeFile(root, 'p/rules/always.mdc', '---\nalwaysApply: true\n---\nabcd\n');
+  writeFile(root, 'p/rules/ts.mdc', '---\nglobs: "*.ts"\n---\nx\n');
+  writeFile(root, 'p/skills/s/SKILL.md', '---\nname: s\ndescription: Review code.\n---\nBody\n');
+  writeFile(root, 'p/commands/c.md', '---\ndescription: A command\n---\nDo it\n');
+  const { plugins } = readCatalog(root);
+  const by = (id) => plugins[0].children.find((c) => c.id === id);
+  assert.deepEqual(by('p/rules/always.mdc').context, { apply: 'always', chars: 4 });
+  assert.deepEqual(by('p/rules/ts.mdc').context, { apply: 'globs', chars: 1, globs: ['*.ts'] });
+  assert.deepEqual(by('p/skills/s').context, { apply: 'description', chars: 12 });
+  assert.ok(by('p/commands/c.md'));
+  assert.equal(Object.prototype.hasOwnProperty.call(by('p/commands/c.md'), 'context'), false);
+});
+
 test('skills (and rules) of one plugin with the same name: the later ones get a problem', (t) => {
   const root = fixture(t);
   makePlugin(root, 'p', {});

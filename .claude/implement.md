@@ -202,5 +202,14 @@ under the temp folder, nothing installed) may be run without asking.
   webpack's `require` is captured (the entry module itself throws "Cannot convert object to primitive value"; ignore
   it). Request 16, Cursor 3.32.4, 2026-11-26.
 
+- How Cursor applies a plugin rule or skill (read in `cursor-agent-host/dist/4846.js`, Cursor 3.32.4, 2026-11-27;
+  YAML values run through Cursor's gray-matter): `To` picks `alwaysApply` (boolean `true` only: `"true"`, `yes` are
+  strings) > non-empty `globs` (string split on commas outside `{}`, or a list) > non-empty string `description` >
+  manual; skills go through `To` too (an `alwaysApply` skill becomes a whole-text rule and leaves the skill list);
+  descriptions are cut to 1536 characters; the prompt itself is built on Cursor's server (not observable: wrapping,
+  `disable-model-invocation`, subagent descriptions). Find it with `grep -o ".\{300\}alwaysApply.\{300\}" 4846.js`.
+- In Git Bash, `cd "$UNSET_VAR"` succeeds and stays in the current folder: a probe written after `cd "$X" || cd <scratch>`
+  lands in the repository. Use the scratchpad's literal path (2026-11-27).
+
 ## Implementer lessons
 <!-- One line per project-specific mistake seen in review. -->
