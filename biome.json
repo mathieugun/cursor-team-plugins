@@ -1,0 +1,33 @@
+{
+  "files": {
+    "includes": [
+      "extension.js",
+      "lib/**/*.js",
+      "lib/**/*.cjs",
+      "lib/**/*.mjs",
+      "scripts/**/*.js",
+      "scripts/**/*.cjs",
+      "scripts/**/*.mjs",
+      "test/**/*.js",
+      "test/**/*.cjs",
+      "test/**/*.mjs"
+    ]
+  },
+  "formatter": {
+    "enabled": false
+  },
+  "assist": {
+    "enabled": false
+  },
+  "linter": {
+    "rules": {
+      "preset": "none",
+      "correctness": {
+        "preset": "recommended",
+        "noUndeclaredVariables": "error",
+        "noUnusedVariables": "error",
+        "noUnusedFunctionParameters": "warn"
+      }
+    }
+  }
+}

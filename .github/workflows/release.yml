@@ -1,4 +1,4 @@
-# Runs when a tag `v*` is pushed: checks the tag against package.json, runs the tests, makes a GitHub release with the
+# Runs when a tag `v*` is pushed: runs the shared checks, validates the tag, makes a GitHub release with the
 # VSIX and publishes it to Open VSX. OVSX_PAT is an Open VSX access token (README, "Building and releasing"); without
 # it only the GitHub release is made.
 name: Release
@@ -7,11 +7,16 @@ on:
   push:
     tags: ['v*']
 
-permissions:
-  contents: write
-
 jobs:
+  checks:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/checks.yml
+
   release:
+    needs: checks
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     env:
       OVSX_PAT: ${{ secrets.OVSX_PAT }}
@@ -29,9 +34,6 @@ jobs:
             echo "::error::Tag $GITHUB_REF_NAME does not match package.json ($version)"
             exit 1
           fi
-
-      - name: Test
-        run: node scripts/test.js
 
       - name: Package
         id: package
