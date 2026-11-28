@@ -19,9 +19,10 @@ before pushing, which keeps an adopted repository healthy, is request 16.
    branch "I don't have a team repository yet". It scans the open projects (and the user-level folders) for
    `.cursor/rules`, skills, commands, agents and `mcp.json`, groups them into a plugin, writes
    `.cursor-plugin/marketplace.json`, runs `git init`, pushes to an empty remote the user gives, and adds the
-   repository. The demo moment: it finds the same rule copied into several projects that has drifted apart, and offers
-   to merge the copies (the pain the README's opening describes). Builds on Share with team (09, one item at a time
-   today) and drafts (08).
+   repository. Start with a read-only preview that shows identical copies that can be consolidated, variants that need
+   a decision, and references to project-local files that may break when moved. Show the differences and let the user
+   choose a version or merge the copies before importing. Builds on Share with team (09, one item at a time today)
+   and drafts (08).
 2. **Invite link and presets.** **Copy invite link** gives a
    `cursor://mathieugun.cursor-team-plugins/add?url=…&preset=…` link (`registerUriHandler`): the champion posts it in
    the team chat, one click adds the repository and ticks the preset's plugins. `marketplace.json` declares named
@@ -37,6 +38,24 @@ before pushing, which keeps an adopted repository healthy, is request 16.
    serves both lets a team using both tools adopt it as its one source of truth. Writing both manifests (when creating
    a repository or a plugin) looks cheap; syncing into Claude Code itself is out of scope. First check how far the two
    formats really match.
+
+## Onboarding follow-ups
+
+- **Set up this project for the team.** Let the maintainer pick the plugins a project needs and review a diff that
+  adds the repository and selection to `.vscode/settings.json` and recommends the extension in
+  `.vscode/extensions.json`. Commit the setup so teammates discover it when they open the project. Builds on
+  **Add to this project**. Verify that Cursor surfaces the extension recommendation in a fresh profile.
+- **Try it with a sample project.** Add a walkthrough option with a small bundled catalog and one sample task. Enable
+  a shared review skill and see it used in a new chat without setting up a remote or getting repository access.
+- **Show the contribution workflow in a short README animation.** Do this once **Create a team repository from what
+  you already have** ships. Put the animation near the top of the extension README and verify it renders on the
+  extension's details page. Briefly show the maintainer creating a team repository from existing rules or skills,
+  then spend most of the animation on a teammate improving a shared skill in the chat where they found the problem.
+  Show the diff under **Local changes**, then **Push to a branch** and the pull or merge request page. Use a teammate
+  who can push a branch. [Cursor's Team Marketplace docs](https://cursor.com/docs/plugins#publish-a-skill-to-your-team)
+  describe updating your own published skill, and teams with an imported Git repository can use their host's review
+  workflow. The animation should show how Team Plugins takes a teammate from editing the shared skill in use to
+  proposing the change for review.
 
 ## Smaller follow-ups
 
