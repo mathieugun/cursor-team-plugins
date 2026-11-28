@@ -318,3 +318,79 @@ test('renamePlugin refuses a marketplace without an entry for the folder', (t) =
   assert.deepEqual(result, { error: 'marketplace.json has no entry for review' });
   assert.ok(has(root, 'review'));
 });
+
+const TOP_LEVEL_MCP = '{\n// keep this comment\n"lint":{"command":"node"},\n"other":{"command":"python"},\n"notes":"keep me"\n}\n';
+
+test('renameItem refuses mcpServers as the name of a top-level server', (t) => {
+  const root = fixture(t);
+  makePlugin(root, 'review', {});
+  writeFile(root, 'review/mcp.json', TOP_LEVEL_MCP);
+  const result = renameItem(itemOf(root, 'mcp', 'lint'), 'mcpServers', { repoDir: root, record: false });
+  assert.deepEqual(result, {
+    error:
+      '"mcpServers" can\'t name a server in mcp.json: its servers are at the top level, where that key would hold the whole server list',
+  });
+  assert.equal(read(root, 'review/mcp.json'), TOP_LEVEL_MCP);
+});
+
+test('renameItem refuses a name that a top-level key of the file already holds', (t) => {
+  const root = fixture(t);
+  makePlugin(root, 'review', {});
+  writeFile(root, 'review/mcp.json', TOP_LEVEL_MCP);
+  const result = renameItem(itemOf(root, 'mcp', 'lint'), 'notes', { repoDir: root, record: false });
+  assert.deepEqual(result, { error: 'mcp.json already has a top-level "notes": pick another name' });
+  assert.equal(read(root, 'review/mcp.json'), TOP_LEVEL_MCP);
+});
+
+function junction(target, link) {
+  fs.mkdirSync(path.dirname(link), { recursive: true });
+  fs.symlinkSync(target, link, 'junction');
+}
+
+test('renameItem refuses an item whose folder is a link to outside the repository', (t) => {
+  const root = fixture(t);
+  const repo = path.join(root, 'repo');
+  makePlugin(repo, 'review', {});
+  writeFile(root, 'outside/commands/old.md', '---\ndescription: D\n---\nbody\n');
+  junction(path.join(root, 'outside', 'commands'), path.join(repo, 'review', 'commands'));
+  const result = renameItem(itemOf(repo, 'command', 'old'), 'new', { repoDir: repo, record: false });
+  assert.equal(result.error, 'review/commands/old.md leads outside the repository through a link');
+  assert.deepEqual(fs.readdirSync(path.join(root, 'outside', 'commands')), ['old.md']);
+});
+
+test('renameItem refuses a skill whose SKILL.md is a link to outside the repository', (t) => {
+  const root = fixture(t);
+  const repo = path.join(root, 'repo');
+  makePlugin(repo, 'review', { skills: ['old'] });
+  const before = '---\nname: old\ndescription: D\n---\nbody\n';
+  const outside = writeFile(root, 'outside/SKILL.md', before);
+  const link = path.join(repo, 'review', 'skills', 'old', 'SKILL.md');
+  fs.rmSync(link);
+  try {
+    fs.symlinkSync(outside, link, 'file');
+  } catch (err) {
+    if (err.code === 'EPERM') {
+      return t.skip('creating a file symlink needs a permission this account lacks');
+    }
+    throw err;
+  }
+  const result = renameItem(itemOf(repo, 'skill', 'old'), 'new', { repoDir: repo, record: false });
+  assert.equal(result.error, 'review/skills/old/SKILL.md leads outside the repository through a link');
+  assert.equal(fs.readFileSync(outside, 'utf8'), before);
+  assert.ok(has(repo, 'review/skills/old'));
+  assert.ok(!has(repo, 'review/skills/new'));
+});
+
+test('renameItem refuses to record in a marketplace.json reached through a link to outside', (t) => {
+  const root = fixture(t);
+  const repo = path.join(root, 'repo');
+  makePlugin(repo, 'review', { rules: ['style.mdc'] });
+  const item = itemOf(repo, 'rule', 'style');
+  const before = '{"plugins":[]}\n';
+  const outside = writeFile(root, 'outside/marketplace.json', before);
+  junction(path.join(root, 'outside'), path.join(repo, '.cursor-plugin'));
+  const result = renameItem(item, 'styling', { repoDir: repo, record: true });
+  assert.equal(result.error, '.cursor-plugin/marketplace.json leads outside the repository through a link');
+  assert.equal(fs.readFileSync(outside, 'utf8'), before);
+  assert.ok(has(repo, 'review/rules/style.mdc'));
+});

@@ -232,9 +232,10 @@ Cursor asks which one when several have changes. To share them:
   credentials. Your teammates get it at their next sync.
 - **Push to a branch** pushes your changes to a new branch instead (for a protected branch, or to have them reviewed)
   and puts the clone back on the team version (edits saved during the push stay as local changes; if one changed a
-  file of the pushed commit, the clone is left as it is and the message says so). Its message offers **Open pull
-  request**, which opens the hosting service's page to propose the branch as a pull request (GitHub, GitLab and Azure
-  DevOps; other servers when they print that page's address on the push).
+  file of the pushed commit, or a change was staged or an ignored file would be overwritten, the clone is left as it
+  is and the message says so). Its message offers **Open pull request**, which opens the hosting service's page to
+  propose the branch as a pull request (GitHub, GitLab and Azure DevOps; other servers when they print that page's
+  address on the push).
 - **Discard local changes** throws them away, after a confirmation that lists what would be lost.
 
 Before pushing, the extension checks the plugins you changed for what Cursor silently drops or misreads: frontmatter
@@ -253,7 +254,8 @@ ways. If the same file changed on both sides (a team update and an edit of yours
 shows in a **Conflicts** group of its repository; click it to compare, then choose **Keep repository version** or
 **Keep copy version**. A choice is applied only if neither version changed since you chose; otherwise nothing is
 replaced and you are told. A folder that can't be read is left alone on both sides, with a warning, until it can be
-read again.
+read again. Renaming a file or folder only in case (`readme.md` -> `README.md`) is carried to the other side, never
+read as a deletion.
 
 A commit records your name and email from git's settings; if they were never set, the message gives the two
 `git config --global` commands to run once.
@@ -276,8 +278,6 @@ team's.
   - In a repository you follow, the new folder is a local change of its managed clone until you **Commit and push**
     it. In your own clone it is new files for your own git tools.
   - When the repository's `marketplace.json` lists its plugins, the new plugin is added to that list.
-  - A plugin folder is only ever created inside the repository: a `metadata.pluginRoot` that leads outside it (a `..`
-    or a link) is refused before anything is written.
 - **Move to a repository** (right-click a draft plugin) copies it to a repository you follow or to your own clone and
   deletes the draft. The ids in your selection follow the plugin. In a managed clone the plugin appears in **Local
   changes**: commit and push it to share it with the team. A draft can't be added to a project.
@@ -311,11 +311,15 @@ team's.
   - a skill is `skills/<name>/SKILL.md`, a rule `rules/<name>.mdc`, a command `commands/<name>.md` and an agent
     `agents/<name>.md`, each with a frontmatter holding the description you typed and a body to fill in;
   - an MCP server is added to the plugin's `mcp.json` (to `.mcp.json` when that is the only one there is), from a
-    command line or a URL; an existing file is edited in place, so its comments and layout stay;
+    command line or a URL; an existing file is edited in place, so its comments and layout stay. In an `mcp.json` that
+    lists its servers at the top level (without `mcpServers`), the name `mcpServers`, the metadata keys (`author`,
+    `owner`, `source`, `metadata`) and a key the file already has are refused (Rename too);
   - a name or description that YAML would read as something else (a date, `true`, a number) is written in quotes, so
     it reads back as you typed it.
 
   A kind whose paths the plugin's `plugin.json` sets gets no file: Cursor would ignore it, so add it there by hand.
+- Nothing is ever written outside the repository: a destination that leads outside it (a `..` in
+  `metadata.pluginRoot`, or a link to another folder or file) is refused before anything is written.
 
 An edited `marketplace.json` or `mcp.json` is rewritten with two-space indentation.
 

@@ -131,7 +131,17 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
   deleted while the catalog is still the old one) is reported and nothing below it is copied, deleted or rewritten; its
   record entries stay until a complete listing (`listFiles`'s `unreadable`). A conflict is resolved only if it is still
   in the record and both sides still hash to what the dialog showed (`conflictVersions`, taken before the dialog;
-  `resolveConflict` checks under the lock).
+  `resolveConflict` checks under the lock and copies or deletes from those versions). Only a missing file
+  (`ENOENT`/`ENOTDIR`) is a deleted side: a side that can't be read stops the choice. When either side looks names up without case (`caseInsensitive`: an entry of
+  the folder looked up with its case swapped is the same file; Windows sets case sensitivity per folder, so the probe
+  is a name inside the folder, and only an empty folder is judged through its parent) paths that differ only in case
+  are one file everywhere (the file loop, the record, skipped and unreadable folders, excluded prefixes, conflicts),
+  and a spelling that differs between the two sides is carried by a rename through an intermediate name, in the
+  direction the record tells (the side whose spelling differs from the record's was renamed), else logged (`notes`).
+  The record keeps `foldCase: true` so `markCopySynced` and `resolveConflict` compare as the sync did, and a conflict
+  side is found as it is spelled on that side (`findPath`). Two names of one side that differ only in case are left
+  out, the first build included. A conflict below a folder that can't be listed stays in the record until a complete
+  scan judges it.
 - Commands and agents are files below `commands/` and `agents/`: a left-out one is a file prefix of the copy, like a
   rule. MCP servers share a file (`.mcp.json`, `mcp.json`), so `readCatalog` records each plugin's `mcpFiles` (file
   name -> server names) and `mcpPlan` (in `lib/materialize.js`) tells what the selection does to each file: no server
@@ -170,8 +180,13 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
   (another window's partial copy, or by hand) reaches this window's partial copies and view within a second.
 - Push to a branch commits, pushes, then runs `git reset --keep @{u}`: it undoes only what the pushed commit changed and
   keeps edits saved after the commit; it refuses (and changes nothing) when one of them is on a file of the pushed commit
-  or a new file would be overwritten, and the result carries `resetSkipped`. The partial copies are not marked synced
-  afterwards (only Discard does): a pushed file equals its record entry and takes the team version, a later copy edit
+  or a new file would be overwritten, and the result carries `resetSkipped`. Before the reset, the clone is also left as
+  it is when a change was staged during the push or when an ignored file or folder sits at a path the reset would
+  restore, below it (an ignored folder `cache/` for the file `cache`) or above it (an ignored file `cache` for
+  `cache/item.txt`), compared without case when `core.ignorecase` is set or the clone's folder looks names up without
+  case (`materialize.caseInsensitive`); `reset --keep` protects neither. The partial
+  copies are not marked synced afterwards (only Discard does): a pushed file equals its record entry and takes the team
+  version, a later copy edit
   becomes a local change or a conflict.
 - Push to a branch returns the page from `pullRequest.pullRequestPage`: built from the repository URL for `github.com`
   (`compare/<target>...<branch>?quick_pull=1`), `gitlab.com`
@@ -226,7 +241,10 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
   `authoring.pluginDirError` (catalog's `inside`, on real paths: a link is resolved through the deepest folder that
   exists, so a folder not created yet is checked too) before any write: it must be inside the repository and never the
   repository root. New plugin, Move to a repository (through `placePlugin`, so the draft is never copied nor deleted
-  when it fails) and Rename (the new folder) all use it.
+  when it fails) and Rename (the new folder) all use it. `authoring.destinationError` is the same check for any path
+  that is written: the item file of New item, the MCP file of Add MCP server, the destination of Share, the
+  marketplace file of New plugin, Move and the record of Rename, the files Rename of an item or a plugin changes
+  (a link leading outside, or a broken one, is refused before anything is written); `pluginDirError` uses it.
 - MCP files and frontmatter values written by the extension: `mcp.json` is JSONC, so Add MCP server
   (`authoring.addMcpServer`) and Rename of a server (`renameItem`) edit its text with `lib/jsonc.js` instead of
   writing `JSON.stringify` of the parsed object, which would drop the comments. `tokens` reads the text (BOM, comments
@@ -236,6 +254,9 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
   `yamlScalar` writes a value plain only when it starts with a letter, has no `:`, `#` or control character and is not a
   boolean or null word (`true`, `no`, `on`, `y`, ...), else as a JSON string: a date, a number or `true` would be read
   back as another type and the description would be lost. Names go through it too (`itemFile`, `renameSkillName`).
+  In a file whose servers are at the top level (no non-empty `mcpServers`), `topLevelNameError` refuses the name
+  `mcpServers` (it would hold the whole list), the metadata keys (`author`, `owner`, `source`, `metadata`) and a key the
+  file already has, in Add MCP server and in Rename.
 - Rename (`lib/rename.js`, `renameCommand`; F2 or right-click): `renamePlugin` refuses a plugin whose folder is the
   repository root (`source: "."`: renaming it would move the clone, and Cursor names the plugin after that folder, so
   renaming only the metadata would not change what Cursor shows) or the `metadata.pluginRoot` folder (it would move
@@ -492,6 +513,24 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
 - The getting started walkthrough was not probed in a Remote-SSH window. A sync that fails because git can't be
   started doesn't point to **Check git**.
 - A symlink or junction created inside a partial copy is left out of the sync (see the log), never followed.
+- Case is compared with JavaScript's `toLowerCase`: equal to NTFS for ASCII names, approximate for some other characters
+  (two names NTFS treats as one may still read as two).
+- Windows git (`core.ignorecase`) does not record a case-only rename: a spelling carried into the clone is not pushed
+  (the team keeps the old spelling).
+- Assumed: every folder of a repository, and of the extension's storage, looks names up with the same case rule as its
+  root (case sensitivity is set per folder on Windows, but a mix inside one tree takes a deliberate `fsutil file
+  setCaseSensitiveInfo`, or a folder created from WSL in a clone made by Windows). The rule is probed at the two roots
+  only, so a nested folder with another rule is not handled.
+- When only one side is case-insensitive (the repository and the copy on different filesystems: a clone made from WSL
+  on the Windows drive, a local repository on a FAT drive of a Linux machine), a spelling difference is reported in the
+  log, never renamed. A side with two names that differ only in case leaves both out; an item left out of the selection
+  never matches a selected one that differs only in case; a conflict that two spellings of one folder match, or that
+  goes through a folder that can't be listed, is refused rather than guessed. Not handled there: a non-item folder
+  named like an excluded item in another case (`skills/UP/notes.txt` beside the excluded skill `skills/up`) is left out
+  of the copy with it, and a file and a folder whose names differ only in case (`cache` and `Cache/`) make the first
+  build of the copy fail (logged, nothing lost).
+- A case rename where each side renamed a different part (a folder on one side, a file name on the other) is reported,
+  not merged.
 - A frontmatter description written as a quoted string over several lines shows only as written on the first line.
 - After the window that did the timed fetches closes, the next timed update in another window can be up to half an
   interval late.

@@ -699,9 +699,10 @@ async function doApply() {
       return copyRoot;
     };
     const syncOne = () => {
-      const { actions, conflicts, skipped } = syncCopy(plugin, ids, holder);
+      const { actions, conflicts, skipped, notes } = syncCopy(plugin, ids, holder);
       logCopyActions(plugin, actions);
       logSkipped(plugin, skipped);
+      logNotes(plugin, notes);
       copies.set(plugin.name, { plugin, ids, holder, copyRoot, conflicts });
       return copyRoot;
     };
@@ -851,6 +852,18 @@ function logSkipped(plugin, skipped) {
       if (s.unreadable) {
         ui.showWarningMessage(`Team plugins: ${where}: ${s.reason}. Its files are not synced until it can be read again.`);
       }
+    }
+  }
+}
+
+// The spelling differences a partial-copy sync did not carry (a file or folder named in another case on each side),
+// once per file and reason.
+function logNotes(plugin, notes) {
+  for (const n of notes || []) {
+    const key = `note:${plugin.name}/${n.rel}:${n.reason}`;
+    if (!loggedWarnings.has(key)) {
+      loggedWarnings.add(key);
+      log(`${plugin.name}/${n.rel}: ${n.reason}`);
     }
   }
 }
@@ -1489,11 +1502,14 @@ function syncPartials() {
     }
     const locked = sync.withLockSync(lockFile, () => {
       try {
-        const { actions, conflicts, skipped } = syncCopy(entry.plugin, entry.ids, entry.holder);
+        const { actions, conflicts, skipped, notes } = syncCopy(entry.plugin, entry.ids, entry.holder);
         logCopyActions(entry.plugin, actions);
         logSkipped(entry.plugin, skipped);
+        logNotes(entry.plugin, notes);
         entry.conflicts = conflicts;
-        toSource = toSource || actions.some((a) => a.action === 'toSource' || a.action === 'deletedInSource');
+        toSource =
+          toSource ||
+          actions.some((a) => a.action === 'toSource' || a.action === 'renamedInSource' || a.action === 'deletedInSource');
       } catch (err) {
         log(`cannot sync the partial copy of ${entry.plugin.name}: ${err.message}`);
         if (LOCKED_CODES.includes(err.code)) {
@@ -2474,8 +2490,8 @@ async function newItemCommand(kind, node) {
   const result = await enqueue(() =>
     withRepoLock(repo, () =>
       kind === 'mcp'
-        ? authoring.addMcpServer(plugin.dir, itemName, entry)
-        : authoring.createItem(plugin.dir, kind, itemName, description),
+        ? authoring.addMcpServer(plugin.dir, itemName, entry, repo.dir)
+        : authoring.createItem(plugin.dir, kind, itemName, description, repo.dir),
     ),
   );
   if (!result) {
@@ -2844,7 +2860,7 @@ async function shareCommand(uri, uris) {
     names.push(name);
   }
   const results = await enqueue(() =>
-    withRepoLock(repo, () => items.map((item, i) => share.shareItem(item, plugin.dir, names[i]))),
+    withRepoLock(repo, () => items.map((item, i) => share.shareItem(item, plugin.dir, names[i], repo.dir))),
   );
   if (!results) {
     return;

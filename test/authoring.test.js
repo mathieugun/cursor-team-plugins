@@ -23,6 +23,7 @@ const {
   renameIds,
   declaredPathsError,
   pluginDirError,
+  destinationError,
 } = require('../lib/authoring');
 const { tmpDir, rmDir, writeFile, makePlugin } = require('./helpers');
 
@@ -457,4 +458,127 @@ test('declaredPathsError', () => {
     declaredPathsError({ name: 'r:p', customPaths: ['mcpServers'] }, 'mcp'),
     'r:p sets the paths of its MCP servers in plugin.json: add the file there by hand.',
   );
+});
+
+test('destinationError', (t) => {
+  const root = fixture(t);
+  const repo = path.join(root, 'repo');
+  fs.mkdirSync(repo);
+  fs.mkdirSync(path.join(root, 'outside'));
+  assert.equal(destinationError(repo, path.join(repo, 'commands', 'new.md')), '');
+  assert.equal(destinationError(repo, repo), '');
+  junction(path.join(root, 'outside'), path.join(repo, 'commands'));
+  assert.equal(
+    destinationError(repo, path.join(repo, 'commands', 'new.md')),
+    'commands/new.md leads outside the repository through a link',
+  );
+  assert.equal(destinationError(repo, path.join(repo, '..', 'x')), '../x is outside the repository');
+  // a link whose target is gone leads nowhere we can check
+  fs.mkdirSync(path.join(root, 'vanishing'));
+  junction(path.join(root, 'vanishing'), path.join(repo, 'gone'));
+  fs.rmdirSync(path.join(root, 'vanishing'));
+  let broken = false;
+  try {
+    fs.lstatSync(path.join(repo, 'gone'));
+    broken = true;
+  } catch {
+    // the platform removed the link with its target
+  }
+  if (!broken) {
+    return t.skip('the platform keeps no broken link');
+  }
+  assert.equal(destinationError(repo, path.join(repo, 'gone', 'x')), 'gone/x leads outside the repository through a link');
+});
+
+test('createItem refuses a folder that is a link to outside the repository', (t) => {
+  const root = fixture(t);
+  const repo = path.join(root, 'repo');
+  makePlugin(repo, 'p', { name: 'p' });
+  fs.mkdirSync(path.join(root, 'outside'));
+  junction(path.join(root, 'outside'), path.join(repo, 'p', 'commands'));
+  assert.deepEqual(createItem(path.join(repo, 'p'), 'command', 'new', 'Fixture', repo), {
+    error: 'p/commands/new.md leads outside the repository through a link',
+  });
+  assert.deepEqual(fs.readdirSync(path.join(root, 'outside')), []);
+});
+
+test('addMcpServer refuses an MCP file that is a link to outside the repository', (t) => {
+  const root = fixture(t);
+  const repo = path.join(root, 'repo');
+  makePlugin(repo, 'p', { name: 'p' });
+  const before = '{"mcpServers":{"lint":{"command":"node"}}}\n';
+  const outside = writeFile(root, 'outside/mcp.json', before);
+  try {
+    fs.symlinkSync(outside, path.join(repo, 'p', 'mcp.json'), 'file');
+  } catch (err) {
+    if (err.code === 'EPERM') {
+      return t.skip('file links need a privilege on this machine');
+    }
+    throw err;
+  }
+  const r = addMcpServer(path.join(repo, 'p'), 'other', { command: 'x' }, repo);
+  assert.equal(r.error, 'p/mcp.json leads outside the repository through a link');
+  assert.equal(readText(outside), before);
+});
+
+// a repository whose .cursor-plugin folder is a link to a folder outside it, which holds the marketplace.json
+function linkedMarketplace(root) {
+  const repo = path.join(root, 'repo');
+  fs.mkdirSync(repo);
+  const before = '{"plugins":[]}\n';
+  const outside = writeFile(root, 'outside/marketplace.json', before);
+  junction(path.join(root, 'outside'), path.join(repo, '.cursor-plugin'));
+  return { repo, outside, before };
+}
+
+test('createPlugin refuses a marketplace.json reached through a link to outside', (t) => {
+  const root = fixture(t);
+  const { repo, outside, before } = linkedMarketplace(root);
+  const r = createPlugin(repo, { name: 'new' });
+  assert.equal(r.error, '.cursor-plugin/marketplace.json leads outside the repository through a link');
+  assert.equal(readText(outside), before);
+  assert.equal(fs.existsSync(path.join(repo, 'new')), false);
+});
+
+test('movePlugin refuses a marketplace.json reached through a link to outside', (t) => {
+  const root = fixture(t);
+  const { repo, outside, before } = linkedMarketplace(root);
+  const draft = path.join(root, 'drafts', 'd');
+  makePlugin(path.dirname(draft), 'd', { name: 'd', skills: ['s'] });
+  const r = movePlugin(draft, 'd', '', repo);
+  assert.equal(r.error, '.cursor-plugin/marketplace.json leads outside the repository through a link');
+  assert.equal(readText(outside), before);
+  assert.ok(fs.existsSync(path.join(draft, 'skills', 's', 'SKILL.md')));
+  assert.equal(fs.existsSync(path.join(repo, 'd')), false);
+});
+
+const TOP_LEVEL_MCP = '{\n// keep this comment\n"lint":{"command":"node"},\n"notes":"keep me"\n}\n';
+
+test('addMcpServer refuses a name the top level of the file already holds or reserves', (t) => {
+  const pluginDir = path.join(fixture(t), 'p');
+  const file = writeFile(pluginDir, 'mcp.json', TOP_LEVEL_MCP);
+  assert.deepEqual(addMcpServer(pluginDir, 'notes', { command: 'x' }), {
+    error: 'mcp.json already has a top-level "notes": pick another name',
+  });
+  assert.deepEqual(addMcpServer(pluginDir, 'mcpServers', { command: 'x' }), {
+    error:
+      '"mcpServers" can\'t name a server in mcp.json: its servers are at the top level, where that key would hold the whole server list',
+  });
+  assert.deepEqual(addMcpServer(pluginDir, 'author', { command: 'x' }), {
+    error: 'author is a reserved key of mcp.json: pick another name',
+  });
+  assert.equal(readText(file), TOP_LEVEL_MCP);
+  assert.deepEqual(addMcpServer(pluginDir, 'other', { command: 'x' }), { file });
+  assert.ok(readText(file).includes('// keep this comment'));
+  assert.ok(readText(file).includes('"other"'));
+  assert.ok(readText(file).includes('"notes":"keep me"'));
+});
+
+test('addMcpServer takes any name in a file that lists its servers in mcpServers', (t) => {
+  const pluginDir = path.join(fixture(t), 'p');
+  const file = writeFile(pluginDir, 'mcp.json', '{ "mcpServers": { "lint": { "command": "node" } }, "notes": "x" }\n');
+  assert.deepEqual(addMcpServer(pluginDir, 'notes', { command: 'python' }), { file });
+  const parsed = JSON.parse(readText(file));
+  assert.equal(parsed.notes, 'x');
+  assert.deepEqual(parsed.mcpServers.notes, { command: 'python' });
 });

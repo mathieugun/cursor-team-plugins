@@ -218,5 +218,12 @@ under the temp folder, nothing installed) may be run without asking.
   `CreateFileW` hold with only `FILE_SHARE_READ` blocked removal, and `movePlugin` returned `leftover` after copying
   the draft. The tests simulate both a removal error and a directory still listed after removal returns.
 
+- A Windows folder can be made case-sensitive without admin rights (`fsutil.exe file setCaseSensitiveInfo <dir> enable`,
+  inherited by new subfolders; worked on the maintainer's Windows 11, 2026-11-28, request 25): set `TEMP`/`TMP` to such
+  a folder to run case-sensitive test cases on Windows. So never expect a platform to decide case sensitivity in a
+  test: compare with what the folder itself does (write `a`, look for `A`). Looking up a folder's own name in another
+  case tests its parent's rule, not the folder's (Codex review of request 25): probe a name inside the folder, and
+  test mixed setups (case-sensitive folder inside a case-insensitive one) when a design depends on the probe.
+
 ## Implementer lessons
 <!-- One line per project-specific mistake seen in review. -->
