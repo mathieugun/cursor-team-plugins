@@ -1,6 +1,4 @@
-# Runs when a tag `v*` is pushed: runs the shared checks, validates the tag, makes a GitHub release with the
-# VSIX and publishes it to Open VSX. OVSX_PAT is an Open VSX access token (README, "Building and releasing"); without
-# it only the GitHub release is made.
+# Runs on a `v*` tag push. Checks the tagged commit, fast-forwards main, and publishes the VSIX.
 name: Release
 
 on:
@@ -22,6 +20,8 @@ jobs:
       OVSX_PAT: ${{ secrets.OVSX_PAT }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-node@v5
         with:
@@ -38,6 +38,10 @@ jobs:
       - name: Package
         id: package
         run: echo "vsix=$(node scripts/package.js)" >> "$GITHUB_OUTPUT"
+
+      # The checkout authenticates with GITHUB_TOKEN, so this push does not start a second check run.
+      - name: Fast-forward main to the tagged commit
+        run: git push origin HEAD:refs/heads/main
 
       - name: GitHub release
         env:

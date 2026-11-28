@@ -13,10 +13,11 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
   a Linux host at once, on the working tree, and fails if either run fails; the lint runs in the pre-commit hook. The
   branch is not pushed: CI on `main` only confirms. When CI fails where both runs passed, find out why the
   environments differ before changing anything on `main`.
-- Release from `main`: bump
-  `version` in `package.json`, commit, then push a tag `v<version>` (`git tag v<version>`,
-  `git push origin main v<version>`). `.github/workflows/release.yml` requires the shared tests and lint to pass before
-  it validates the tag and builds the VSIX. It attaches the VSIX to a GitHub release and publishes it to Open VSX,
+- Release from `main`: bump `version` in `package.json`, commit, create the tag (`git tag v<version>`), and push
+  only the tag (`git push origin refs/tags/v<version>`). `.github/workflows/release.yml` runs the shared tests and
+  lint once, validates the tag, and builds the VSIX. It then fast-forwards `origin/main` to the tagged commit with
+  `GITHUB_TOKEN`, which does not start a branch check run. If `origin/main` has moved and cannot be fast-forwarded,
+  the push fails and publishing stops. The workflow attaches the VSIX to a GitHub release and publishes it to Open VSX,
   which Cursor's marketplace mirrors (a new extension appeared there about 7 minutes after Open VSX listed it;
   new versions of existing extensions show up at once).
 - Open VSX setup (done once): an open-vsx.org account signed in with GitHub, linked to an Eclipse Foundation account
