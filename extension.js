@@ -121,7 +121,7 @@ let debounceTimer = null;
 let queue = Promise.resolve();
 let storage = '';
 let lastGitCheck = null; // the result of the last Check git (Test mode reads it)
-let partialCopies = new Map(); // plugin name -> { plugin, ids, holder, copyRoot, conflicts: [{ rel, source, copy }] }
+let partialCopies = new Map(); // plugin name -> { plugin, ids, hooksDisabled, holder, copyRoot, conflicts }
 let copyConflicts = []; // the conflicts of all partial copies, as given to buildConflictsNode
 let diagnostics = null; // the DiagnosticCollection of the problems of lib/checks.js
 let diagnosticsKey = ''; // what it holds, to replace it only when that changes
@@ -686,21 +686,21 @@ async function doApply() {
   const copies = new Map();
   const previous = partialCopies;
   let retry = '';
-  const desired = selection.desiredRegistrations(catalog, eff, (plugin, ids) => {
+  const desired = selection.desiredRegistrations(catalog, eff, (plugin, ids, hooksDisabled) => {
     const d = active.find((x) => x.key === plugin.repoKey);
-    const holder = path.join(filteredRoot, holderName(plugin, ids));
+    const holder = path.join(filteredRoot, holderName(plugin, ids, hooksDisabled));
     const copyRoot = copyRootOf(plugin, holder);
     const keep = () => {
       const old = [...previous.values()].find((e) => e.holder === holder);
-      copies.set(plugin.name, { plugin, ids, holder, copyRoot, conflicts: old ? old.conflicts : [] });
+      copies.set(plugin.name, { plugin, ids, hooksDisabled, holder, copyRoot, conflicts: old ? old.conflicts : [] });
       return copyRoot;
     };
     const syncOne = () => {
-      const { actions, conflicts, skipped, notes } = syncCopy(plugin, ids, holder);
+      const { actions, conflicts, skipped, notes } = syncCopy(plugin, ids, holder, hooksDisabled);
       logCopyActions(plugin, actions);
       logSkipped(plugin, skipped);
       logNotes(plugin, notes);
-      copies.set(plugin.name, { plugin, ids, holder, copyRoot, conflicts });
+      copies.set(plugin.name, { plugin, ids, hooksDisabled, holder, copyRoot, conflicts });
       return copyRoot;
     };
     try {
@@ -1469,7 +1469,7 @@ function syncPartials() {
     }
     const locked = sync.withLockSync(lockFile, () => {
       try {
-        const { actions, conflicts, skipped, notes } = syncCopy(entry.plugin, entry.ids, entry.holder);
+        const { actions, conflicts, skipped, notes } = syncCopy(entry.plugin, entry.ids, entry.holder, entry.hooksDisabled);
         logCopyActions(entry.plugin, actions);
         logSkipped(entry.plugin, skipped);
         logNotes(entry.plugin, notes);
@@ -1654,6 +1654,9 @@ const TREE_ICONS = {
   command: 'terminal',
   agent: 'robot',
   mcp: 'plug',
+  hooks: 'zap',
+  hookEvent: 'symbol-event',
+  script: 'file-code',
   error: 'warning',
   changes: 'git-commit',
   conflicts: 'warning',
@@ -1828,13 +1831,13 @@ class PluginTree {
       item.command = { command: 'teamPlugins.openChange', title: 'Open changes', arguments: [node] };
     } else if (node.kind === 'conflict') {
       item.command = { command: 'teamPlugins.openConflict', title: 'Compare', arguments: [node] };
-    } else if (node.kind !== 'changes' && node.kind !== 'conflicts') {
+    } else if (node.checked !== undefined) {
       item.resourceUri = itemUri(node.key);
       const checkState = node.checked ? vscode.TreeItemCheckboxState.Checked : vscode.TreeItemCheckboxState.Unchecked;
       item.checkboxState = node.checkboxTooltip ? { state: checkState, tooltip: node.checkboxTooltip } : checkState;
-      if (node.kind !== 'plugin') {
-        item.command = { command: 'teamPlugins.openItem', title: 'Open file', arguments: [node] };
-      }
+    }
+    if (node.file && (node.checked !== undefined || node.kind === 'hookEvent' || node.kind === 'script')) {
+      item.command = { command: 'teamPlugins.openItem', title: 'Open file', arguments: [node] };
     }
     return item;
   }
@@ -1846,7 +1849,7 @@ async function onCheckboxChange(e) {
   let user = before;
   const unchecked = [];
   for (const [node, state] of e.items) {
-    if (node.kind !== 'plugin' && !ITEM_KINDS.includes(node.kind)) {
+    if (node.checked === undefined) {
       continue;
     }
     const checked = state === vscode.TreeItemCheckboxState.Checked;
@@ -4840,6 +4843,14 @@ function testHook(context) {
     },
     idle: (opts) => testIdle(opts),
     tree: () => testTree(),
+    open: (id) => {
+      const node = testFindNode(id);
+      const command = node && treeProvider.getTreeItem(node).command;
+      if (!command) {
+        throw new Error(`tree node ${id} has no command`);
+      }
+      return vscode.commands.executeCommand(command.command, ...(command.arguments || []));
+    },
     check: (id, checked) => {
       const node = testFindNode(id);
       if (!node) {

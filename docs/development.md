@@ -77,7 +77,8 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
     check after a settings change only when the window has focus).
   - The hook (`activate`'s return value in Test mode only): `calls`, `clearCalls`, `respond` (the scripted answers of
     the recorder that replaces `ui`), `idle` (nothing in flight for 300 ms), `tree` (labels, descriptions, tooltips,
-    icons, checkbox states), `check` (ticks or unticks a node like a click), `registrations`, `diagnostics` (the
+    icons, checkbox states), `open` (runs a node's file-opening command), `check` (ticks or unticks a node like a
+    click), `registrations`, `diagnostics` (the
     problems published to the Problems panel, by path), `decoration`, `badge` (the
     number on the view's icon), `updates` (a repository's counts, marks and removed items), `states` (per repository),
     `status` (status bar), `logLines`, `gitCheck` (the result of the last **Check git**), `storage` and `logUri`.
@@ -179,6 +180,17 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
   generated content or equal to what was last written (the generated content is written, the record holds its hash),
   or the copy's file was edited (kept and reported: `MCP servers left out of the selection: an edit in the copy never
   reaches the repository`). `markCopySynced` needs nothing special: the next sync regenerates the file.
+- Hooks (`lib/hooks.js`) are one selectable item at `<plugin>/hooks`. The catalog lists recognized, nonempty events
+  from the default `hooks/hooks.json`, a manifest's relative hook path, or a manifest's inline hook configuration.
+  The group and event rows open the original file. Script rows list the contents of plugin and skill `scripts/`
+  directories. They follow their owner and have no selection IDs. Hook rows stay out of the update summary because
+  an inline hook can share a manifest with unrelated settings.
+- Partial copies without a selected hook group use a separate holder when there is a candidate hook configuration
+  or a saved exclusion. `syncCopy` leaves out the default file and substitutes `hooks: {}` for hook declarations in
+  supported manifest paths. These generated manifests go from the repository to the copy. The custom hook files and
+  scripts remain available according to their file or skill ownership. A selected custom hook file inside an omitted
+  skill folder is copied on its own. A shared MCP config keeps its hook configuration while omitting unchecked servers.
+  A saved hook exclusion continues to request a filtered copy while its hook configuration is temporarily absent.
 - What Cursor does with these (measured on Cursor 3.31, 2026-11-25, agent host `cursor-agent-host/dist/7361.js` and a
   live probe with a local repository): a registered extension plugin loads its skills, rules, commands, agents, MCP
   servers and hooks. When `plugin.json` declares `agents`, `commands`, `rules` or `skills` (any value), Cursor reads
@@ -612,12 +624,12 @@ interface to maintain for a one-off command).
 ## Known limits (details)
 
 - Marketplace entries whose source is not a folder of the repository (GitHub or URL sources) are skipped.
-- Custom component paths declared in `plugin.json` are not read. A kind whose paths it declares (`commands`, `agents`,
+- Custom component paths declared in `plugin.json` are read for hooks. A kind whose paths it declares (`commands`, `agents`,
   `mcpServers`) is not selectable: its files always come with the plugin (Cursor then reads those paths instead of the
   default folder or files); custom paths for skills and rules stay unread as well.
 - Commands and agents in subfolders of `commands/` or `agents/` are not selectable: they always come with the plugin
   (as nested rules).
-- Hooks stay all or nothing, like anything else that is not a skill, rule, command, agent or MCP server (assets).
+- The selector applies to the entire Hooks group. Plugin assets stay available whenever the plugin is registered.
 - An MCP file with some servers left out is generated in the partial copy (rewritten as `JSON.stringify(..., 2)`): it
   only goes from the repository to the copy. An edit or deletion made there never reaches the repository; an edited one
   is kept and reported in the log (and then no longer updated until removed), a deleted one is written again.
