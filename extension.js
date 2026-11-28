@@ -3905,12 +3905,11 @@ async function replaceOriginals({ groups, choices, dropped, plan, url, pluginNam
     );
     return;
   }
-  // the clone must hold the pushed commit, with the plugin folder as it was pushed
+  // Cursor must load the same plugin that was pushed before we remove the originals.
   const d = listConfigured().find((x) => x.normalized === normalizeUrl(url));
   const run = makeGit(gitPath());
   const folder = path.relative(d.dir, plugin.dir).split(path.sep).join('/');
-  const ancestor = await run(['merge-base', '--is-ancestor', head, 'HEAD'], d.dir);
-  const same = ancestor.code === 0 ? await run(['diff', '--quiet', head, 'HEAD', '--', folder], d.dir) : ancestor;
+  const same = await newRepo.checkReplacementPlugin({ run, dir: d.dir, folder, head });
   if (same.code !== 0) {
     log(`replace the originals: the clone of ${url} does not hold ${head} with ${folder} unchanged (${same.stderr || 'differs'})`);
     notify(
