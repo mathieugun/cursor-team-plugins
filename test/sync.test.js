@@ -858,3 +858,32 @@ test('changedPaths throws when git status fails', async () => {
   const run = async () => ({ code: 128, stdout: '', stderr: 'not a repository' });
   await assert.rejects(() => sync.changedPaths({ run, repo: '/nowhere' }), /git status failed/);
 });
+
+// POSIX: a folder without write permission makes the first rmSync fail, so removeTree takes its fallback, which must
+// add write permission without dropping the folders' execute bit (or nothing inside can be reached).
+test('removeTree removes a tree whose folders are read-only', { skip: process.platform === 'win32' }, (t) => {
+  const root = tmpDir();
+  t.after(() => rmDir(root));
+  const tree = path.join(root, 'tree');
+  writeFile(tree, 'a/b/file.txt', 'x');
+  fs.chmodSync(path.join(tree, 'a', 'b'), 0o555);
+  fs.chmodSync(path.join(tree, 'a'), 0o555);
+  sync.removeTree(tree);
+  assert.equal(fs.existsSync(tree), false);
+});
+
+// The fallback never follows a link: the permissions of a folder the tree links to stay as they were.
+test('removeTree leaves the target of a link alone', { skip: process.platform === 'win32' }, (t) => {
+  const root = tmpDir();
+  t.after(() => rmDir(root));
+  const outside = path.join(root, 'outside');
+  fs.mkdirSync(outside, { mode: 0o755 });
+  fs.chmodSync(outside, 0o755);
+  const tree = path.join(root, 'tree');
+  writeFile(tree, 'ro/file.txt', 'x');
+  fs.symlinkSync(outside, path.join(tree, 'link'));
+  fs.chmodSync(path.join(tree, 'ro'), 0o555);
+  sync.removeTree(tree);
+  assert.equal(fs.existsSync(tree), false);
+  assert.equal(fs.statSync(outside).mode & 0o777, 0o755);
+});
