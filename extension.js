@@ -21,7 +21,15 @@ const {
   itemDecoration,
   KIND_LABELS,
 } = require('./lib/treeModel');
-const { holderName, copyRootOf, syncCopy, markCopySynced, resolveConflict, gcFiltered } = require('./lib/materialize');
+const {
+  holderName,
+  copyRootOf,
+  syncCopy,
+  markCopySynced,
+  resolveConflict,
+  conflictVersions,
+  gcFiltered,
+} = require('./lib/materialize');
 const { makeGit } = require('./lib/git');
 const { checkGit, gitCheckMessage, DOWNLOAD_URL } = require('./lib/gitCheck');
 const sync = require('./lib/sync');
@@ -831,13 +839,18 @@ function logCopyActions(plugin, actions) {
   }
 }
 
-// What a partial-copy sync left out (links that are not followed), once per file and reason.
+// What a partial-copy sync left out (links that are not followed, and folders that can't be read), once per file and
+// reason.
 function logSkipped(plugin, skipped) {
   for (const s of skipped) {
     const key = `skip:${plugin.name}/${s.rel}:${s.reason}`;
     if (!loggedWarnings.has(key)) {
       loggedWarnings.add(key);
-      log(`${plugin.name}/${s.rel} left out of the partial copy: ${s.reason}`);
+      const where = s.rel ? `${plugin.name}/${s.rel}` : plugin.name;
+      log(`${where} left out of the partial copy: ${s.reason}`);
+      if (s.unreadable) {
+        ui.showWarningMessage(`Team plugins: ${where}: ${s.reason}. Its files are not synced until it can be read again.`);
+      }
     }
   }
 }
@@ -1517,7 +1530,7 @@ async function flushPartials() {
   await enqueue(syncPartials);
 }
 
-// After a clone was reset to the team version (discard, push to a branch), the partial copies of its plugins take the
+// After a clone was reset to the team version (discard), the partial copies of its plugins take the
 // clone's side at the next apply: left as they are, their edits (newer than the last sync) would be copied back into the
 // clone. They are updated in place (markCopySynced), not deleted: Windows refuses to delete a folder Cursor watches.
 function resetPartialCopies(repoKey) {
@@ -3169,6 +3182,19 @@ async function resolveConflictCommand(node, keep) {
   if (!node || !node.rel) {
     return;
   }
+  const shownEntry = [...partialCopies.values()].find((e) => e.holder === node.holder);
+  if (!shownEntry) {
+    log(`conflict no longer tracked: ${node.rel}`);
+    return;
+  }
+  // the versions the user is about to choose between: the choice is applied only if both are still these
+  let shown;
+  try {
+    shown = conflictVersions(shownEntry.plugin, shownEntry.holder, node.rel);
+  } catch (err) {
+    ui.showErrorMessage(`Team plugins: ${err.message}`);
+    return;
+  }
   const [message, detail, button] =
     keep === 'source'
       ? [`Keep the repository version of ${node.plugin}/${node.rel}?`, "The partial copy's version is replaced.", 'Keep repository version']
@@ -3193,12 +3219,21 @@ async function resolveConflictCommand(node, keep) {
         log(`conflict of a repository that is no longer configured: ${node.rel}`);
         return;
       }
-      const locked = sync.withLockSync(lockFile, () => resolveConflict(entry.plugin, entry.ids, entry.holder, node.rel, keep));
+      const locked = sync.withLockSync(lockFile, () =>
+        resolveConflict(entry.plugin, entry.ids, entry.holder, node.rel, keep, shown),
+      );
       if (locked.kind === 'busy') {
         ui.showWarningMessage(BUSY_TEXT);
         return;
       }
       const a = locked.value;
+      if (a.changed) {
+        ui.showWarningMessage(
+          `Team plugins: ${node.plugin}/${node.rel} changed since you chose (another window resolved it, or a side was edited again): nothing was replaced.`,
+        );
+        await syncPartials();
+        return;
+      }
       logCopyActions(entry.plugin, [a]);
       entry.conflicts = (entry.conflicts || []).filter((c) => c.rel !== node.rel);
       updateConflicts();
@@ -3235,6 +3270,11 @@ function reportContribution(result, nothingText, d, { openPullRequest: openPage 
       break;
     case 'pushedBranch': {
       const { branch, remote } = result;
+      const skipped = result.resetSkipped;
+      const what = skipped && skipped.files.length > 0 ? skipped.files.join(', ') : 'files';
+      const back = skipped
+        ? `The managed clone was left as it is because ${what} changed during the push: it still holds the pushed commit and those edits (push to a branch again, or discard them, when you are ready).`
+        : 'The managed clone is back on the team version.';
       const merge = `git fetch ${remote}\ngit merge ${remote}/${branch}`;
       const mergeText = `git fetch ${remote} && git merge ${remote}/${branch}`;
       const page = result.pullRequest;
@@ -3246,16 +3286,16 @@ function reportContribution(result, nothingText, d, { openPullRequest: openPage 
       let buttons;
       if (openPage && page) {
         openPullRequest(result);
-        text = `Pushed your changes to branch ${branch} and opened the page to propose them as a pull request${into}. The managed clone is back on the team version.`;
+        text = `Pushed your changes to branch ${branch} and opened the page to propose them as a pull request${into}. ${back}`;
         buttons = ['Open pull request', 'Copy merge commands'];
       } else if (page) {
-        text = `Pushed your changes to branch ${branch}. The managed clone is back on the team version. Open a pull request to have them reviewed and merged${into}, or merge it in your own clone: ${mergeText}`;
+        text = `Pushed your changes to branch ${branch}. ${back} Open a pull request to have them reviewed and merged${into}, or merge it in your own clone: ${mergeText}`;
         buttons = ['Open pull request', 'Copy merge commands'];
       } else {
-        text = `Pushed your changes to branch ${branch}. The managed clone is back on the team version. Open a pull request from it on the hosting service, or merge it in your own clone: ${mergeText}`;
+        text = `Pushed your changes to branch ${branch}. ${back} Open a pull request from it on the hosting service, or merge it in your own clone: ${mergeText}`;
         buttons = ['Copy merge commands'];
       }
-      ui.showInformationMessage(text, ...buttons).then((choice) => {
+      ui[skipped ? 'showWarningMessage' : 'showInformationMessage'](text, ...buttons).then((choice) => {
         if (choice === 'Open pull request') {
           return openPullRequest(result);
         }
@@ -3469,8 +3509,8 @@ async function pushToBranchCommand(arg) {
     (await enqueue(() =>
       vscode.window.withProgress(
         { location: vscode.ProgressLocation.Notification, title: 'Team plugins: pushing to a branch…' },
-        async () => {
-          const r = await contribute.pushToBranch({
+        () =>
+          contribute.pushToBranch({
             run,
             repo: d.dir,
             message,
@@ -3479,12 +3519,7 @@ async function pushToBranchCommand(arg) {
             stateFile: d.stateFile,
             repoUrl: d.url,
             log,
-          });
-          if (r.kind === 'pushedBranch') {
-            resetPartialCopies(d.key);
-          }
-          return r;
-        },
+          }),
       ),
     )) || UNEXPECTED;
   reportContribution(result, 'Nothing to push.', d, { openPullRequest: wantsPage });

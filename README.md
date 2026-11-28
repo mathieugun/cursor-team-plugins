@@ -231,9 +231,10 @@ Cursor asks which one when several have changes. To share them:
   every local change of that repository, rebases it on the team's latest commits and pushes it with your git
   credentials. Your teammates get it at their next sync.
 - **Push to a branch** pushes your changes to a new branch instead (for a protected branch, or to have them reviewed)
-  and puts the clone back on the team version. Its message offers **Open pull request**, which opens the hosting
-  service's page to propose the branch as a pull request (GitHub, GitLab and Azure DevOps; other servers when they
-  print that page's address on the push).
+  and puts the clone back on the team version (edits saved during the push stay as local changes; if one changed a
+  file of the pushed commit, the clone is left as it is and the message says so). Its message offers **Open pull
+  request**, which opens the hosting service's page to propose the branch as a pull request (GitHub, GitLab and Azure
+  DevOps; other servers when they print that page's address on the push).
 - **Discard local changes** throws them away, after a confirmation that lists what would be lost.
 
 Before pushing, the extension checks the plugins you changed for what Cursor silently drops or misreads: frontmatter
@@ -250,7 +251,9 @@ teammate changed the same lines, pauses the updates until you push your changes 
 For a partly enabled plugin, the agent edits a copy that holds only your selection, kept in step with the clone both
 ways. If the same file changed on both sides (a team update and an edit of yours), nothing is overwritten: the file
 shows in a **Conflicts** group of its repository; click it to compare, then choose **Keep repository version** or
-**Keep copy version**.
+**Keep copy version**. A choice is applied only if neither version changed since you chose; otherwise nothing is
+replaced and you are told. A folder that can't be read is left alone on both sides, with a warning, until it can be
+read again.
 
 A commit records your name and email from git's settings; if they were never set, the message gives the two
 `git config --global` commands to run once.

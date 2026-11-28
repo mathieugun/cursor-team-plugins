@@ -12,6 +12,7 @@ const {
   syncCopy,
   markCopySynced,
   resolveConflict,
+  conflictVersions,
   gcFiltered,
   hashCache,
 } = require('../lib/materialize');
@@ -201,7 +202,11 @@ test('a deletion against an edit is a conflict', (t) => {
 test('resolveConflict keeps the repository version', (t) => {
   const f = setupCopy(t);
   makeConflict(f);
-  assert.deepEqual(resolveConflict(f.plugin, f.ids, f.holder, SKILL_A, 'source'), { action: 'toCopy', rel: SKILL_A });
+  const shown = conflictVersions(f.plugin, f.holder, SKILL_A);
+  assert.deepEqual(resolveConflict(f.plugin, f.ids, f.holder, SKILL_A, 'source', shown), {
+    action: 'toCopy',
+    rel: SKILL_A,
+  });
   assert.equal(C(f, SKILL_A), 'team');
   const r = syncCopy(f.plugin, f.ids, f.holder);
   assert.deepEqual(r.actions, []);
@@ -212,7 +217,11 @@ test('resolveConflict keeps the repository version', (t) => {
 test('resolveConflict keeps the copy version', (t) => {
   const f = setupCopy(t);
   makeConflict(f);
-  assert.deepEqual(resolveConflict(f.plugin, f.ids, f.holder, SKILL_A, 'copy'), { action: 'toSource', rel: SKILL_A });
+  const shown = conflictVersions(f.plugin, f.holder, SKILL_A);
+  assert.deepEqual(resolveConflict(f.plugin, f.ids, f.holder, SKILL_A, 'copy', shown), {
+    action: 'toSource',
+    rel: SKILL_A,
+  });
   assert.equal(S(f, SKILL_A), 'agent');
   const r = syncCopy(f.plugin, f.ids, f.holder);
   assert.deepEqual(r.actions, []);
@@ -225,13 +234,169 @@ test('resolveConflict with the kept side deleted deletes the other', (t) => {
   fs.rmSync(f.cp('hooks/z.md'));
   fs.writeFileSync(f.src('hooks/z.md'), 'team');
   syncCopy(f.plugin, f.ids, f.holder);
-  assert.deepEqual(resolveConflict(f.plugin, f.ids, f.holder, 'hooks/z.md', 'copy'), {
+  const shown = conflictVersions(f.plugin, f.holder, 'hooks/z.md');
+  assert.deepEqual(resolveConflict(f.plugin, f.ids, f.holder, 'hooks/z.md', 'copy', shown), {
     action: 'deletedInSource',
     rel: 'hooks/z.md',
   });
   assert.ok(!fs.existsSync(f.src('hooks/z.md')));
-  assert.throws(() => resolveConflict(f.plugin, f.ids, f.holder, '../x', 'copy'));
-  assert.throws(() => resolveConflict(f.plugin, f.ids, f.holder, SKILL_A, 'both'));
+  assert.throws(() => resolveConflict(f.plugin, f.ids, f.holder, '../x', 'copy', shown));
+  assert.throws(() => resolveConflict(f.plugin, f.ids, f.holder, SKILL_A, 'both', shown));
+});
+
+const sha1 = (x) => crypto.createHash('sha1').update(x).digest('hex');
+
+test('conflictVersions hashes both sides, null for a missing file', (t) => {
+  const f = setupCopy(t);
+  makeConflict(f);
+  assert.deepEqual(conflictVersions(f.plugin, f.holder, SKILL_A), { source: sha1('team'), copy: sha1('agent') });
+  fs.rmSync(f.cp(SKILL_A));
+  assert.deepEqual(conflictVersions(f.plugin, f.holder, SKILL_A), { source: sha1('team'), copy: null });
+  assert.throws(() => conflictVersions(f.plugin, f.holder, '../x'));
+});
+
+test('a stale conflict choice changes nothing', (t) => {
+  const f = setupCopy(t);
+  makeConflict(f);
+  const shown = conflictVersions(f.plugin, f.holder, SKILL_A);
+  // window A takes the repository version
+  assert.deepEqual(resolveConflict(f.plugin, f.ids, f.holder, SKILL_A, 'source', shown), {
+    action: 'toCopy',
+    rel: SKILL_A,
+  });
+  fs.writeFileSync(f.src(SKILL_A), 'newer');
+  // window B still shows the old dialog and takes the copy version
+  assert.deepEqual(resolveConflict(f.plugin, f.ids, f.holder, SKILL_A, 'copy', shown), {
+    changed: true,
+    rel: SKILL_A,
+  });
+  assert.equal(S(f, SKILL_A), 'newer');
+  assert.equal(C(f, SKILL_A), 'team');
+});
+
+test('a side edited after the choice was offered changes nothing', (t) => {
+  const f = setupCopy(t);
+  makeConflict(f);
+  const shown = conflictVersions(f.plugin, f.holder, SKILL_A);
+  fs.writeFileSync(f.cp(SKILL_A), 'agent2');
+  assert.deepEqual(resolveConflict(f.plugin, f.ids, f.holder, SKILL_A, 'source', shown), {
+    changed: true,
+    rel: SKILL_A,
+  });
+  assert.equal(C(f, SKILL_A), 'agent2');
+  assert.equal(S(f, SKILL_A), 'team');
+  assert.deepEqual(f.manifest().conflicts, [SKILL_A]);
+});
+
+test('resolveConflict without the versions shown throws', (t) => {
+  const f = setupCopy(t);
+  makeConflict(f);
+  assert.throws(() => resolveConflict(f.plugin, f.ids, f.holder, SKILL_A, 'source'));
+});
+
+test('a copy edit made after a push to a branch is not lost', (t) => {
+  const f = setupCopy(t);
+  fs.writeFileSync(f.cp('rules/x.mdc'), 'during push');
+  // the clone goes back to the team version: a pushed file reverts
+  fs.writeFileSync(f.src(SKILL_A), 'team version');
+  // no markCopySynced: the pushed file takes the team version, the later edit reaches the clone
+  const r = syncCopy(f.plugin, f.ids, f.holder);
+  assert.deepEqual(r.conflicts, []);
+  assert.equal(C(f, SKILL_A), 'team version');
+  assert.equal(S(f, 'rules/x.mdc'), 'during push');
+});
+
+// readdirSync throws `code` for the folder `dir` (compared resolved, case-insensitive on Windows)
+function unreadable(t, dir, code = 'EACCES') {
+  const real = fs.readdirSync;
+  const key = (p) => (process.platform === 'win32' ? path.resolve(p).toLowerCase() : path.resolve(p));
+  t.mock.method(fs, 'readdirSync', (p, ...rest) => {
+    if (key(p) === key(dir)) {
+      throw Object.assign(new Error(`${code}: cannot read ${p}`), { code });
+    }
+    return real.call(fs, p, ...rest);
+  });
+}
+
+test('an unreadable folder of the copy deletes nothing in the repository', (t) => {
+  const f = setupCopy(t);
+  const before = f.manifest().files;
+  unreadable(t, f.cp('skills'));
+  const r = syncCopy(f.plugin, f.ids, f.holder);
+  assert.deepEqual(r.actions, []);
+  assert.ok(fs.existsSync(f.src(SKILL_A)));
+  assert.deepEqual(r.skipped, [
+    { rel: 'skills', reason: "folder can't be read in the partial copy (EACCES)", unreadable: true },
+  ]);
+  assert.equal(f.manifest().files[SKILL_A], before[SKILL_A]);
+  t.mock.restoreAll();
+  const again = syncCopy(f.plugin, f.ids, f.holder);
+  assert.deepEqual(again.actions, []);
+  assert.deepEqual(again.conflicts, []);
+  assert.equal(f.manifest().files[SKILL_A], before[SKILL_A]);
+});
+
+test('an unreadable folder of the repository deletes nothing in the copy', (t) => {
+  const f = setupCopy(t);
+  unreadable(t, f.src('skills'));
+  const r = syncCopy(f.plugin, f.ids, f.holder);
+  assert.deepEqual(r.actions, []);
+  assert.ok(fs.existsSync(f.cp(SKILL_A)));
+  assert.deepEqual(r.skipped, [
+    { rel: 'skills', reason: "folder can't be read in the repository (EACCES)", unreadable: true },
+  ]);
+  t.mock.restoreAll();
+  assert.deepEqual(syncCopy(f.plugin, f.ids, f.holder).actions, []);
+});
+
+test('an unreadable copy folder keeps everything', (t) => {
+  const f = setupCopy(t);
+  const before = f.manifest().files;
+  unreadable(t, f.copyRoot);
+  const r = syncCopy(f.plugin, f.ids, f.holder);
+  assert.deepEqual(r.actions, []);
+  for (const rel of FOUR) {
+    assert.ok(fs.existsSync(f.src(rel)), rel);
+  }
+  assert.deepEqual(r.skipped, [
+    { rel: '', reason: "folder can't be read in the partial copy (EACCES)", unreadable: true },
+  ]);
+  assert.deepEqual(f.manifest().files, before);
+});
+
+test('a plugin folder gone from the repository empties nothing', (t) => {
+  const f = setupCopy(t);
+  removeTree(f.plugin.dir);
+  const r = syncCopy(f.plugin, f.ids, f.holder);
+  assert.deepEqual(r.actions, []);
+  for (const rel of FOUR) {
+    assert.ok(fs.existsSync(f.cp(rel)), rel);
+  }
+  assert.deepEqual(r.skipped[0], {
+    rel: '',
+    reason: "folder can't be read in the repository (ENOENT)",
+    unreadable: true,
+  });
+});
+
+test('an edit below an unreadable folder waits', (t) => {
+  const f = setupCopy(t);
+  const original = S(f, SKILL_A);
+  fs.writeFileSync(f.cp(SKILL_A), 'agent');
+  unreadable(t, f.cp('skills'));
+  syncCopy(f.plugin, f.ids, f.holder);
+  assert.equal(S(f, SKILL_A), original);
+  t.mock.restoreAll();
+  assert.deepEqual(syncCopy(f.plugin, f.ids, f.holder).actions, [{ action: 'toSource', rel: SKILL_A }]);
+  assert.equal(S(f, SKILL_A), 'agent');
+});
+
+test('markCopySynced keeps the record below an unreadable folder', (t) => {
+  const f = setupCopy(t);
+  const before = f.manifest().files[SKILL_A];
+  unreadable(t, f.cp('skills'));
+  assert.equal(markCopySynced(f.holder), true);
+  assert.equal(f.manifest().files[SKILL_A], before);
 });
 
 test('an unreadable record never deletes unsynced edits', (t) => {

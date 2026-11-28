@@ -82,8 +82,10 @@ under the temp folder, nothing installed) may be run without asking.
 - `git reset --hard @{u}` resets to the upstream as of the last fetch: a test expecting `updated` afterwards needs a
   new remote commit.
 
-- Partial copies sync both ways: any operation that resets the managed clone (discard, push to a branch) must also
-  reset the copies (`resetPartialCopies` → `markCopySynced`), or their newer edits flow back into the clone.
+- Partial copies sync both ways: Discard must also reset the copies (`resetPartialCopies` → `markCopySynced`), or
+  their newer edits flow back into the clone. Push to a branch must not: since the v2 record (content hashes) a pushed
+  file equals its record entry and takes the team version anyway, while `markCopySynced` would overwrite a copy edit
+  saved after the commit (request 19, 2026-11-28; the 0.2.0 rule dated from the mtime-based v1 record).
 - On Windows the **parent** of a registered plugin folder cannot be deleted or renamed while the plugin is registered
   (EPERM, possibly left half-deleted), in any window that registered it; the registered folder itself, its files and
   subfolders can be edited and deleted, and after `removePlugin` the parent can be deleted at once (probe, Cursor
