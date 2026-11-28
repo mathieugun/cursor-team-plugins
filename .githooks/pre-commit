@@ -1,0 +1,14 @@
+#!/usr/bin/env python3
+"""Run the same Biome lint as CI before a commit.
+
+Enable once per clone: git config core.hooksPath .githooks
+"""
+import shutil
+import subprocess
+import sys
+
+biome = shutil.which("biome")
+if biome is None:
+    sys.exit("pre-commit: biome is not on PATH (install: docs/development.md, JavaScript lint)")
+
+sys.exit(subprocess.call([biome, "lint", "--error-on-warnings", "extension.js", "lib", "scripts", "test"]))

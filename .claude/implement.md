@@ -23,12 +23,10 @@ Read by the user-level `/implement` skill. Requests and plans follow the skill's
   `vscode.cursor` throws "CANNOT use API proposal".
 
 ## Tests
-No node on PATH: run with Cursor's runtime.
-`ELECTRON_RUN_AS_NODE=1 "$LOCALAPPDATA/Programs/cursor/Cursor.exe" scripts/test.js`
-(`--test` needs explicit files under this runtime; scripts/test.js lists them).
+`node scripts/test.js` (Node 24 on PATH).
 Lint: `biome lint --error-on-warnings extension.js lib scripts test` (standalone Biome 2.6.9 on PATH, in
-`~/.local/bin`; CI runs the same, so a warning fails CI): fix a warning (an unused parameter is removed, or prefixed
-with `_` when its position is needed).
+`~/.local/bin`; the pre-commit hook, CI and the agents' `Stop`/`SubagentStop` hook run the same, so a warning fails
+them all): fix a warning (an unused parameter is removed, or prefixed with `_` when its position is needed).
 
 ## Keep in step
 README.md (Cursor users: features, install, usage, main limits), docs/development.md (internals, platform notes,
