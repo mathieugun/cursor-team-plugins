@@ -32,7 +32,8 @@ module.exports = {
     };
 
     t.step('wait for review to be registered');
-    await t.waitFor(() => hook.registrations()['team-test:review'], 'review registered', 60000);
+    const registered = await t.waitFor(() => hook.registrations()['team-test:review'], 'review registered', 60000);
+    const clone = path.dirname(registered);
     await t.idle();
     const key = hook.states()[0].key;
     assert.equal(hook.badge(), null);
@@ -103,6 +104,31 @@ module.exports = {
     t.step('Show changes on a seen item shows its last change');
     await vscode.commands.executeCommand('teamPlugins.showChanges', { kind: 'skill', key: 'team-test:review/skills/code-review' });
     await t.waitFor(() => tabStarting('code-review: last change (Alice, '), 'the last change tab');
+
+    t.step('delete the seen skill through a partial copy');
+    await hook.check('item:team-test:review/skills/security-check', false);
+    const copy = await t.waitFor(() => {
+      const dir = hook.registrations()['team-test:review'];
+      return dir?.includes(`${path.sep}filtered${path.sep}`) && dir;
+    }, 'review registered from a filtered copy');
+    await t.idle();
+    hook.clearCalls();
+    const skillDoc = path.join('skills', 'code-review', 'SKILL.md');
+    const source = path.join(clone, 'review', skillDoc);
+    fs.unlinkSync(path.join(copy, skillDoc));
+    await t.waitFor(() => !fs.existsSync(source) && !t.find(CODE_REVIEW), 'the local deletion to reach the clone and view');
+    await t.idle();
+    assert.deepEqual(hook.updates(key).counts, { new: 0, updated: 0, removed: 0 });
+    assert.equal(hook.badge(), null);
+    assert.equal(t.messages('showInformationMessage').length, 0);
+
+    t.step('discard the local deletion and check the restored skill');
+    hook.respond((c) => (c.kind === 'showWarningMessage' && c.buttons.includes('Discard') ? 'Discard' : undefined));
+    await vscode.commands.executeCommand('teamPlugins.discardLocalChanges', { repo: key });
+    await t.waitFor(() => fs.existsSync(source) && t.find(CODE_REVIEW)?.description === 'skill', 'the unmarked skill to be restored');
+    await t.idle();
+    assert.deepEqual(hook.updates(key).counts, { new: 0, updated: 0, removed: 0 });
+    assert.equal(hook.badge(), null);
     t.noSpinner();
   },
 };

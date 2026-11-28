@@ -23,7 +23,8 @@ only the current version, with no history). Internals, platform notes, detailed 
   in sync both ways), `git`, `sync` (managed clone: `syncManaged`, `localChanges`, `checkConflicts`, `gitVersionOf`, `parseStatusZ`,
   `discardLocalChanges`, `changedPaths`, `withLock`, `withLockSync`, `removeStaleIndexLock`, `removeLeftovers`, `recentlySynced`,
   `revFileArgs`, `checkRemote`), `updates` (`parseLsTree`, `parseLog`, `parseIdent`, `itemPath`, `pluginPath`, `updateItems`, `serverEntry`,
-  `serverText`, `fingerprints`, `lastChanges`, `baselineRecord`, `computeMarks`, `markSeen`, `readSeen`, `writeSeen`,
+  `serverText`, `fingerprints`, `lastChanges`, `baselineRecord`, `computeMarks`, `entryOf`, `markSeen`, `mergeSeen`,
+  `readSeen`, `writeSeen`, `updateSeen`, `mcpFilesOf`, `readHead`,
   `noticeEntries`, `noticeText`, `noticeMessage`, `ago`, `shortDate`, `lastLine`, `readGitData`, `rangeHashes`,
   `treeFiles`: the update summary), `contribute` (`commitAndPush`, `pushToBranch`, `defaultBranchName`), `pullRequest` (`parseRemote`,
   `pullRequestPage`: the hosting service's new pull request page of a pushed branch), `cursorApi`,
@@ -288,10 +289,11 @@ line endings, as CI checks it out, and uses the newest server's node, else `node
   activation, and the other steps tick on `onSettingChanged`. `onCommand` of an extension's own command fires only
   through the workbench, so it is not used. Right after startup `Get started` opens the generic Welcome page until
   Cursor has registered the walkthrough (a few seconds).
-- What the user has seen is `<storage>/seen/<key>.json` (outside `state/`, watched: marking an item seen applies in
-  every window); marks compare fingerprints at HEAD (tree or blob ids, an MCP server's entry hash), so uncommitted
-  edits never mark; the user's own changes (author email = `git var GIT_AUTHOR_IDENT`, which honours the
-  environment unlike `git config user.email`) are recorded, not marked.
+- What the user has seen is `<storage>/seen/<key>.json` (version 1, outside `state/`, watched across windows).
+  Marks use fingerprints and removal or rename evidence from one resolved HEAD. All changes to the seen file use
+  `updateSeen` under its `.json.lock`, and changed JSON is published by renaming a unique temporary file. The user's
+  own changes (author email = `git var GIT_AUTHOR_IDENT`, which honours the environment unlike `git config user.email`)
+  are recorded without a mark.
 - `vscode.changes` takes `[label, left, right]` and both sides are required (an absent side is a
   `team-plugins-git:` URI with an empty rev); a `FileDecoration` badge is at most 2 characters (`PN`, `PM`).
 - Cursor drops a skill, rule, command or agent whose frontmatter gray-matter can't parse, silently (no log line), and

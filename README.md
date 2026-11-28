@@ -331,13 +331,14 @@ The repositories are checked at startup, every `teamPlugins.updateIntervalMinute
 means only at startup) and when you click **Sync now** (the sync icon of the view). Start a new chat to use the new
 versions.
 
-After an update, the notification says who changed what ("Alice updated code-review"). The view marks the items added
-or updated since you last looked (`new` or `updated` after the item's kind, a coloured `N` or `M`), shows the counts on
-the plugin and repository rows and a number on the view's icon. **What changed** (in the notification, on a
-repository's right-click menu, or in the command palette) lists them and opens each one's diff against the version you
-last saw; **Show changes** on an item does the same, or shows its last change when it has no mark. Opening an item's
-diff or its file marks it seen, and **Mark all as seen** clears a repository. Your own changes are never marked. The
-tooltip of an item or plugin says who last changed it, and when.
+After an update, the notification says who changed what ("Alice updated code-review"). The view marks items with
+committed additions or updates since you last looked (`new` or `updated` after the item's kind, a coloured `N` or
+`M`). It shows counts on the plugin and repository rows and a number on the view's icon. **What changed** (in the
+notification, on a repository's right-click menu, or in the command palette) lists committed additions, updates and
+removals and opens each one's diff against the version you last saw. **Show changes** on an item does the same, or
+shows its last change when it has no mark. Opening an item's diff or its file marks it seen. **Mark all as seen**
+acknowledges the changes in the list. Your own changes are never marked. The tooltip of an item or plugin says who
+last changed it, and when.
 
 When the server can't be reached (offline, VPN down), the plugins already cloned keep working and the update is
 retried a few minutes later.
