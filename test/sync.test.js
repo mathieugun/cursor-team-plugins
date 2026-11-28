@@ -859,11 +859,39 @@ test('changedPaths throws when git status fails', async () => {
   await assert.rejects(() => sync.changedPaths({ run, repo: '/nowhere' }), /git status failed/);
 });
 
+// The removeTree tests clean up with the real fs functions, captured before any mock, and without removeTree: a broken
+// removeTree must neither consume a mocked failure in the cleanup nor leave a tree nobody can enter.
+const realRmSync = fs.rmSync;
+const realChmodSync = fs.chmodSync;
+function forceRemove(dir) {
+  const open = (p) => {
+    let st;
+    try {
+      st = fs.lstatSync(p);
+    } catch {
+      return;
+    }
+    if (st.isSymbolicLink()) {
+      return;
+    }
+    realChmodSync(p, st.isDirectory() ? 0o700 : 0o600);
+    if (st.isDirectory()) {
+      for (const name of fs.readdirSync(p)) {
+        open(path.join(p, name));
+      }
+    }
+  };
+  open(dir);
+  realRmSync(dir, { recursive: true, force: true });
+}
+
 // POSIX: a folder without write permission makes the first rmSync fail, so removeTree takes its fallback, which must
-// add write permission without dropping the folders' execute bit (or nothing inside can be reached).
-test('removeTree removes a tree whose folders are read-only', { skip: process.platform === 'win32' }, (t) => {
+// add write permission without dropping the folders' execute bit (or nothing inside can be reached). Root removes
+// read-only folders at the first try, so the fallback would never run.
+const posixNotRoot = process.platform !== 'win32' && process.getuid?.() !== 0;
+test('removeTree removes a tree whose folders are read-only', { skip: !posixNotRoot }, (t) => {
   const root = tmpDir();
-  t.after(() => rmDir(root));
+  t.after(() => forceRemove(root));
   const tree = path.join(root, 'tree');
   writeFile(tree, 'a/b/file.txt', 'x');
   fs.chmodSync(path.join(tree, 'a', 'b'), 0o555);
@@ -872,18 +900,71 @@ test('removeTree removes a tree whose folders are read-only', { skip: process.pl
   assert.equal(fs.existsSync(tree), false);
 });
 
-// The fallback never follows a link: the permissions of a folder the tree links to stay as they were.
-test('removeTree leaves the target of a link alone', { skip: process.platform === 'win32' }, (t) => {
+// Makes the next fs.rmSync fail with EPERM, as git's read-only files make it fail on Windows, so removeTree takes its
+// fallback on every platform. Returns the number of rmSync calls so far.
+function failFirstRmSync(t) {
+  let calls = 0;
+  t.mock.method(fs, 'rmSync', (target, options) => {
+    calls++;
+    if (calls === 1) {
+      throw Object.assign(new Error('mocked removal failure'), { code: 'EPERM' });
+    }
+    return realRmSync(target, options);
+  });
+  return () => calls;
+}
+
+test('removeTree removes read-only files when the first removal fails', (t) => {
   const root = tmpDir();
-  t.after(() => rmDir(root));
-  const outside = path.join(root, 'outside');
-  fs.mkdirSync(outside, { mode: 0o755 });
-  fs.chmodSync(outside, 0o755);
+  t.after(() => forceRemove(root));
   const tree = path.join(root, 'tree');
-  writeFile(tree, 'ro/file.txt', 'x');
-  fs.symlinkSync(outside, path.join(tree, 'link'));
-  fs.chmodSync(path.join(tree, 'ro'), 0o555);
+  fs.chmodSync(writeFile(tree, 'a/b/file.txt', 'x'), 0o444);
+  fs.chmodSync(writeFile(tree, 'top.txt', 'y'), 0o444);
+  const rmCalls = failFirstRmSync(t);
+  const folderModes = {};
+  t.mock.method(fs, 'chmodSync', (target, mode) => {
+    if (fs.lstatSync(target).isDirectory()) {
+      folderModes[fwd(path.relative(tree, target)) || '.'] = mode;
+    }
+    return realChmodSync(target, mode);
+  });
   sync.removeTree(tree);
+  t.mock.restoreAll();
+  assert.equal(rmCalls(), 2);
   assert.equal(fs.existsSync(tree), false);
-  assert.equal(fs.statSync(outside).mode & 0o777, 0o755);
+  assert.deepEqual(Object.keys(folderModes).sort(), ['.', 'a', 'a/b']);
+  // POSIX: a folder without its owner's execute bit can't be entered, so nothing inside could be removed (Windows has
+  // no such bit). Only the owner's bit: a umask such as 077 creates the folders without the others.
+  if (process.platform !== 'win32') {
+    for (const [folder, mode] of Object.entries(folderModes)) {
+      assert.equal(mode & 0o100, 0o100, `${folder} lost its execute bit: ${mode.toString(8)}`);
+    }
+  }
+});
+
+// The fallback never follows a link: a read-only file the tree links to stays read-only (on Linux and macOS a chmod
+// of the link changes its target; on Windows it doesn't, so there the test only checks the target is left intact).
+test('removeTree leaves the target of a link alone', (t) => {
+  const root = tmpDir();
+  t.after(() => forceRemove(root));
+  const outside = writeFile(root, 'outside.txt', 'keep');
+  fs.chmodSync(outside, 0o444);
+  const before = fs.statSync(outside).mode;
+  const tree = path.join(root, 'tree');
+  writeFile(tree, 'a/file.txt', 'x');
+  try {
+    fs.symlinkSync(outside, path.join(tree, 'a', 'link'), 'file');
+  } catch (err) {
+    if (err.code === 'EPERM') {
+      return t.skip('creating a file symlink needs a permission this account lacks');
+    }
+    throw err;
+  }
+  const rmCalls = failFirstRmSync(t);
+  sync.removeTree(tree);
+  t.mock.restoreAll();
+  assert.equal(rmCalls(), 2);
+  assert.equal(fs.existsSync(tree), false);
+  assert.equal(fs.statSync(outside).mode, before);
+  assert.equal(fs.readFileSync(outside, 'utf8'), 'keep');
 });

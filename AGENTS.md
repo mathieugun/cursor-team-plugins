@@ -41,7 +41,8 @@ only the current version, with no history). Internals, platform notes, detailed 
   repository for live tests, from `test/fixtures/team-repo`; `--name` gives a copy another repository name),
   `live-test.js` (isolated-Cursor scenario runner, one launch per scenario, root `%TEMP%\tp-live`), `live_check.py`
   (hand live tests in the user's Cursor: logs since an install or reload, installed files against the working tree,
-  install, settings backup and restore; local or over SSH; stdlib Python, not packaged), `make_icon.py` (regenerates `resources/icon.png`: three stacked package boxes on a blue rounded square, drawn from no source image: `uv run --with pillow python scripts/make_icon.py`; not packaged). Nothing under `lib/` or `scripts/`
+  install, settings backup and restore; local or over SSH; `test`: the suite here and on a Linux host at once, before
+  a merge; stdlib Python, not packaged), `make_icon.py` (regenerates `resources/icon.png`: three stacked package boxes on a blue rounded square, drawn from no source image: `uv run --with pillow python scripts/make_icon.py`; not packaged). Nothing under `lib/` or `scripts/`
   may require `vscode`.
 - `test/`: one test file per module (`*.test.js`, `node:test`), `helpers.js` for fixtures. Tests use only local bare
   git repositories, no network. `fixtures/team-repo/` is the test team repository (plugins `review`: skills
@@ -93,13 +94,18 @@ holds one commit when it is merged: fold follow-up fixes and doc edits into it (
 belongs to no feature (a review, a batch of new requests, an idea, a project rule) is one commit directly on `main`.
 Never rewrite a pushed commit.
 When it is ready, merge it into `main` locally (`git merge --no-ff`): one maintainer, so no pull request.
+Before the merge, the suite passes on Windows and on Linux: `python scripts/live_check.py test --host <ssh host>` runs
+it on this machine and on a Linux host at once, on the working tree, and fails if either run fails; the lint runs in
+the pre-commit hook. The branch is not pushed: CI on `main` only confirms. When CI fails where both runs passed, find
+out why the environments differ before changing anything on `main`.
 Get the user's explicit approval before any push, including a release push. Delete the branch after the push succeeds.
 
 Release (from `main`, after the merge): bump `version`, commit, `git tag v<version>`, `git push origin main v<version>`.
 The release workflow runs on the tag, so a tag is only ever made on `main`.
 
 On a Linux machine with a Cursor server (a Remote-SSH host), the suite runs with the server's node:
-`~/.cursor-server/bin/linux-x64/<commit>/node scripts/test.js`.
+`~/.cursor-server/bin/linux-x64/<commit>/node scripts/test.js` (`live_check.py test` sends the working tree with LF
+line endings, as CI checks it out, and uses the newest server's node, else `node` on `PATH`).
 
 ## Why the code is shaped this way (Cursor 3.31)
 

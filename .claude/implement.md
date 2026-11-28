@@ -23,7 +23,8 @@ Read by the user-level `/implement` skill. Requests and plans follow the skill's
   `vscode.cursor` throws "CANNOT use API proposal".
 
 ## Tests
-`node scripts/test.js` (Node 24 on PATH).
+`node scripts/test.js` (Node 24 on PATH). Before a merge into `main`, both platforms:
+`python scripts/live_check.py test --host gnosis` (Windows here and Linux on gnosis at once; no user step).
 Lint: `biome lint --error-on-warnings extension.js lib scripts test` (standalone Biome 2.6.9 on PATH, in
 `~/.local/bin`; the pre-commit hook, CI and the agents' `Stop`/`SubagentStop` hook run the same, so a warning fails
 them all): fix a warning (an unused parameter is removed, or prefixed with `_` when its position is needed).
@@ -105,8 +106,10 @@ under the temp folder, nothing installed) may be run without asking.
   it"): a plan that deletes user files remotely needs another way (live test 0.8.0, Linux host, 2026-11-25).
 - File watchers on a Linux remote miss subfolders that appear together with their parent (see `watchTree` in
   AGENTS.md): test watcher changes there with `mkdir -p a/b` and a write in `b`, not only a write in an existing folder.
-- Run the suite on a Linux remote with the Cursor server's node (`git archive HEAD | ssh <host> 'tar -x -C <dir>'`,
-  then `~/.cursor-server/bin/linux-x64/<commit>/node scripts/test.js`).
+- Run the suite on a Linux remote with `python scripts/live_check.py test --host <host>` (the Cursor server's node, the
+  working tree with LF endings). A plain `git archive HEAD` sends CRLF files here (`core.autocrlf=true`): CI checks
+  out LF, so the script archives with `core.autocrlf=false` (request 24, 2026-11-28: `patch` of an LF diff failed
+  on the archived files with "different line endings").
 
 - On Windows `revealFileInOS` opens Explorer behind the Cursor window, so the user sees nothing happen: open the
   files in an editor instead (`showTextDocument`).

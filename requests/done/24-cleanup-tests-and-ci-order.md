@@ -9,7 +9,7 @@ When `fs.rmSync` fails, `removeTree` makes the tree writable and tries again. Un
 every entry, directories included. On Linux that removed the execute bit, so nothing inside could be read or deleted.
 A failed cleanup on a Remote-SSH host would have left a tree nobody could enter. `chmod` also followed links and could
 change a file outside the tree. Windows ignores the execute bit, so the bug surfaced only by accident, through the
-mocked EPERM of a `movePlugin` test on the new Ubuntu job. [removeTree](../lib/sync.js#L9)
+mocked EPERM of a `movePlugin` test on the new Ubuntu job. [removeTree](../../lib/sync.js#L9)
 
 Expected: `sync.test.js` covers the fallback directly.
 
@@ -29,7 +29,21 @@ Expected: the branch workflow in `AGENTS.md` and the release notes in `docs/deve
 the user's approval, as for any push), wait for the Checks run of that commit to pass on Ubuntu and Windows, then
 merge into `main` and push `main`. A red branch run is fixed on the branch, not on `main`.
 
+### Decision (2026-11-28)
+
+The user chose not to push branches for CI: a Linux machine (a Remote-SSH host) is always available, so the suite
+must pass on Windows and on Linux before the merge, with no manual step. `python scripts/live_check.py test --host
+<ssh host>` runs both at once on the working tree (LF line endings on the host, as CI checks out). The branch is not
+pushed; CI on `main` only confirms, and a CI failure where both runs passed is investigated before anything changes on
+`main`. `AGENTS.md` and `docs/development.md` say so in the same words.
+
+Part 1 was partly done by b875266 (two POSIX tests). Its link test linked a `0o755` folder, which `st.mode | 0o200`
+leaves unchanged, so it failed against the old code only through the folder bug: it is replaced by a link to a
+read-only file, and a mocked first `rmSync` failure runs the fallback on every platform.
+
 ## Acceptance
 
 - The three test cases pass on `main` after the merge, and each one fails on Linux when 1b8b285 is reverted locally.
-- `AGENTS.md` and `docs/development.md` describe the push, wait for CI, then merge order in the same words.
+- `AGENTS.md` and `docs/development.md` describe the same order in the same words: both suites pass (`live_check.py
+  test --host`, Windows and Linux) before the merge, the branch is not pushed, CI on `main` only confirms (this
+  replaces the push and wait order of part 2, see the decision).
