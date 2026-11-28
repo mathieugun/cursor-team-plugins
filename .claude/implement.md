@@ -230,5 +230,9 @@ under the temp folder, nothing installed) may be run without asking.
   case tests its parent's rule, not the folder's (Codex review of request 25): probe a name inside the folder, and
   test mixed setups (case-sensitive folder inside a case-insensitive one) when a design depends on the probe.
 
+- On Git 2.47 for Windows, `git ls-tree -r -t --name-only HEAD` still lists `SKILL.md` after a local deletion.
+  After committing the deletion, it still lists the skill directory when another tracked file remains. Check for
+  the committed document itself to distinguish those cases (request 23, 2026-11-28).
+
 ## Implementer lessons
 <!-- One line per project-specific mistake seen in review. -->

@@ -365,20 +365,23 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
   oid, commit, path, kind, name } } }`): the item's fingerprint when last seen, HEAD then (the left side of its diff)
   and what it needs to list the item when it is gone. It lives outside `state/` and has its own watcher in
   `startWatchers` (`state/*.json` triggers a full apply too, but this one only needs the marks again): marking an item
-  seen in one window applies in every window. `writeSeen` writes only when the JSON text differs from the file's, so
-  the watcher never loops. A missing, damaged or other-version file is "never seen": a baseline.
+  seen in one window applies in every window. Automatic marks and acknowledgments use `updateSeen` to read and
+  update the record under `seen/<key>.json.lock`. `writeSeen` publishes changed JSON by renaming a unique temporary
+  file in the same directory. A missing, damaged or other-version file is "never seen": a baseline.
 - Fingerprints (`lib/updates.js`) are read at HEAD, so uncommitted edits never mark: the object id of a skill's folder,
-  rule, command or agent file (one `git ls-tree -r -t -z HEAD` per HEAD), and for an MCP server the SHA-1 of its entry
-  in the MCP file at HEAD (`git show HEAD:<file>`; two servers of a file change independently).
+  rule, command or agent file (`git ls-tree -r -t -z`), and for an MCP server the SHA-1 of its entry in the MCP file
+  (`git show <commit>:<file>`; two servers of a file change independently). The tree, file contents and history use
+  one resolved commit hash.
 - The git pass is cached per HEAD (and per set of MCP files) in `s.updates.git`: the tree, the MCP files, the last 1000
   commits with their paths (`git log -z --name-only`, parsed by `parseLog`), and the user's email. A plain `rev-parse
   HEAD` runs at every apply. "Own" changes are those whose author email equals `git var GIT_AUTHOR_IDENT`'s: it honours
   the `GIT_AUTHOR_*` environment, unlike `git config user.email`; with no identity (exit 128) nothing is own.
 - `computeMarks` compares fingerprints with the record. Baseline (no record, or a clone or a branch switch, flagged
   `updatesBaseline` by `syncRepo`): everything is recorded, nothing marked. Otherwise an item whose fingerprint
-  differs is `updated`, one without a record is `new`, a record without an item is `removed` (listed with its stored
-  path and kind), and a change whose last commit is the user's own is recorded instead of marked. A record id that a
-  `renamed` entry of `marketplace.json` leads to an item moves to it. An item that is not committed is left alone.
+  differs is `updated`, one without a record is `new`, and a change whose last commit is the user's own is recorded
+  instead of marked. A missing working item is `removed` when HEAD confirms the absence of its recorded file,
+  skill document or named MCP entry. This checks both standard MCP filenames and preserves the record when evidence
+  is unavailable. A committed `renamed` entry moves the record when HEAD confirms both sides of the move.
 - The sync's notification is not shown by `notifyAfterSync` any more: it only stores `s.updateNotice` (`from`, `to`,
   the commit count, the kept files). `refreshUpdates` shows it once the marks of the apply that follows are computed,
   naming the marked items whose last commit is in `from..to`, the enabled ones first (`noticeEntries`, `noticeText`).
@@ -390,6 +393,8 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
   `server`, only that server's entry (`serverText`). A skill with several files opens `vscode.changes(title, [[label,
   left, right], ...])`: the handler wants both sides of every entry, so an absent side is a `team-plugins-git:` URI
   with an empty rev (Cursor 3.32, VS Code 1.147). `vscode.diff` is used for a single file.
+  Acknowledgments use the entries and commit shown. Under the seen lock, they merge into the latest record when
+  HEAD and the corresponding seen entries still match the snapshot.
 - Marks are file decorations too (`itemDecoration`): the badge holds at most two characters (`FileDecoration.validate`
   throws on more), so a project item with a mark reads `PN` or `PM`. The number on the view's icon is
   `TreeView.badge`, set after every `refreshUpdates`.

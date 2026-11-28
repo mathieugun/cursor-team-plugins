@@ -997,67 +997,61 @@ async function updateRepo(d, s, run) {
     return;
   }
   const items = updates.updateItems(cat.plugins, d.dir);
-  const mcpKey = [...new Set(items.filter((i) => i.kind === 'mcp').map((i) => i.path))].sort().join('\n');
-  const head = await run(['rev-parse', 'HEAD'], d.dir);
-  let git = null;
-  if (head.code === 0 && head.stdout !== '') {
+  let summary = null;
+  await updates.updateSeen(seenFile(d), async (latest) => {
+    const record = s.updatesBaseline ? null : latest;
+    const head = await updates.readHead({ run, repoDir: d.dir });
+    if (!head) {
+      return undefined;
+    }
+    const mcpFiles = updates.mcpFilesOf([...items, ...Object.values(record?.items || {})]);
+    const mcpKey = JSON.stringify(mcpFiles);
     const cached = s.updates && s.updates.git;
-    git =
-      cached && cached.head === head.stdout && cached.mcpKey === mcpKey
+    const git =
+      cached && cached.complete && cached.head === head && cached.mcpKey === mcpKey
         ? cached
-        : await updates.readGitData({ run, repoDir: d.dir, items });
-    if (git) {
-      git.mcpKey = mcpKey;
+        : await updates.readGitData({ run, repoDir: d.dir, head, mcpFiles });
+    if (!git) {
+      return undefined;
     }
-  }
-  if (!git || git.tree.size === 0) {
-    s.updates = null; // no commit yet, or git could not list it: no marks rather than wrong ones
-    return;
-  }
-  const file = seenFile(d);
-  const record = s.updatesBaseline ? null : updates.readSeen(file);
-  const fps = updates.fingerprints(items, git.tree, git.mcpTexts);
-  const paths = new Map(items.map((i) => [i.id, i.path]));
-  for (const p of cat.plugins) {
-    paths.set(p.name, updates.pluginPath(p, d.dir));
-  }
-  for (const [id, entry] of Object.entries((record && record.items) || {})) {
-    if (!paths.has(id) && entry && typeof entry.path === 'string') {
-      paths.set(id, entry.path); // a removed item: its last change is the one that removed it
+    git.mcpKey = mcpKey;
+    const fps = updates.fingerprints(items, git.tree, git.mcpTexts);
+    const paths = new Map(items.map((i) => [i.id, i.path]));
+    for (const p of cat.plugins) {
+      paths.set(p.name, updates.pluginPath(p, d.dir));
     }
-  }
-  const last = updates.lastChanges(paths, git.commits);
-  const result = updates.computeMarks({
-    items,
-    fps,
-    record,
-    last,
-    self: git.self,
-    head: git.head,
-    renamed: cat.renamed,
-    plugins: cat.plugins,
+    for (const [id, entry] of Object.entries(record?.items || {})) {
+      if (!paths.has(id) && entry && typeof entry.path === 'string') {
+        paths.set(id, entry.path); // a removed item: its last change is the one that removed it
+      }
+    }
+    const last = updates.lastChanges(paths, git.commits);
+    const result = updates.computeMarks({
+      items,
+      fps,
+      record,
+      last,
+      self: git.self,
+      head: git.head,
+      git,
+      renamed: git.renamed,
+      plugins: cat.plugins,
+    });
+    summary = {
+      git,
+      items,
+      fps,
+      last,
+      marks: result.marks,
+      removed: result.removed,
+      record: result.record,
+      counts: updateCounts(result.marks, result.removed),
+    };
+    return result.changed ? result.record : undefined;
   });
-  s.updatesBaseline = false;
-  if (result.changed) {
-    writeSeenRecord(d, result.record);
-  }
-  s.updates = {
-    git,
-    items,
-    fps,
-    last,
-    marks: result.marks,
-    removed: result.removed,
-    record: result.record,
-    counts: updateCounts(result.marks, result.removed),
-  };
-}
-
-function writeSeenRecord(d, record) {
-  try {
-    updates.writeSeen(seenFile(d), record);
-  } catch (err) {
-    logOnce(`seen:${d.key}:${err.message}`, `cannot write what you have seen of ${labelOf(d)}: ${err.message}`);
+  s.updates = summary;
+  if (summary) {
+    s.updatesBaseline = false;
   }
 }
 
@@ -1117,50 +1111,26 @@ function updateBadge() {
     total > 0 ? { value: total, tooltip: `${total} new or updated team plugin item(s) since you last looked` } : undefined;
 }
 
-// Marks items of d as seen: ids are local ids of marked or removed items. The record is written, the view follows
-// at once and the other windows through the seen/ watcher.
-function markItemsSeen(d, ids) {
-  const u = stateOf(d.key).updates;
-  if (!u) {
+// Acknowledge the entries from the displayed summary. Other windows refresh through the seen/ watcher.
+async function markItemsSeen(d, u, entries) {
+  const changes = entries.map((item) => ({
+    id: item.id,
+    previous: u.record.items[item.id],
+    entry: item.verb === 'removed' ? null : updates.entryOf(item, u.fps.get(item.id), u.git.head),
+  }));
+  const run = makeGit(gitPath());
+  try {
+    await updates.updateSeen(seenFile(d), async (latest) => {
+      const head = await updates.readHead({ run, repoDir: d.dir });
+      return head === u.git.head ? updates.mergeSeen(latest, changes) : undefined;
+    });
+  } catch (err) {
+    const message = `Cannot mark changes in ${labelOf(d)} as seen: ${err.message}`;
+    log(message);
+    ui.showErrorMessage(message);
     return;
   }
-  let record = updates.readSeen(seenFile(d)) || u.record;
-  let touched = false;
-  for (const id of ids) {
-    const item = u.items.find((i) => i.id === id);
-    if (u.marks.has(id) && item && u.fps.has(id)) {
-      record = updates.markSeen(record, id, { oid: u.fps.get(id), commit: u.git.head, path: item.path, kind: item.kind, name: item.name });
-      u.marks.delete(id);
-      touched = true;
-    } else if (u.removed.some((r) => r.id === id)) {
-      record = updates.markSeen(record, id, null);
-      u.removed = u.removed.filter((r) => r.id !== id);
-      touched = true;
-    }
-  }
-  if (touched) {
-    afterMarkedSeen(d, u, record);
-  }
-}
-
-// Mark all as seen: everything as it is now.
-function markAllSeen(d) {
-  const u = stateOf(d.key).updates;
-  if (!u) {
-    return;
-  }
-  u.marks.clear();
-  u.removed = [];
-  afterMarkedSeen(d, u, updates.baselineRecord(u.items, u.fps, u.git.head));
-}
-
-function afterMarkedSeen(d, u, record) {
-  u.record = record;
-  u.counts = updateCounts(u.marks, u.removed);
-  writeSeenRecord(d, record);
-  updateBadge();
-  treeProvider.refresh();
-  debouncedApply();
+  await apply();
 }
 
 // An item node of the view ({ kind, key }, key = merged id): its repository, summary and item; null when the update
@@ -1181,10 +1151,10 @@ function updateItemOf(node) {
 // ('' for an item that was removed). verb: 'new' | 'updated' | 'removed'.
 function seenDiff(u, id, verb) {
   if (verb === 'new') {
-    return { leftRev: '', rightRev: 'HEAD' };
+    return { leftRev: '', rightRev: u.git.head };
   }
   const entry = verb === 'removed' ? u.removed.find((r) => r.id === id) : u.record.items[id];
-  return { leftRev: (entry && entry.commit) || '', rightRev: verb === 'removed' ? '' : 'HEAD' };
+  return { leftRev: (entry && entry.commit) || '', rightRev: verb === 'removed' ? '' : u.git.head };
 }
 
 function commitTitle(name, commit) {
@@ -1221,7 +1191,7 @@ async function openItemDiff(d, item, { leftRev, rightRev, title }) {
 async function openSeenDiff(d, u, entry) {
   const { leftRev, rightRev } = seenDiff(u, entry.id, entry.verb);
   await openItemDiff(d, entry, { leftRev, rightRev, title: commitTitle(entry.name, u.last.get(entry.id)) });
-  markItemsSeen(d, [entry.id]);
+  await markItemsSeen(d, u, [entry]);
 }
 
 // The marked and the removed items of a repository, in the order the view shows them.
@@ -1286,7 +1256,7 @@ async function whatChangedCommand(arg) {
     return;
   }
   if (picked.label === MARK_ALL) {
-    markAllSeen(d);
+    await markItemsSeen(d, u, entries);
   } else if (picked.entry) {
     await openSeenDiff(d, u, picked.entry);
   }
@@ -1311,7 +1281,7 @@ async function showChangesCommand(node) {
   const parent = await makeGit(gitPath())(['rev-parse', `${commit.hash}^`], d.dir);
   await openItemDiff(d, item, {
     leftRev: parent.code === 0 ? parent.stdout : '',
-    rightRev: 'HEAD',
+    rightRev: u.git.head,
     title: `${item.name}: last change (${commit.author}, ${updates.ago(commit.date, new Date())})`,
   });
 }
@@ -3046,11 +3016,11 @@ function registerCommands(context) {
   reg('teamPlugins.removeFromProject', (node) => removeFromProjectCommand(node));
   reg('teamPlugins.openItem', async (node) => {
     if (node && node.file) {
+      const found = updateItemOf(node);
       // like the Explorer's single click: a preview that leaves the focus in the view, so F2 still renames the row
       const editor = await vscode.window.showTextDocument(vscode.Uri.file(node.file), { preview: true, preserveFocus: true });
-      const found = updateItemOf(node);
       if (found && found.u.marks.has(found.item.id)) {
-        markItemsSeen(found.d, [found.item.id]); // opening an item counts as seeing it
+        await markItemsSeen(found.d, found.u, [found.item]); // opening an item counts as seeing it
       }
       return editor;
     }

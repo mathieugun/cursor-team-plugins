@@ -223,6 +223,7 @@ test('computeMarks: removed items', () => {
     ['p/skills/gone', commitBy('c1', 'alice@example.com', 'Alice')],
     ['p/skills/mine', commitBy('c2', 'me@x.org', 'Me')],
   ]);
+  const evidence = { tree: new Map([['p/skills/a/SKILL.md', '1']]) };
   const r = updates.computeMarks({
     items: [item('p/skills/a')],
     fps: new Map([['p/skills/a', '1']]),
@@ -230,6 +231,7 @@ test('computeMarks: removed items', () => {
     last,
     self: 'me@x.org',
     head: 'H',
+    git: evidence,
     renamed: {},
   });
   assert.deepEqual(r.removed, [{ id: 'p/skills/gone', path: 'p/skills/gone', kind: 'skill', name: 'gone', commit: 'c0' }]);
@@ -242,28 +244,40 @@ test('computeMarks: removed items', () => {
     last,
     self: '',
     head: 'H',
+    git: evidence,
     renamed: {},
   });
   assert.deepEqual(noSelf.removed.map((x) => x.id), ['p/skills/gone', 'p/skills/mine']);
 });
 
 test('computeMarks: a rename moves the record', () => {
-  const record = { version: 1, items: { 'review/skills/old': rec('1') } };
+  const record = { version: 1, items: { 'review/skills/old': rec('1', { path: 'review/skills/old', name: 'old' }) } };
   const renamed = { 'review/skills/old': 'review/skills/new' };
-  const base = { items: [item('review/skills/new')], record, last: new Map(), self: '', head: 'H', renamed };
+  const evidence = { tree: new Map([['review/skills/new/SKILL.md', 'doc']]) };
+  const base = { items: [item('review/skills/new')], record, last: new Map(), self: '', head: 'H', git: evidence, renamed };
   const changedContent = updates.computeMarks({ ...base, fps: new Map([['review/skills/new', '2']]) });
   assert.deepEqual([...changedContent.marks], [['review/skills/new', 'updated']]);
   assert.deepEqual(changedContent.removed, []);
   assert.equal(changedContent.changed, true);
   assert.deepEqual(Object.keys(changedContent.record.items), ['review/skills/new']);
+  assert.equal(changedContent.record.items['review/skills/new'].commit, 'old');
+  const missingAfterRename = updates.computeMarks({ ...base, items: [], fps: new Map(), record: changedContent.record });
+  assert.deepEqual(missingAfterRename.removed, []);
+  assert.deepEqual(missingAfterRename.record, changedContent.record);
   const sameContent = updates.computeMarks({ ...base, fps: new Map([['review/skills/new', '1']]) });
   assert.equal(sameContent.marks.size, 0);
   assert.equal(sameContent.changed, true);
   assert.equal(sameContent.record.items['review/skills/new'].oid, '1');
+  assert.equal(sameContent.record.items['review/skills/new'].path, 'review/skills/new');
   // without the record of the rename the old item is removed and the new one is new
   const unrecorded = updates.computeMarks({ ...base, renamed: {}, fps: new Map([['review/skills/new', '1']]) });
   assert.deepEqual([...unrecorded.marks], [['review/skills/new', 'new']]);
   assert.deepEqual(unrecorded.removed.map((x) => x.id), ['review/skills/old']);
+
+  evidence.tree.set('review/skills/old/SKILL.md', 'doc');
+  const stillAtHead = updates.computeMarks({ ...base, fps: new Map([['review/skills/new', '2']]) });
+  assert.deepEqual(stillAtHead.record, record);
+  assert.deepEqual(stillAtHead.removed, []);
 });
 
 test('computeMarks: an item that is not committed is left alone', () => {
@@ -281,6 +295,48 @@ test('computeMarks: an item that is not committed is left alone', () => {
   assert.deepEqual(r.removed, []);
   assert.equal(r.changed, false);
   assert.deepEqual(r.record, record);
+});
+
+test('computeMarks preserves locally missing items and reports committed removals', () => {
+  const skill = 'p/skills/a';
+  const rule = 'p/rules/r.mdc';
+  const record = {
+    version: 1,
+    items: {
+      [skill]: rec('1', { path: skill }),
+      'p/rules/r': rec('2', { path: rule, kind: 'rule', name: 'r' }),
+      'p/mcp/local': rec('3', { path: 'p/.mcp.json', kind: 'mcp', name: 'local' }),
+      'p/mcp/gone': rec('4', { path: 'p/.mcp.json', kind: 'mcp', name: 'gone' }),
+    },
+  };
+  const tree = new Map([[skill, '1'], [`${skill}/SKILL.md`, 'doc'], [`${skill}/asset.txt`, 'asset'], [rule, '2'], ['p/mcp.json', 'mcp']]);
+  const mcpTexts = new Map([['p/mcp.json', '{"mcpServers":{"local":{"command":"a"}}}']]);
+  const args = { items: [], fps: new Map(), record, last: new Map(), self: '', head: 'H', git: { tree, mcpTexts } };
+  const local = updates.computeMarks(args);
+  assert.deepEqual(local.removed.map(({ id }) => id), ['p/mcp/gone']);
+  assert.deepEqual(local.record, record);
+
+  tree.delete(`${skill}/SKILL.md`);
+  const committed = updates.computeMarks(args);
+  assert.deepEqual(committed.removed.map(({ id }) => id), [skill, 'p/mcp/gone']);
+  assert.deepEqual(committed.record, record);
+});
+
+test('computeMarks preserves records when a committed path or MCP file cannot be resolved', () => {
+  const record = {
+    version: 1,
+    items: {
+      'p/skills/link': rec('1', { path: 'p/skills/link' }),
+      'p/rules/r': rec('2', { path: 'p/rules/r.mdc', kind: 'rule', name: 'r' }),
+      'linked/mcp/lint': rec('3', { path: 'linked/mcp.json', kind: 'mcp', name: 'lint' }),
+      'p/mcp/lint': rec('4', { path: 'p/mcp.json', kind: 'mcp', name: 'lint' }),
+    },
+  };
+  const modes = new Map([['p/skills/link', '120000'], ['p/rules', '120000'], ['linked', '160000']]);
+  const tree = new Map([...modes, ['p/mcp.json', '4']]);
+  const result = updates.computeMarks({ record, items: [], fps: new Map(), last: new Map(), head: 'H', git: { tree, modes } });
+  assert.deepEqual(result.record, record);
+  assert.deepEqual(result.removed, []);
 });
 
 test('markSeen', () => {
@@ -310,6 +366,108 @@ test('the seen record is written only when it changes', (t) => {
   assert.equal(updates.readSeen(file), null);
   fs.writeFileSync(file, '[]');
   assert.equal(updates.readSeen(file), null);
+});
+
+test('overlapping transactions read fresh seen marks under the lock', async (t) => {
+  const dir = tmpDir();
+  t.after(() => rmDir(dir));
+  const file = path.join(dir, 'seen', 'k.json');
+  const alice = rec('1');
+  const bob = rec('2');
+  const { promise: acquired, resolve: signalAcquired } = Promise.withResolvers();
+  const { promise: release, resolve: finishFirst } = Promise.withResolvers();
+  const first = updates.updateSeen(file, async (latest) => {
+    signalAcquired();
+    await release;
+    return updates.markSeen(latest, 'alice', alice);
+  });
+  await acquired;
+  const second = updates.updateSeen(file, (latest) => updates.markSeen(latest, 'bob', bob));
+  finishFirst();
+  await Promise.all([first, second]);
+  assert.deepEqual(updates.readSeen(file), { version: 1, items: { alice, bob } });
+});
+
+test('an acknowledgment keeps newer same-item marks and merges other displayed entries', async (t) => {
+  const dir = tmpDir();
+  t.after(() => rmDir(dir));
+  const file = path.join(dir, 'seen', 'k.json');
+  const earlier = rec('1');
+  const shown = rec('2');
+  const newer = rec('3', { commit: 'newer' });
+  const record = { version: 1, items: { a: newer, b: newer, untouched: earlier } };
+  updates.writeSeen(file, record);
+  await updates.updateSeen(file, (latest) => updates.mergeSeen(latest, [
+    { id: 'a', previous: earlier, entry: shown },
+    { id: 'b', previous: earlier, entry: null },
+    { id: 'c', previous: undefined, entry: shown },
+  ]));
+  assert.deepEqual(updates.readSeen(file), { version: 1, items: { ...record.items, c: shown } });
+});
+
+test('a failed seen write preserves the previous record for a retry', async (t) => {
+  const dir = tmpDir();
+  t.after(() => rmDir(dir));
+  const file = path.join(dir, 'k.json');
+  const previous = { version: 1, items: { a: rec('1') } };
+  const next = { version: 1, items: { a: rec('2') } };
+  updates.writeSeen(file, previous);
+  const renameMock = t.mock.method(fs, 'renameSync', () => { throw new Error('publish failed'); });
+  try {
+    await assert.rejects(updates.updateSeen(file, () => next), /publish failed/);
+    assert.deepEqual(updates.readSeen(file), previous);
+    assert.deepEqual(fs.readdirSync(dir), ['k.json']);
+  } finally {
+    renameMock.mock.restore();
+  }
+  await updates.updateSeen(file, () => next);
+  assert.deepEqual(updates.readSeen(file), next);
+});
+
+test('overlapping writes publish complete seen records and clean up their temporary files', (t) => {
+  const dir = tmpDir();
+  t.after(() => rmDir(dir));
+  const file = path.join(dir, 'k.json');
+  const first = { version: 1, items: { alice: rec('1') } };
+  const second = { version: 1, items: { bob: rec('2') } };
+  const rename = fs.renameSync;
+  const write = fs.writeFileSync;
+  let firstTemp;
+  let secondTemp;
+  const renameMock = t.mock.method(fs, 'renameSync', (from, to) => {
+    if (firstTemp === undefined) {
+      firstTemp = from;
+      updates.writeSeen(file, second);
+      return;
+    }
+    rename(from, to);
+  });
+  const writeMock = t.mock.method(fs, 'writeFileSync', (name, data, options) => {
+    if (firstTemp === undefined) {
+      write(name, data, options);
+      return;
+    }
+    secondTemp = name;
+    const fd = fs.openSync(name, 'w');
+    try {
+      const middle = Math.floor(data.length / 2);
+      fs.writeSync(fd, data.slice(0, middle));
+      rename(firstTemp, file);
+      assert.deepEqual(updates.readSeen(file), first);
+      fs.writeSync(fd, data.slice(middle));
+    } finally {
+      fs.closeSync(fd);
+    }
+  });
+  try {
+    updates.writeSeen(file, first);
+    assert.notEqual(firstTemp, secondTemp);
+    assert.deepEqual(updates.readSeen(file), second);
+    assert.deepEqual(fs.readdirSync(dir), ['k.json']);
+  } finally {
+    renameMock.mock.restore();
+    writeMock.mock.restore();
+  }
 });
 
 test('noticeEntries and noticeText', () => {
@@ -467,4 +625,68 @@ test('readGitData, rangeHashes and treeFiles on a repository', async (t) => {
   const notRepo = path.join(root, 'plain');
   fs.mkdirSync(notRepo);
   assert.equal(await updates.readGitData({ run, repoDir: notRepo, items }), null);
+});
+
+test('readGitData pins HEAD and provides committed removal and rename evidence', async (t) => {
+  if (!gitAvailable()) {
+    return t.skip('git is not available');
+  }
+  const { repo } = makeRepo(t);
+  const run = makeGit();
+  const skill = item('review/skills/code-review');
+  const server = { ...item('review/mcp/lint', 'mcp'), path: 'review/mcp.json' };
+  const items = [skill, server];
+  const initial = await updates.readGitData({ run, repoDir: repo, items });
+  const record = updates.baselineRecord(items, updates.fingerprints(items, initial.tree, initial.mcpTexts), initial.head);
+  const newSkill = item('review/skills/new');
+  const removedDoc = path.join(repo, skill.path, 'SKILL.md');
+  writeFile(repo, `${newSkill.path}/SKILL.md`, fs.readFileSync(removedDoc, 'utf8'));
+  fs.unlinkSync(removedDoc);
+  writeFile(repo, '.cursor-plugin/marketplace.json', JSON.stringify({ renamed: { [skill.id]: newSkill.id } }));
+  writeFile(repo, server.path, JSON.stringify({ mcpServers: { other: { command: 'other' } } }));
+
+  const local = await updates.readGitData({ run, repoDir: repo, items });
+  const args = { items: [newSkill], record, last: new Map(), self: '' };
+  const compute = (data) => updates.computeMarks({
+    ...args,
+    git: data,
+    head: data.head,
+    renamed: data.renamed,
+    fps: updates.fingerprints(args.items, data.tree, data.mcpTexts),
+  });
+  assert.deepEqual(local.renamed, {});
+  assert.deepEqual(compute(local).record, record);
+  assert.deepEqual(compute(local).removed, []);
+
+  const advancingRun = async (command, ...rest) => {
+    const result = await run(command, ...rest);
+    if (command[0] === 'rev-parse') {
+      git(['add', '-A'], repo);
+      git([...ALICE, 'commit', '-q', '-m', 'Rename skill and remove server'], repo);
+    }
+    return result;
+  };
+  const pinned = await updates.readGitData({ run: advancingRun, repoDir: repo, items });
+  assert.equal(pinned.head, initial.head);
+  assert.deepEqual(pinned.tree, initial.tree);
+  assert.deepEqual(pinned.commits, initial.commits);
+  assert.deepEqual(pinned.mcpTexts, initial.mcpTexts);
+  assert.deepEqual(pinned.renamed, {});
+
+  const committed = await updates.readGitData({ run, repoDir: repo, items });
+  assert.notEqual(committed.head, initial.head);
+  assert.ok(committed.tree.has(`${skill.path}/checklist.md`));
+  assert.ok(committed.tree.has(server.path));
+  assert.deepEqual(committed.renamed, { [skill.id]: newSkill.id });
+  assert.deepEqual(compute(committed).removed.map(({ id }) => id), [server.id]);
+  assert.deepEqual(Object.keys(compute(committed).record.items), [server.id, newSkill.id]);
+  const removal = updates.computeMarks({ ...args, items: [], git: committed, head: committed.head, fps: new Map() });
+  assert.deepEqual(removal.removed.map(({ id }) => id), [skill.id, server.id]);
+
+  git(['rm', '-qr', '.'], repo);
+  commitAll(repo, 'Empty tree');
+  const empty = await updates.readGitData({ run, repoDir: repo, items });
+  assert.deepEqual(empty.tree, new Map());
+  const treeFailure = (command, ...rest) => command[0] === 'ls-tree' ? { code: 1 } : run(command, ...rest);
+  assert.equal(await updates.readGitData({ run: treeFailure, repoDir: repo, items }), null);
 });
