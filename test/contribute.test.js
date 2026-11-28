@@ -196,6 +196,42 @@ test('commitAndPush reports an unreachable server', async (t) => {
   assert.equal(r.reason, 'unreachable');
 });
 
+test('a push and a fetch that fail never leak the credentials of the URL', async (t) => {
+  if (!gitAvailable()) {
+    return t.skip('git is not available');
+  }
+  const f = await setup(t);
+  const secretUrl = 'https://user:secret@127.0.0.1:9/team.git';
+  // the wording of an older git, which repeats the URL with its user info
+  const stderr = `fatal: unable to access '${secretUrl}/': Could not connect to server`;
+  const logLines = [];
+  const failing = (names) => (args, cwd, timeoutMs, opts) => {
+    const name = args.find((a) => names.includes(a));
+    if (name) {
+      return Promise.resolve({ code: 128, stdout: '', stderr });
+    }
+    return f.run(args, cwd, timeoutMs, opts);
+  };
+  const common = { ...f.args, repoUrl: secretUrl, log: (line) => logLines.push(line) };
+  writeFile(f.clone, 'g.md', 'mine\n');
+  const results = [await commitAndPush({ ...common, run: failing(['fetch']) })];
+  assert.equal(results[0].step, 'fetch');
+  assert.equal(results[0].reason, 'unreachable');
+  results.push(await commitAndPush({ ...common, run: failing(['push']) }));
+  assert.equal(results[1].step, 'push');
+  // the commit of the first failed push is already made: push it to a branch, failing the same way
+  results.push(await pushToBranch({ ...common, run: failing(['push']), branch: 'team-plugins/leak' }));
+  assert.equal(results[2].step, 'push');
+  results.push(await pushToBranch({ ...common, run: failing(['ls-remote']), branch: 'team-plugins/leak2' }));
+  assert.equal(results[3].step, 'branch');
+  for (const r of results) {
+    assert.ok(!JSON.stringify(r).includes('secret'), JSON.stringify(r));
+  }
+  assert.ok(logLines.length > 0);
+  assert.ok(!logLines.join('\n').includes('secret'), logLines.join('\n'));
+  // a failed push or fetch writes no state file (only a successful one does, with no message): nothing more to check
+});
+
 test('commitAndPush is busy while the lock is held', async (t) => {
   if (!gitAvailable()) {
     return t.skip('git is not available');

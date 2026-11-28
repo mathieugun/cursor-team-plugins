@@ -90,7 +90,14 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
   in the Cursor you use, or with `--host` on a Remote-SSH host), `status --since install` (installed files against
   the working tree, the Team Plugins log and Cursor's plugin registrations since the install, across reloads) and
   `settings backup|diff|restore <dir>` around a test that changes `teamPlugins.*` settings. Its `test --host <ssh
-  host>` runs the unit suite here and on a Linux host before a merge (see Building and releasing).
+  host>` runs the unit suite here and on a Linux host before a merge (see Building and releasing). Over SSH it
+  extracts a tar archive of the host's logs: `safe_extract` refuses, before extracting anything, a member that is
+  absolute, has a drive or a `..` part (tarfile creates the parent folders from the name as written, even when the
+  resolved path comes back inside), resolves outside the destination (checked by path components), is anything but a
+  regular file or a folder, would overwrite the archive itself, or on Windows has a device name (`NUL`, `COM1`, `COM¹`,
+  with any extension). `python
+  scripts/live_check_test.py` (stdlib `unittest`, run by CI on Ubuntu and Windows: the device-name cases run only on
+  Windows) tests it.
 
 ## How it works
 
@@ -218,6 +225,23 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
   processes it started) only after 2 minutes without output, so a long first clone works while data arrives. A
   `.git/index.lock` older than a minute (left by a killed git) is removed before the next operation, and leftover
   `<key>.tmp-*` folders of a failed clone at the next sync.
+- The credentials of URLs (the whole user info of an `https://user:token@host` URL; only the password of an `ssh://`
+  one; a one-letter scheme is a drive, so `C://dir@x` stays) are removed by two functions of `lib/remoteErrors.js`:
+  - `withoutCredentials(url)`, for one URL: the user info is everything up to the last `@` before the first `/`, `?`
+    or `#` after the scheme's slashes (curl accepts any other character in a password, spaces, quotes and angle
+    brackets included; git reads `https:///user:pw@host`, `https::https://user:pw@host` and `https::https:/user:pw@host`
+    as HTTPS URLs with that user info), and nothing after the authority is touched (a URL in the path or the query
+    stays). A `file:` URL has no credentials and is never changed (`file:///alice@work/x` is a path). Used by the project settings writer,
+    `remoteHost` (no part of a password can end up in a message's host) and `baseName` (a URL without a path would put
+    the token in the repository name, the clone's folder and the state file; such a repository, already followed with
+    its credentials in the URL, gets a new clone folder and, without a marketplace name, new ids once).
+  - `redactUrls(text)`, for free text: a URL may start anywhere and its user info runs to the last `@` before a line
+    break, `/`, `?` or `#` (a password pasted with a space is still removed), so it may remove more than the user info
+    (`https://a.test and b@c.test/x` -> `https://c.test/x`) but never less. Used by the Team Plugins log (each git command `logged` writes, and `log()`),
+    the messages and state files the lib returns, and every notification and modal `detail` (`redactingUi`).
+
+  The view and the settings keep the URL as typed. Not covered: logs and state files written by versions up to 0.8.7,
+  and credentials outside a URL (an `http.extraHeader`, a credential helper's output).
 - An unreachable server (offline) is quiet while a clone exists, never counts as a sync, and is retried after 5
   minutes. A background sync error is shown once, and again only after a sync succeeded (Sync now always shows it).
 - Drafts: `<storage>/.cursor/plugins/drafts` is a repository of `kind: 'drafts'` (key `drafts`, `listRepos`'s `drafts`

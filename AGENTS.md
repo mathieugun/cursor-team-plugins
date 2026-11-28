@@ -27,8 +27,9 @@ only the current version, with no history). Internals, platform notes, detailed 
   `noticeEntries`, `noticeText`, `noticeMessage`, `ago`, `shortDate`, `lastLine`, `readGitData`, `rangeHashes`,
   `treeFiles`: the update summary), `contribute` (`commitAndPush`, `pushToBranch`, `defaultBranchName`), `pullRequest` (`parseRemote`,
   `pullRequestPage`: the hosting service's new pull request page of a pushed branch), `cursorApi`,
-  `registrar`, `remoteErrors` (`classify`, `remoteHost`, `describeRemote`, `remoteResult`: classified git failures with
-  a message and the actions to offer), `authoring` (scaffolds and drafts: `nameError`, `serverNameError`, `yamlScalar`,
+  `registrar`, `remoteErrors` (`classify`, `remoteHost`, `describeRemote`, `remoteResult`, `withoutCredentials`, `redactUrls`,
+  `redactingUi`: classified git failures with a message and the actions to offer, and the credentials of URLs removed
+  from settings, the log, messages and notifications), `authoring` (scaffolds and drafts: `nameError`, `serverNameError`, `yamlScalar`,
   `itemFile`, `createItem`, `splitCommandLine`, `mcpEntry`, `addMcpServer`, `topLevelNameError`, `pluginLocation`,
   `destinationError`, `pluginDirError`, `createPlugin`, `movePlugin`, `renameIds`, `declaredPathsError`, `clashError`), `jsonc` (`tokens`, `addMember`,
   `renameKey`: edits of JSONC files that keep comments and layout), `share` (`shareKind`, `shareableItem`, `projectItems`,
@@ -42,7 +43,8 @@ only the current version, with no history). Internals, platform notes, detailed 
   `live-test.js` (isolated-Cursor scenario runner, one launch per scenario, root `%TEMP%\tp-live`), `live_check.py`
   (hand live tests in the user's Cursor: logs since an install or reload, installed files against the working tree,
   install, settings backup and restore; local or over SSH; `test`: the suite here and on a Linux host at once, before
-  a merge; stdlib Python, not packaged), `make_icon.py` (regenerates `resources/icon.png`: three stacked package boxes on a blue rounded square, drawn from no source image: `uv run --with pillow python scripts/make_icon.py`; not packaged). Nothing under `lib/` or `scripts/`
+  a merge; stdlib Python, not packaged), `live_check_test.py` (stdlib `unittest` of `live_check.py`'s archive check,
+  run by CI on Ubuntu and Windows: `python scripts/live_check_test.py`), `make_icon.py` (regenerates `resources/icon.png`: three stacked package boxes on a blue rounded square, drawn from no source image: `uv run --with pillow python scripts/make_icon.py`; not packaged). Nothing under `lib/` or `scripts/`
   may require `vscode`.
 - `test/`: one test file per module (`*.test.js`, `node:test`), `helpers.js` for fixtures. Tests use only local bare
   git repositories, no network. `fixtures/team-repo/` is the test team repository (plugins `review`: skills
@@ -79,6 +81,7 @@ node scripts/test.js
 node scripts/package.js
 node scripts/make-test-repo.js <target.git> [--name <marketplace name>]
 node scripts/live-test.js [scenario ...]
+python scripts/live_check_test.py
 ```
 
 `live-test.js` runs the scenarios of `test/live/` in an isolated Cursor instance.
@@ -245,6 +248,11 @@ line endings, as CI checks it out, and uses the newest server's node, else `node
   same command ids, so whichever activates second throws `command 'teamPlugins.syncNow' already exists` (seen on a
   Remote-SSH host, where the old one activated first). The extensions view's search matches names and descriptions,
   so `@installed mg.cursor-team-plugins` finds nothing.
+- The credentials of URLs never reach the log or a message: the log (`logged`, `log()`), the messages the lib returns
+  (`sync.redacted`, also what the state files hold) and the notifications (`redactingUi`) go through `redactUrls`
+  (free text: may remove more than the user info, never less); one URL (project settings, `baseName`, `remoteHost`)
+  goes through `withoutCredentials` (anchored: touches nothing after the authority). The view and the settings keep
+  the URL as typed; an SSH user name is kept (only its password goes).
 - Drafts (`<storage>/.cursor/plugins/drafts`, under `.cursor/plugins` so its skills are skills) are a repository of
   `kind: 'drafts'` listed first when the folder exists, which never counts as a configured repository (`unconfigured`
   state, status text); the folder is never deleted (it is the parent of registered

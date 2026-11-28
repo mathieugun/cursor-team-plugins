@@ -31,7 +31,7 @@ module.exports = {
 
     t.step('an unreachable server');
     await t.idle();
-    await setRepositories(['http://127.0.0.1:1/team.git']);
+    await setRepositories(['http://user:secret@127.0.0.1:1/team.git']);
     await t.idle();
     await vscode.commands.executeCommand('teamPlugins.syncNow');
     const unreachable = await t.waitFor(
@@ -40,6 +40,11 @@ module.exports = {
       30000,
     );
     assert.deepEqual(unreachable.buttons, ['Sync now', 'Show log']);
+    // the credentials of the URL reach neither the log nor a dialog
+    assert.ok(!hook.logLines().some((l) => l.includes('secret')), 'the log holds the URL credentials');
+    for (const kind of ['showErrorMessage', 'showInformationMessage', 'showWarningMessage']) {
+      assert.ok(!t.messages(kind).some((c) => c.message.includes('secret')), `a ${kind} holds the URL credentials`);
+    }
     await t.idle();
     assert.ok(hook.status().text.startsWith('$(debug-disconnect)'), hook.status().text);
     t.noSpinner();

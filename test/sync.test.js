@@ -968,3 +968,167 @@ test('removeTree leaves the target of a link alone', (t) => {
   assert.equal(fs.statSync(outside).mode, before);
   assert.equal(fs.readFileSync(outside, 'utf8'), 'keep');
 });
+
+// The credentials of a URL never reach the log, a returned message or the state file.
+const SECRET_URL = 'https://user:secret@127.0.0.1:9/team.git';
+// the wording of an older git, which repeats the URL with its user info
+const SECRET_STDERR = `fatal: unable to access '${SECRET_URL}/': Could not connect to server`;
+
+// A `run` that answers by the git command; `answers` maps a command name to { code, stdout, stderr } (default: code 0).
+function fakeRun(answers) {
+  return (args) => {
+    const name = args.find((a) => Object.hasOwn(answers, a));
+    return Promise.resolve({ code: 0, stdout: '', stderr: '', ...(name ? answers[name] : {}) });
+  };
+}
+
+function leakless({ lines, results, stateFile }) {
+  assert.ok(lines.length > 0, 'nothing was logged');
+  assert.ok(!lines.join('\n').includes('secret'), lines.join('\n'));
+  for (const r of results) {
+    assert.ok(!JSON.stringify(r).includes('secret'), JSON.stringify(r));
+  }
+  if (stateFile) {
+    // the operation under test wrote it: a missing file would check nothing
+    assert.ok(fs.existsSync(stateFile), 'no state file was written');
+    assert.ok(!fs.readFileSync(stateFile, 'utf8').includes('secret'));
+  }
+}
+
+test('a failing clone logs and returns no credentials', async (t) => {
+  const root = tmpDir();
+  t.after(() => rmDir(root));
+  const lines = [];
+  const args = {
+    run: fakeRun({ clone: { code: 128, stderr: SECRET_STDERR } }),
+    managedRepo: path.join(root, 'store', 'repo'),
+    repoUrl: SECRET_URL,
+    branch: '',
+    lockFile: path.join(root, 'store', 'sync.lock'),
+    stateFile: path.join(root, 'store', 'state.json'),
+    log: (line) => lines.push(line),
+  };
+  const r = await sync.syncManaged(args);
+  assert.equal(r.reason, 'unreachable');
+  leakless({ lines, results: [r], stateFile: args.stateFile });
+  assert.ok(lines.some((l) => l.includes('https://127.0.0.1:9/team.git')), lines.join('\n'));
+  // the unclassified wording takes the fallback message, which holds the whole stderr
+  fs.rmSync(args.stateFile); // the state this clone writes, not the one of the clone before
+  const weird = await sync.syncManaged({
+    ...args,
+    run: fakeRun({ clone: { code: 128, stderr: `fatal: weird '${SECRET_URL}'` } }),
+  });
+  assert.equal(weird.kind, 'error');
+  assert.ok(weird.message.includes('weird'), weird.message);
+  leakless({ lines, results: [weird], stateFile: args.stateFile });
+});
+
+test('a fetch of an existing clone logs and returns no credentials', async (t) => {
+  const root = tmpDir();
+  t.after(() => rmDir(root));
+  const managedRepo = path.join(root, 'store', 'repo');
+  fs.mkdirSync(path.join(managedRepo, '.git'), { recursive: true });
+  const lines = [];
+  const base = {
+    managedRepo,
+    repoUrl: SECRET_URL,
+    branch: 'main',
+    lockFile: path.join(root, 'store', 'sync.lock'),
+    stateFile: path.join(root, 'store', 'state.json'),
+    log: (line) => lines.push(line),
+  };
+  const answers = {
+    remote: { stdout: SECRET_URL },
+    'rev-parse': { stdout: 'main' },
+    'rev-list': { stdout: '0\t0' },
+  };
+  const ok = await sync.syncManaged({
+    ...base,
+    run: fakeRun({ ...answers, fetch: { stderr: `From ${SECRET_URL}\n * branch main -> FETCH_HEAD` } }),
+  });
+  assert.equal(ok.kind, 'upToDate');
+  leakless({ lines, results: [ok], stateFile: base.stateFile });
+  for (const stderr of [SECRET_STDERR, `fatal: weird '${SECRET_URL}'`]) {
+    lines.length = 0;
+    fs.rmSync(base.stateFile); // the state the failing fetch writes, not the one of the fetch before
+    const failed = await sync.syncManaged({ ...base, run: fakeRun({ ...answers, fetch: { code: 128, stderr } }) });
+    assert.equal(failed.kind === 'offline' || failed.kind === 'error', true);
+    leakless({ lines, results: [failed], stateFile: base.stateFile });
+  }
+});
+
+test('checkRemote logs and returns no credentials', async () => {
+  const lines = [];
+  const reachable = 'ref: refs/heads/main\tHEAD\nabc\tHEAD';
+  let run = sync.logged(fakeRun({ 'ls-remote': { stdout: reachable } }), (line) => lines.push(line));
+  const ok = await sync.checkRemote({ run, cwd: '.', repoUrl: SECRET_URL });
+  assert.equal(ok.kind, 'reachable');
+  leakless({ lines, results: [ok] });
+  assert.ok(lines[0].includes('-- https://127.0.0.1:9/team.git HEAD'), lines[0]);
+  for (const stderr of [SECRET_STDERR, `fatal: weird '${SECRET_URL}'`]) {
+    lines.length = 0;
+    run = sync.logged(fakeRun({ 'ls-remote': { code: 128, stderr } }), (line) => lines.push(line));
+    const failed = await sync.checkRemote({ run, cwd: '.', repoUrl: SECRET_URL });
+    assert.equal(failed.kind === 'offline' || failed.kind === 'error', true);
+    leakless({ lines, results: [failed] });
+  }
+  lines.length = 0;
+  run = sync.logged(fakeRun({ 'ls-remote': { stdout: reachable } }), (line) => lines.push(line));
+  const noBranch = await sync.checkRemote({ run, cwd: '.', repoUrl: SECRET_URL, branch: 'dev' });
+  assert.equal(noBranch.reason, 'branchNotFound');
+  leakless({ lines, results: [noBranch] });
+  // a raw `@` in the password: the host named in the message is the real one, with no part of the password
+  lines.length = 0;
+  run = sync.logged(
+    fakeRun({ 'ls-remote': { code: 128, stderr: 'fatal: Could not resolve host: host.test' } }),
+    (line) => lines.push(line),
+  );
+  const atSign = await sync.checkRemote({ run, cwd: '.', repoUrl: 'https://user:part@secret@host.test/team.git' });
+  assert.equal(atSign.reason, 'unreachable');
+  assert.match(atSign.message, /^cannot reach host\.test /);
+  leakless({ lines, results: [atSign] });
+});
+
+test('the message about local changes holds no credentials of the origin URL', async (t) => {
+  if (!gitAvailable()) {
+    return t.skip('git is not available');
+  }
+  const f = setup(t);
+  assert.equal((await sync.syncManaged(f.args)).kind, 'cloned');
+  const clone = f.args.managedRepo;
+  git(['remote', 'set-url', 'origin', SECRET_URL], clone);
+  writeFile(clone, 'local.md', 'mine\n');
+  const lines = [];
+  const r = await sync.syncManaged({ ...f.args, branch: 'main', log: (line) => lines.push(line) });
+  assert.equal(r.kind, 'error');
+  assert.match(r.message, /has local changes/);
+  assert.ok(r.message.includes('https://127.0.0.1:9/team.git'), r.message);
+  leakless({ lines, results: [r], stateFile: f.args.stateFile });
+});
+
+test('localChanges and checkConflicts throw messages without credentials', async () => {
+  const run = fakeRun({ status: { code: 128, stderr: SECRET_STDERR }, stash: { code: 128, stderr: SECRET_STDERR } });
+  await assert.rejects(sync.localChanges({ run, repo: 'x' }), (err) => {
+    assert.match(err.message, /git status failed/);
+    assert.ok(!err.message.includes('secret'), err.message);
+    return true;
+  });
+  await assert.rejects(sync.checkConflicts({ run, repo: 'x', files: [] }), (err) => {
+    assert.match(err.message, /git stash create failed/);
+    assert.ok(!err.message.includes('secret'), err.message);
+    return true;
+  });
+});
+
+test('discardLocalChanges returns no credentials', async (t) => {
+  const root = tmpDir();
+  t.after(() => rmDir(root));
+  const r = await sync.discardLocalChanges({
+    run: fakeRun({ reset: { code: 128, stderr: SECRET_STDERR } }),
+    managedRepo: root,
+    lockFile: path.join(root, 'sync.lock'),
+  });
+  assert.equal(r.ok, false);
+  assert.match(r.message, /git reset failed/);
+  assert.ok(!r.message.includes('secret'), r.message);
+});
