@@ -247,6 +247,74 @@ test('pushToBranch gets out of a conflict', async (t) => {
   assert.equal((await sync.syncManaged(f.sargs)).kind, 'updated');
 });
 
+// f.run, plus `after()` once the first successful `push` returns
+function writeAfterPush(f, after) {
+  let done = false;
+  return async (args, cwd, timeoutMs, opts) => {
+    const r = await f.run(args, cwd, timeoutMs, opts);
+    if (!done && args[0] === 'push' && r.code === 0) {
+      done = true;
+      after();
+    }
+    return r;
+  };
+}
+
+test('pushToBranch keeps an edit and a new file saved during the push', async (t) => {
+  if (!gitAvailable()) {
+    return t.skip('git is not available');
+  }
+  const f = await setup(t);
+  writeFile(f.clone, 'f.md', withLine(1, 'mine'));
+  const run = writeAfterPush(f, () => {
+    writeFile(f.clone, 'g.md', 'later\n');
+    writeFile(f.clone, 'new.md', 'new\n');
+  });
+  const r = await pushToBranch({ ...f.args, run, message: 'mine', branch: 'team-plugins/t3' });
+  assert.equal(r.kind, 'pushedBranch');
+  assert.equal(r.resetSkipped, undefined);
+  assert.equal(fs.readFileSync(path.join(f.clone, 'f.md'), 'utf8'), EIGHT);
+  assert.equal(fs.readFileSync(path.join(f.clone, 'g.md'), 'utf8'), 'later\n');
+  assert.equal(fs.readFileSync(path.join(f.clone, 'new.md'), 'utf8'), 'new\n');
+  assert.equal(git(['rev-parse', 'HEAD'], f.clone), git(['rev-parse', '@{u}'], f.clone));
+  const status = git(['status', '--porcelain'], f.clone)
+    .split('\n')
+    .map((l) => l.trim())
+    .sort();
+  assert.deepEqual(status, ['?? new.md', 'M g.md']);
+  assert.equal(git(['show', 'team-plugins/t3:f.md'], f.origin).split('\n')[0], 'mine');
+  assert.deepEqual(git(['ls-tree', '--name-only', 'team-plugins/t3'], f.origin).split('\n'), ['f.md', 'g.md']);
+});
+
+test('pushToBranch leaves the clone as it is when a pushed file changed during the push', async (t) => {
+  if (!gitAvailable()) {
+    return t.skip('git is not available');
+  }
+  const f = await setup(t);
+  writeFile(f.clone, 'f.md', withLine(1, 'mine'));
+  const run = writeAfterPush(f, () => writeFile(f.clone, 'f.md', withLine(1, 'again')));
+  const r = await pushToBranch({ ...f.args, run, message: 'mine', branch: 'team-plugins/t4' });
+  assert.equal(r.kind, 'pushedBranch');
+  assert.deepEqual(r.resetSkipped.files, ['f.md']);
+  assert.ok(r.resetSkipped.message.includes('f.md'), r.resetSkipped.message);
+  assert.equal(fs.readFileSync(path.join(f.clone, 'f.md'), 'utf8'), withLine(1, 'again'));
+  assert.equal(git(['rev-parse', 'HEAD'], f.clone), r.head);
+  assert.equal(git(['show', 'team-plugins/t4:f.md'], f.origin).split('\n')[0], 'mine');
+});
+
+test('pushToBranch leaves the clone as it is when a new file would be overwritten', async (t) => {
+  if (!gitAvailable()) {
+    return t.skip('git is not available');
+  }
+  const f = await setup(t);
+  fs.rmSync(path.join(f.clone, 'g.md'));
+  const run = writeAfterPush(f, () => writeFile(f.clone, 'g.md', 'mine\n'));
+  const r = await pushToBranch({ ...f.args, run, message: 'mine', branch: 'team-plugins/t5' });
+  assert.equal(r.kind, 'pushedBranch');
+  assert.deepEqual(r.resetSkipped.files, ['g.md']);
+  assert.equal(fs.readFileSync(path.join(f.clone, 'g.md'), 'utf8'), 'mine\n');
+});
+
 test('pushToBranch refuses bad or taken branch names and has nothing to push on a clean clone', async (t) => {
   if (!gitAvailable()) {
     return t.skip('git is not available');

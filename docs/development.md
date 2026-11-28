@@ -120,7 +120,11 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
   content hash of each file at the last sync): a change on one side only, new files and deletions included, is carried
   to the other side; a file changed on both sides is a conflict that waits for the user's choice. A sync reads a file
   again only when its size or timestamps changed. A copy sync that meets a locked file is retried every 2 seconds for a
-  minute.
+  minute. A folder whose listing fails (either side, any error, the plugin folder itself included: a plugin folder
+  deleted while the catalog is still the old one) is reported and nothing below it is copied, deleted or rewritten; its
+  record entries stay until a complete listing (`listFiles`'s `unreadable`). A conflict is resolved only if it is still
+  in the record and both sides still hash to what the dialog showed (`conflictVersions`, taken before the dialog;
+  `resolveConflict` checks under the lock).
 - Commands and agents are files below `commands/` and `agents/`: a left-out one is a file prefix of the copy, like a
   rule. MCP servers share a file (`.mcp.json`, `mcp.json`), so `readCatalog` records each plugin's `mcpFiles` (file
   name -> server names) and `mcpPlan` (in `lib/materialize.js`) tells what the selection does to each file: no server
@@ -157,6 +161,11 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
   to a branch, discard, partial-copy syncs, which take the lock in local mode too since windows with the same selection
   share a copy), and the other windows notice the new state through the files of `state/`. An edit in a managed clone
   (another window's partial copy, or by hand) reaches this window's partial copies and view within a second.
+- Push to a branch commits, pushes, then runs `git reset --keep @{u}`: it undoes only what the pushed commit changed and
+  keeps edits saved after the commit; it refuses (and changes nothing) when one of them is on a file of the pushed commit
+  or a new file would be overwritten, and the result carries `resetSkipped`. The partial copies are not marked synced
+  afterwards (only Discard does): a pushed file equals its record entry and takes the team version, a later copy edit
+  becomes a local change or a conflict.
 - Push to a branch returns the page from `pullRequest.pullRequestPage`: built from the repository URL for `github.com`
   (`compare/<target>...<branch>?quick_pull=1`), `gitlab.com`
   (`-/merge_requests/new?merge_request[source_branch]=…&merge_request[target_branch]=…`) and Azure DevOps
@@ -448,6 +457,11 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
   plugins.
 - A conflict between a partial copy and the repository is not merged line by line: the user keeps one of the two
   versions. A real conflict with the team's commits is never merged by the extension.
+- A file (not a folder) that can't be read makes the partial-copy sync fail (`cannot sync the partial copy of ...` in
+  the log). A copy edit made between Discard's confirmation and its reset is discarded with the rest, and an edit made
+  while the `git reset --keep` of Push to a branch runs is not covered.
+- The warning for an unreadable folder shows once per folder and reason per window, not again after it recovers and
+  fails later.
 - The commit includes every change of the managed clone (`git add -A`); there is no per-file choice.
 - A clone of a local or network-share path that copies for more than 2 minutes without output is stopped.
 - Switching a managed clone to an empty repository (no branch yet) is an error.

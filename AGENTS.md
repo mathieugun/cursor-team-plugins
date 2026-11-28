@@ -19,7 +19,7 @@ only the current version, with no history). Internals, platform notes, detailed 
   `originUrl`, `migratedSettings`, `missingRepos`, `unlocatedRepos`, `projectRepoEntry`,
   `withProjectRepo`, `withoutProjectRepo`), `selection` (selection model, on the merged catalog), `treeModel` (`buildTree`,
   `buildChangesNode`, `buildConflictsNode`, `repoStatus`, `buildRepoNode`, `buildMissingNodes`, `itemDecoration`), `materialize`
-  (`holderName`, `copyRootOf`, `syncCopy`, `markCopySynced`, `resolveConflict`, `hashCache`: partial plugin copies kept
+  (`holderName`, `copyRootOf`, `syncCopy`, `markCopySynced`, `resolveConflict`, `conflictVersions`, `hashCache`: partial plugin copies kept
   in sync both ways), `git`, `sync` (managed clone: `syncManaged`, `localChanges`, `checkConflicts`, `gitVersionOf`, `parseStatusZ`,
   `discardLocalChanges`, `changedPaths`, `withLock`, `withLockSync`, `removeStaleIndexLock`, `removeLeftovers`, `recentlySynced`,
   `revFileArgs`, `checkRemote`), `updates` (`parseLsTree`, `parseLog`, `parseIdent`, `itemPath`, `pluginPath`, `updateItems`, `serverEntry`,
@@ -115,6 +115,9 @@ On a Linux machine with a Cursor server (a Remote-SSH host), the suite runs with
 - Other `vscode.cursor.*` functions throw for a non-built-in extension: use nothing but `plugins`.
 - The exit code of `git rebase --autostash` can't be trusted (a stash that conflicts when re-applied exits 0, with
   conflict markers left in the files): `sync.checkConflicts` runs first.
+- Push to a branch cleans up with `git reset --keep @{u}`, not `reset --hard` + `clean`: editors and agents write to the
+  clone during the push; `--keep` keeps those edits and refuses, touching nothing, when one is on a file of the pushed
+  commit (probe, 2026-11-28).
 - `git merge-tree --write-tree --name-only @{u} <git stash create>` finds the real conflicts (committed or not)
   without touching the clone: exit 1 lists the files; `stash create` skips untracked files, which are compared with
   `diff --name-only HEAD...@{u}`.
@@ -124,6 +127,8 @@ On a Linux machine with a Cursor server (a Remote-SSH host), the suite runs with
   can't tell which side changed when both did): `.team-plugins-sync.json` v2 holds each file's sha1 at the last sync (`""` =
   unknown, after a lost or old-format record) and the files in conflict. A file changed on both sides is a conflict and
   neither side is touched until the user picks one (`resolveConflict`).
+- `listFiles` reports folders it can't list (`unreadable`, any error, `rel ''` for the start folder): `syncCopy` and
+  `markCopySynced` never decide anything below one (an incomplete listing read as 'deleted' would delete the other side).
 - On Windows `fs.renameSync` over a file another process has open fails with EPERM: `writeManifest` retries, and a lost
   manifest write is harmless (files already equal on both sides are settled by content).
 - `syncLocked` switches the managed clone (URL or branch change) only after git confirmed it: a failed git command
