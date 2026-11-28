@@ -26,19 +26,21 @@ only the current version, with no history). Internals, platform notes, detailed 
   `serverText`, `fingerprints`, `lastChanges`, `baselineRecord`, `computeMarks`, `entryOf`, `markSeen`, `mergeSeen`,
   `readSeen`, `writeSeen`, `updateSeen`, `mcpFilesOf`, `readHead`,
   `noticeEntries`, `noticeText`, `noticeMessage`, `ago`, `shortDate`, `lastLine`, `readGitData`, `rangeHashes`,
-  `treeFiles`: the update summary), `contribute` (`commitAndPush`, `pushToBranch`, `defaultBranchName`), `pullRequest` (`parseRemote`,
+  `treeFiles`: the update summary), `contribute` (`commitAndPush`, `pushToBranch`, `defaultBranchName`, `commitAll`, `IDENTITY_MESSAGE`), `pullRequest` (`parseRemote`,
   `pullRequestPage`: the hosting service's new pull request page of a pushed branch), `cursorApi`,
   `registrar`, `remoteErrors` (`classify`, `remoteHost`, `describeRemote`, `remoteResult`, `withoutCredentials`, `redactUrls`,
   `redactingUi`: classified git failures with a message and the actions to offer, and the credentials of URLs removed
   from settings, the log, messages and notifications), `authoring` (scaffolds and drafts: `nameError`, `serverNameError`, `yamlScalar`,
   `itemFile`, `createItem`, `splitCommandLine`, `mcpEntry`, `addMcpServer`, `topLevelNameError`, `pluginLocation`,
   `destinationError`, `pluginDirError`, `createPlugin`, `movePlugin`, `renameIds`, `declaredPathsError`, `clashError`), `jsonc` (`tokens`, `addMember`,
-  `renameKey`: edits of JSONC files that keep comments and layout), `share` (`shareKind`, `shareableItem`, `projectItems`,
+  `renameKey`, `removeMember`: edits of JSONC files that keep comments and layout), `share` (`shareKind`, `shareableItem`, `projectItems`,
   `suggestName`, `shareNameError`, `shareItem`, `renameSkillName`: copying a project item into a plugin), `rename`
   (`renamePlugin`, `renameItem`, `recordRename`: renaming a plugin or an item and recording it in `marketplace.json`),
   `gitCheck` (`checkGit`, `gitCheckMessage`: the Check git command's check and message), `context` (`itemContext`,
   `splitGlobs`, `formatTokens`, `costOf`, `costLines`, `selectionCost`, `statusLines`, `viewDescription`, `itemLine`: the
-  context cost estimate). `git` also has `cleanProgress`.
+  context cost estimate), `newRepo` (`scan`, `previewMarkdown`, `redactServer`, `stillSame`, `buildRepository`,
+  `checkEmptyRemote`, `initAndCommit`, `pushNew`, `remoteBranchState`, `repositoryEntry`, `originalsOf`, `removeServers`,
+  `urlError`: creating a team repository from existing items). `git` also has `cleanProgress`.
 - `scripts/`: `test.js` (test runner), `zip.js` + `package.js` (VSIX writer), `make-test-repo.js` (bare test team
   repository for live tests, from `test/fixtures/team-repo`; `--name` gives a copy another repository name),
   `live-test.js` (isolated-Cursor scenario runner, one launch per scenario, root `%TEMP%\tp-live`), `live_check.py`
@@ -317,6 +319,17 @@ line endings, as CI checks it out, and uses the newest server's node, else `node
 - A rule's type is decided in Cursor's agent host in the order `alwaysApply` (boolean `true`) > `globs` > `description` >
   manual, skills too (an `alwaysApply` skill is a whole-text rule), and descriptions are cut at 1536 characters; the
   prompt is built server side, so the context cost (`lib/context.js`) is an estimate.
+- An empty remote has no default branch before the first push (`ls-remote --symref` prints nothing), and after a push to a
+  bare repository whose HEAD names another branch HEAD is dangling and `ls-remote --symref` prints nothing again, so
+  a `syncManaged` without a branch would clone nothing: **Create team repository** names the pushed branch in the new
+  `teamPlugins.repositories` entry unless `checkRemote` reports it as the default (request 26, `lib/newRepo.js`).
+- **Replace the originals** (end of Create team repository) removes nothing before the new plugin is cloned and
+  registered, and only what the repository represents starts ticked; an MCP server is removed with
+  `jsonc.removeMember` after a `wx` backup of `mcp.json` in `<storage>/replaced-originals`.
+- A diff side given as a `file:` URI is editable: Create team repository shows the originals in its compare and merge
+  diffs as `team-plugins-readonly:` documents (a content provider's documents are read-only), so only the merge file
+  can be edited (hand check, request 26: an edit typed in a Compare tab of real files never reached the merge). No
+  quick pick opens while the user reads the preview or a diff: a quick pick with `ignoreFocusOut` covers the editor's top.
 
 ## Rules
 

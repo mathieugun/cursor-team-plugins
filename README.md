@@ -64,14 +64,17 @@ these steps; Cursor also opens it after the install.
    without asking anything: the extension runs git in the background with your own credentials and never asks for a
    password (see "Repository access" below). Git 2.38 or later is needed. **Team Plugins: Check git** says whether git
    is found and recent enough, and whether it knows your name and email (needed only to commit).
-2. **Add the repository.** Open the **Team Plugins** view in the activity bar and click **Add repository** (the `+` of
+2. **No team repository yet?** **Team Plugins: Create team repository...** builds one from the rules, skills,
+   commands, agents and MCP servers you already have (see "Creating a team repository"). Already have one? Go to the
+   next step.
+3. **Add the repository.** Open the **Team Plugins** view in the activity bar and click **Add repository** (the `+` of
    the view's title bar, or add the URL to `teamPlugins.repositories`). The URL is checked at once, then the repository
    is cloned in the background. You can add several repositories (see "Several repositories").
-3. **Pick your plugins.** Tick the plugins or single items (skills, rules, commands, agents, MCP servers) you want.
+4. **Pick your plugins.** Tick the plugins or single items (skills, rules, commands, agents, MCP servers) you want.
    They are available to the agent right away, in new chats.
 
-The walkthrough ticks a step when you do it (check git, add a repository, tick a plugin); if you were set up before,
-use **Mark Done**.
+The walkthrough ticks a step when you do it (check git, create or add a repository, tick a plugin); if you were set up
+before, use **Mark Done**.
 
 If a plugin with the same name is already installed from another marketplace (for example the team repository imported
 as a local marketplace), remove it: both would provide the same plugin.
@@ -110,6 +113,55 @@ its command or URL). Hooks and anything else in a plugin always come with its pl
 
 An MCP server you leave out is removed from the plugin's copy of `mcp.json`. Edit `mcp.json` in the team repository,
 not in that copy: an edit in the copy is kept but never shared, and is reported in the log.
+
+## Creating a team repository
+
+No team repository yet? **Team Plugins: Create team repository...** (command palette, or the view's **...** menu) turns
+what you already have into one. Create an empty repository on your Git host first (no README, no license: it must have
+no commit), then run the command:
+
+1. **Where to look.** The `.cursor` folder at the root of each open folder, `~/.cursor` (skills, commands, agents and
+   MCP servers: Cursor does not read rules there) and any project folders you pick by hand. It finds rules, skills,
+   commands, agents and the servers of `mcp.json`.
+2. **Preview.** A read-only Markdown page lists what goes in once (an item found identically in several projects is
+   imported once), the items that exist in several versions, the values that look like secrets, the files an item links
+   to or mentions that stay where they are (they may break once the item lives elsewhere), and the items renamed
+   because Cursor only accepts lowercase letters, digits, hyphens and dots. Read it, then press **Continue** in the
+   notification: the list waits, so it doesn't cover the preview.
+3. **What goes in.** A list with everything ticked, except the items that may contain a secret. For an item that exists
+   in several versions you choose: use one of them, **Compare** them in Cursor's diff editor (press **Back to the
+   choices** in the notification when you are done), **Merge by hand** in a scratch copy (edit the side titled "your
+   merge (edit this side)", save, press **Done**; pressing **Done** on an unchanged copy asks first), **Keep each under
+   its own name**, or leave it out. The originals are shown read-only in these diffs: nothing you type there can
+   change a project file.
+4. **The URL and the plugin name.** The URL of the empty repository: no user name or password in it (git gets them from
+   your credential manager), and an absolute path for a local repository. The plugin is named after the repository by
+   default; there is one plugin per new repository.
+5. **Confirm.** The dialog lists the plugin's items, the secrets replaced, the items that may hold a secret, the
+   references that may break and the problems Cursor would report (an item it would drop: the button then reads
+   **Create and push anyway**). Then the repository is written aside, committed on `init.defaultBranch` (`main` when it
+   is not set) and pushed, and added to `teamPlugins.repositories`; it is cloned like any other repository. The plugin
+   stays unticked until you tick it or replace the originals.
+
+**Secrets.** A value in an MCP server's `env` or headers whose name holds a word like `KEY`, `TOKEN`, `SECRET`,
+`PASSWORD` or `AUTHORIZATION` is never written to the repository (a default written in `${TOKEN:-...}` counts as a
+value): it becomes `${env:NAME}`, and the server reads it
+from the environment variable `NAME`. In a server's `env`, Cursor reads it from the environment it was started with:
+set it on each machine, then restart Cursor (unset, the server gets an empty value). In headers this was not checked:
+test the server once before you rely on it. A server kept under several names gets one variable per name
+(`GITHUB_WORK_GITHUB_TOKEN`, `GITHUB_HOME_GITHUB_TOKEN`), since each may need another account. Other values that look
+like a secret (a password in a URL, a secret-named URL parameter or flag, a token such as `ghp_...` in any file of a
+rule or skill, a skill's `.env` file) are only reported, and their item starts unticked: tick it only after checking
+it.
+
+**Replace the originals.** The closing message offers to remove what the plugin now provides, so the agent doesn't read
+each item twice, or to **Keep them**. **Replace the originals** shows the originals grouped by project, with only the
+ones the repository fully represents ticked (the others say why: another version was imported, merged by hand, links
+not copied, a secret value to set first, an item Cursor would drop). It waits for the new repository to be cloned and
+its plugin registered, then ticks the plugin; files and folders go to the trash (in a remote window there is no trash:
+they are deleted for good after a confirmation), and the imported MCP servers are removed from their `mcp.json`, which
+is backed up in the extension's storage first. An original changed since the preview, or with unsaved edits, is left in
+place. A project file tracked by git is a change to commit in that project.
 
 ## Several repositories
 
@@ -426,6 +478,14 @@ terminal where git and SSH can ask their questions; then click **Sync now**.
 - Writing a plugin rewrites the formatting of the `marketplace.json` or `mcp.json` it edits.
 - Share with team copies only rules, skills, commands and agents (not the MCP servers of `.cursor/mcp.json`, nor
   `AGENTS.md`); links from the item to other project files are copied as they are and may break.
+- Create team repository reads only the `.cursor` folder at the root of a project (not those of subfolders), not
+  `.cursorrules`, `.claude/` folders or `AGENTS.md`, and only the open folders, `~/.cursor` and the folders you pick:
+  not the projects of other windows. It leaves out hooks and the other files of a `.cursor` folder, the drafts, and
+  creating the remote repository itself; it makes one plugin per new repository.
+- The references reported by Create team repository (links, `mdc:` links, `@` mentions and paths of MCP servers) are a
+  heuristic: they are reported, never rewritten. The scratch folder it uses holds copies of the scanned files while the
+  command runs (it is deleted at the end; leftovers after 24 hours), and the `mcp.json` backups of Replace the
+  originals hold the whole files, the other servers' values included.
 - An MCP server is credited to whoever last changed its plugin's MCP file.
 - Who last changed an item is read from the last 1000 commits.
 - The context cost counts only the team plugins' skills and rules: not the tool definitions of MCP servers, the

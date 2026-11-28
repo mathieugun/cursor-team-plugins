@@ -234,5 +234,16 @@ under the temp folder, nothing installed) may be run without asking.
   After committing the deletion, it still lists the skill directory when another tracked file remains. Check for
   the committed document itself to distinguish those cases (request 23, 2026-11-28).
 
+- An MCP server of an extension-registered plugin gets `${env:VAR}` and `${VAR}` replaced from Cursor's own process
+  environment (the one it was started with), in `args` and `env`; `${CURSOR_PLUGIN_ROOT}` becomes the registered plugin
+  folder. VAR unset: `${env:VAR}` -> `""`, `${VAR}` stays literal (live probe: a temporary `test/live` scenario whose
+  server writes its env and argv to a file, `TP_ENV_PROBE` set in the shell running `scripts/live-test.js`, which passes
+  its environment through; isolated instance, signed out, Cursor 3.32.10, 2026-11-28, request 26). Not tested: `url`,
+  `headers`, `command`, a signed-in Cursor with a per-plugin settings value.
+
+- Git Bash's `sed -i` rewrote `extension.js` (a CRLF working copy, `core.autocrlf=true`) with LF line endings
+  (2026-11-28, request 26; `grep -c $'\r'` went to 0). Harmless for git (it stores LF and the diff stat stayed the
+  same), but edit with the Edit tool rather than `sed -i`.
+
 ## Implementer lessons
 <!-- One line per project-specific mistake seen in review. -->

@@ -85,6 +85,11 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
     Welcome tab), then **Check git** with the machine's git and with a `git.path` that doesn't exist. Step completion
     can't be tested live: with `--extensionTestsPath` Cursor keeps its storage in memory, so a scenario can't read
     the walkthrough's progress.
+  - Scenario `create-repo`: **Create team repository** over the open folder and a second project (a variant rule that is
+    compared then merged by hand, an identical skill, an MCP server with a token), pushed to an empty bare repository
+    created with `-b trunk`, then **Replace the originals**; a second run is cancelled at the list. The preview tab
+    shows a moment after `markdown.showPreview` resolves (the scenario waits for it). The files moved to the trash go to
+    the real recycle bin (the isolated instance shares the user's home).
 - **By hand** (`test/manual-remote-checks.md`): what needs a real server or the real ssh and credential manager, and
   the look of the view (icons, colours). `python scripts/live_check.py` helps there: `install` (package and install
   in the Cursor you use, or with `--host` on a Remote-SSH host), `status --since install` (installed files against
@@ -336,8 +341,9 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
 
 ### Walkthrough
 
-- `contributes.walkthroughs` has one walkthrough, `gettingStarted` (`WALKTHROUGH_ID`), with three steps and their
-  `completionEvents`: `checkGit` (`onContext:teamPlugins.gitReady`), `addRepository`
+- `contributes.walkthroughs` has one walkthrough, `gettingStarted` (`WALKTHROUGH_ID`), with four steps and their
+  `completionEvents`: `checkGit` (`onContext:teamPlugins.gitReady`), `createRepository`
+  (`onSettingChanged:teamPlugins.repositories`, as the creation ends by adding the repository), `addRepository`
   (`onSettingChanged:teamPlugins.repositories` and `...localRepositories`) and `pickPlugins`
   (`onSettingChanged:teamPlugins.enabled`). No `onCommand:` event: it would tick Check git even when git is missing, and
   Add repository when the input is cancelled; and it fires only for a command that goes through the workbench (palette,
@@ -352,7 +358,7 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
   '<extensionId>#gettingStarted', step: '<extensionId>#gettingStarted#checkGit' }, false`: the string form of the
   category opens the generic Welcome page (a string with `#<stepId>` logs `Could not find category with ID`). Called
   in the first seconds after startup, before the walkthrough is registered, it opens the Welcome page too.
-- The media pages are flat files in `resources/` (`walkthrough-git.md`, `-repository.md`, `-plugins.md`), because
+- The media pages are flat files in `resources/` (`walkthrough-git.md`, `-create.md`, `-repository.md`, `-plugins.md`), because
   `scripts/package.js` packages `resources/` non-recursively. Their links are `https:` only (`package.test.js`).
 - Cursor opens a walkthrough by itself only when the extension was installed in this session (not with a
   `skipWalkthrough` install context), the walkthrough id is seen for the first time, the window had the last focus and
@@ -360,6 +366,89 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
   probably counts as an install (read in the bundle, not probed). With `--extensionDevelopmentPath` nothing opens.
 - Remote-SSH is not probed for the walkthrough: Check git runs on the remote machine, like every git command, and its
   message names that machine.
+
+### Create team repository
+
+`lib/newRepo.js` (pure) and, in `extension.js`, `createTeamRepositoryCommand` (the steps), `decideVariant` and
+`replaceOriginals`. Request 26 holds the decisions: a read-only Markdown preview, quick picks, Cursor's diff editor to
+compare and a scratch copy edited in a diff editor to merge by hand, and no webview (a webview would be a second
+interface to maintain for a one-off command).
+
+- **Staging.** Everything is built in `<storage>/new-repository/<time>-<pid>` (`repo/`, `merge/`, `compare/`, the
+  preview, `.alive`), never in a project or in `.cursor/plugins`. `.alive` is touched every minute; a run removes the
+  other folders whose `.alive` (else folder) is older than 24 hours. The folder is removed at every exit (after the scratch
+  tabs are closed: the preview and the text and diff tabs of its files that are not dirty). Scratch paths carry an index
+  (`compare/<group>-<version>.json`, `merge/<group>/`), never a name from the scanned files. The quick picks use
+  `ignoreFocusOut` (a click elsewhere must not cancel the run) and a quick pick stays on top of the editor area, so none
+  opens while the user reads: the list of what to import waits for **Continue** after the preview, and the variant pick
+  comes back after **Compare** only on **Back to the choices** (hand check, request 26: reopened at once, it covered
+  the top of the diff). The originals in the compare and merge diffs are `team-plugins-readonly:` documents
+  (`readonlyUri`; a content-provider document is read-only in the editor; the provider serves only the files
+  registered during the run, `readonlyFiles`, cleared at the end): a `file:` side would be editable, and in a hand check
+  an edit typed in the Compare tab, whose sides were the real originals, changed a project file instead of the merge.
+  Only the merge file (`file:`, right side, titled "your merge (edit this side)") is editable; Done on a merge still
+  equal to its starting version asks first (`Use it as is` / `Back to editing`). The scratch-tab cleanup also closes
+  the read-only tabs. A skill merge gets an empty
+  placeholder inside `merge/<group>/` for each file only another version has (the right side of its diff), removed at
+  Done when still empty, so a file the user fills in is part of the merge.
+- **Fingerprints.** The scan reads each item into a `contentKey` (sha1 of the bytes: text is compared with its BOM and CRLF
+  normalised, anything that is not valid UTF-8 or holds a NUL byte as raw bytes; a skill adds the relative paths; links
+  inside a skill are left out like Share does). An MCP server's fingerprint is the sha1 of its **original** entry (never
+  shown or logged); the group key is the canonical JSON of the **redacted** entry, so two entries that differ only in a
+  secret value are one version. `stillSame` checks the fingerprint before the URL prompt, right before the build and
+  right after it (the build reads the files again, so what is published is what was previewed), and again before each
+  removal.
+- **Secrets.** An `env` value or a header whose name has a secret word (Cursor's list: CREDENTIAL(S), KEY, PASSPHRASE,
+  PASSWORD, SECRET, TOKEN, plus AUTHORIZATION and APIKEY; names split like Cursor's agent host does) and a literal value
+  becomes `${env:NAME}`. Cursor's agent host (3.32, `dist/4846.js`) collects `${env:NAME}`, `${NAME}` and
+  `${NAME:-default}` of a plugin's MCP config into a per-plugin settings schema and replaces ${CURSOR_PLUGIN_ROOT}.
+  **Live probe** (isolated instance, signed out, Cursor 3.32.10, 2026-11-28, three runs): a server of an
+  extension-registered plugin gets `${env:VAR}` and `${VAR}` replaced from **Cursor's own process environment** in
+  `args` and `env` (VAR unset: `${env:VAR}` becomes `""` and the server still starts, `${VAR}` stays literal);
+  not tested: `url`, `headers`, `command`, a signed-in Cursor with a per-plugin settings value (the README says headers
+  are not checked). So the messages say that the server reads the environment variable and that Cursor must be
+  restarted after setting it. A reference with a non-empty default (`${X:-value}`) counts as a literal. A split server
+  (Keep each under its own name) gets its replaced variables renamed after it (`splitVariable`: `<SERVER>_<VARIABLE>`),
+  in the entry, the confirmation and Replace's reasons. Every text file of a skill is scanned for token shapes, and a
+  `.env` file in a skill is a suspect; `redactServer`'s `hidden` fields are never shown as references. Other suspected secrets
+  (user info or a secret-named parameter in a URL, a secret-named flag, a known token shape anywhere in the entry or in an
+  item's text) only leave the item unticked; the preview, the log and the messages never hold a value, and a JSONC parse
+  error (whose message quotes the input) is replaced by `not valid JSONC`.
+- **References** (`itemReferences`, `serverReferences`) are a heuristic: Markdown links, `mdc:` links (from the project
+  root), `@path` mentions, and the paths of an MCP entry (`${workspaceFolder}`, relative, absolute). They are reported in
+  the preview and counted in the list, never rewritten.
+- **The empty remote.** Measured (git 2.47, local bare repository): `git ls-remote <url>` and `--symref <url> HEAD` of an
+  empty repository print nothing and exit 0, so its default branch is unknown before the first push; after pushing
+  `main` to a bare repository whose HEAD names `trunk`, `ls-remote --symref <url> HEAD` prints nothing either (HEAD is
+  dangling) and a `syncManaged` without a branch would clone nothing. So emptiness is tested with `ls-remote` and no
+  pattern, and the new entry of `teamPlugins.repositories` names the pushed branch unless `checkRemote` reports it as
+  the default. The branch is `init.defaultBranch` when `git check-ref-format --branch` accepts it (it rejects `HEAD`,
+  `release/ends.`, `release/component.lock/next`), else `main`. Without any identity configured `git var
+  GIT_AUTHOR_IDENT` exits 128, so `gitReady` checks it before anything is asked (`IDENTITY_MESSAGE`, shared with
+  `commitAll`).
+- **Before the push.** `initAndCommit` compares `git ls-tree -r -z --name-only HEAD` with the files that were built (a
+  `.gitignore` in a copied skill leaves files out of `git add -A`) and refuses to push on a difference. The URL rules:
+  no user info in an http(s) URL, no password in any URL (an SSH user name is fine), no `?` or `#`, an absolute path for
+  a local repository; the emptiness is checked again after the confirmation.
+- **Push retry.** After a failed push, **Try again** first asks the server what the branch holds (`remoteBranchState`): at
+  our commit it counts as pushed (the failure was after the push), absent it pushes again, anything else stops. A
+  repository pushed but not added to the settings is reported with its own **Try again**.
+- **Replace the originals.** Order: the list; in a remote window the delete-for-good confirmation; at least one ticked
+  original still unchanged, saved and inside its source (else nothing is ticked or touched); the new plugin cloned with
+  every imported item (up to 120 s); the clone's HEAD holding the pushed commit with the plugin folder unchanged since it
+  (`git merge-base --is-ancestor <head> HEAD`, `git diff --quiet <head> HEAD -- <folder>`); the plugin ticked and
+  registered (up to 30 s); then each original checked again right before it is touched. So the agent never loses an
+  item before the plugin provides it, and nothing gets ticked when nothing can be replaced. The list ticks only originals the repository fully
+  represents (not another version, not a merge, not a skill with links, not an item Cursor would drop, not an MCP server
+  whose secret was replaced). Files and folders go to the trash (`workspace.fs.delete`; deleted for good in a remote
+  window, after a modal confirmation). An MCP server is removed from `mcp.json` with `jsonc.removeMember` (text edit that
+  keeps comments); `removeServers` decides the table once (`mcpServers` when it holds a server, else the top level) and
+  parses the result: the servers that stay must be exactly the old ones minus the removed (removing the last entry of
+  `mcpServers` would turn top-level entries into servers). The file is first copied to `<storage>/replaced-originals/
+  <time>-<pid>/<n>-mcp.json` (flag `wx`, mode 0600, with a `.source` file naming it), read again (a change in between
+  skips it), then replaced through a temporary file and a rename that keep the file's mode (a 0600 `mcp.json` stays
+  0600 under a 022 umask); a link is never edited. Only the servers whose fingerprint matches in the same read that
+  prepares the edit are removed and counted.
 
 ### Update summary
 
