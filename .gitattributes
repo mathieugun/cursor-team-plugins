@@ -1,0 +1,2 @@
+# A CRLF checkout would break the shebang line of a hook.
+.githooks/* text eol=lf

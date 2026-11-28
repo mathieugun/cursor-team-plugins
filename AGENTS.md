@@ -53,6 +53,9 @@ only the current version, with no history). Internals, platform notes, detailed 
   `scripts/test.js`. `manual-remote-checks.md` is the short hand checklist for what these can't cover (the real ssh and
   credential manager, a protected branch on a real server).
 - `biome.json`: read-only JavaScript correctness checks for `extension.js`, `lib/`, `scripts/` and `test/`.
+- `.githooks/pre-commit`: Python, the same Biome lint as CI before each commit (LF line endings: `.gitattributes`).
+- `.claude/settings.json` and `.claude/hooks/lint.py`: Claude Code `Stop` and `SubagentStop` hooks that run the
+  pre-commit hook, so an agent fixes the lint before it finishes (not `PostToolUse`: half-written code would be flagged).
 - `.github/workflows/checks.yml`: runs tests on Ubuntu and Windows and lint on Ubuntu on all branch pushes and when
   called by the release workflow.
 - `.github/workflows/release.yml`: on a `v*` tag, requires the shared checks to pass, checks the tag against
@@ -63,23 +66,24 @@ only the current version, with no history). Internals, platform notes, detailed 
 
 ## Commands
 
-Run `biome lint --error-on-warnings extension.js lib scripts test` with standalone Biome 2.6.9 on `PATH` (see
-`docs/development.md`): a warning fails it, as in CI.
-With node on `PATH`, run `node --check extension.js`, `node scripts/test.js` and `node scripts/package.js`.
-Without node, use Cursor's runtime (Git Bash, from the repository root):
+The pre-commit hook (`.githooks/pre-commit`, enabled once per clone with `git config core.hooksPath .githooks`) and
+CI run `biome lint --error-on-warnings extension.js lib scripts test` with standalone Biome 2.6.9 on `PATH` (see
+`docs/development.md`): a warning fails it.
+
+Node 24 is on `PATH` (24.22.1, the version inside Cursor 3.31's runtime; CI uses 24). From the repository root:
 
 ```
-ELECTRON_RUN_AS_NODE=1 "$LOCALAPPDATA/Programs/cursor/Cursor.exe" scripts/test.js
-ELECTRON_RUN_AS_NODE=1 "$LOCALAPPDATA/Programs/cursor/Cursor.exe" scripts/package.js
-ELECTRON_RUN_AS_NODE=1 "$LOCALAPPDATA/Programs/cursor/Cursor.exe" --check extension.js
-ELECTRON_RUN_AS_NODE=1 "$LOCALAPPDATA/Programs/cursor/Cursor.exe" scripts/make-test-repo.js <target.git> [--name <marketplace name>]
-ELECTRON_RUN_AS_NODE=1 "$LOCALAPPDATA/Programs/cursor/Cursor.exe" scripts/live-test.js [scenario ...]
+node --check extension.js
+node scripts/test.js
+node scripts/package.js
+node scripts/make-test-repo.js <target.git> [--name <marketplace name>]
+node scripts/live-test.js [scenario ...]
 ```
 
-`node scripts/live-test.js [scenario ...]` runs the scenarios of `test/live/` in an isolated Cursor instance.
+`live-test.js` runs the scenarios of `test/live/` in an isolated Cursor instance.
 
 The VSIX is written to `dist/cursor-team-plugins-<version>.vsix`. The runner passes explicit test files to
-`--test`: with Cursor's runtime a directory argument fails.
+`--test`: with Cursor's runtime (a Cursor server's node) a directory argument fails.
 
 Branches: work on a branch (`request/<NN>-<name>` for a numbered request, `fix/<name>` for anything else), never
 directly on `main`. Everything a change needs is written on its branch and lands in its commit: the request, its plan,

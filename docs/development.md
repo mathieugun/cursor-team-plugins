@@ -5,8 +5,9 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
 
 ## Building and releasing
 
-- Build the VSIX: `node scripts/package.js` (writes `dist/cursor-team-plugins-<version>.vsix`; see `AGENTS.md` for
-  running it with Cursor's runtime when node is not installed).
+- Install Node 24, the major version inside Cursor's runtime and the one CI uses. On Windows, the exact match for
+  Cursor 3.31: `winget install --id OpenJS.NodeJS.24 --version 24.22.1 --exact`.
+- Build the VSIX: `node scripts/package.js` (writes `dist/cursor-team-plugins-<version>.vsix`).
 - Changes are made on a branch and merged into `main` when ready (see `AGENTS.md`). Release from `main`: bump
   `version` in `package.json`, commit, then push a tag `v<version>` (`git tag v<version>`,
   `git push origin main v<version>`). `.github/workflows/release.yml` requires the shared tests and lint to pass before
@@ -28,6 +29,11 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
   uses Biome's recommended correctness rules, with undeclared variables and unused bindings treated as errors.
   Warnings, such as unused function parameters, fail the check too: remove the parameter, or prefix it with `_` when
   its position is needed.
+- Enable the pre-commit hook once per clone (its worktrees share the setting): `git config core.hooksPath .githooks`.
+  It needs Python 3 as `python3` on `PATH`, lints the files on disk (not only what is staged), and does nothing on a
+  branch that has no `.githooks` folder.
+- Claude Code runs the pre-commit hook too when an agent or a subagent is about to finish (`.claude/settings.json`,
+  `.claude/hooks/lint.py`): a failure is handed back to the agent, once per stop, so it can't loop.
 - `.github/workflows/checks.yml` runs the same lint command on Ubuntu on every branch push and release tag. CI
   verifies the Linux binary's SHA-256 before running it. Lint still runs after a test failure unless the job is
   cancelled.
@@ -35,7 +41,7 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
 ## Tests
 
 - **Unit tests** (`scripts/test.js`, `test/*.test.js`): one file per module, `node:test`, only local bare git
-  repositories, no network. CI runs them on Ubuntu and Windows with Node 22 on branch pushes and `v*` release tags.
+  repositories, no network. CI runs them on Ubuntu and Windows with Node 24 on branch pushes and `v*` release tags.
 - **`test/remote.test.js`** stands in for a real server, with real git: a fake ssh script (`test/fake-ssh.js`, set
   through `core.sshCommand`; it prints the real ssh messages for an unknown or changed host key and a refused login, or
   stays silent) and a node `http` server that runs `git http-backend` behind basic auth (`test/remote-helpers.js`). It
