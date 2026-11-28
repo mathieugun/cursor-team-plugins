@@ -65,8 +65,8 @@ only the current version, with no history). Internals, platform notes, detailed 
 - `.github/workflows/checks.yml`: runs tests on Ubuntu and Windows and lint on Ubuntu on all branch pushes and when
   called by the release workflow.
 - `.github/workflows/release.yml`: on a `v*` tag, requires the shared checks to pass, checks the tag against
-  `package.json`, builds the VSIX, makes a GitHub release and publishes to Open VSX when the `OVSX_PAT` secret is set
-  (`curl` to `https://open-vsx.org/api/-/publish?token=`).
+  `package.json`, builds the VSIX, fast-forwards `main` with `GITHUB_TOKEN`, makes a GitHub release and publishes to
+  Open VSX when the `OVSX_PAT` secret is set (`curl` to `https://open-vsx.org/api/-/publish?token=`).
 - `requests/`: requests being worked on (`NN-<name>.md`) with their plans (`NN-<name>.plan.md`), finished ones in
   `done/`, ideas not picked yet in `ideas.md` (the `/implement` skill's layout; not packaged).
 
@@ -106,8 +106,8 @@ the pre-commit hook. The branch is not pushed: CI on `main` only confirms. When 
 out why the environments differ before changing anything on `main`.
 Get the user's explicit approval before any push, including a release push. Delete the branch after the push succeeds.
 
-Release (from `main`, after the merge): bump `version`, commit, `git tag v<version>`, `git push origin main v<version>`.
-The release workflow runs on the tag, so a tag is only ever made on `main`.
+Release (from `main`, after the merge): bump `version`, commit, `git tag v<version>`, `git push origin refs/tags/v<version>`.
+Push only the tag. After the shared checks pass, the workflow fast-forwards GitHub's `main` without starting a second run.
 
 On a Linux machine with a Cursor server (a Remote-SSH host), the suite runs with the server's node:
 `~/.cursor-server/bin/linux-x64/<commit>/node scripts/test.js` (`live_check.py test` sends the working tree with LF
