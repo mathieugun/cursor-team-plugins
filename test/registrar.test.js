@@ -2,6 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('fs');
 const { pluginApi } = require('../lib/cursorApi');
 const { Registrar } = require('../lib/registrar');
 
@@ -148,4 +149,67 @@ test('Registrar direct removal reports failure and stays registered for retry', 
 
   api.remove = remove;
   assert.deepEqual(await reg.apply(new Map()), { added: [], removed: ['/p/a'], errors: [] });
+});
+
+test('Registrar retries removal before registering the same path under a new name', async () => {
+  const actual = new Set();
+  let failRemoval = false;
+  const reg = new Registrar({
+    add: async (p) => { actual.add(p); },
+    remove: async (p) => {
+      if (failRemoval) {
+        failRemoval = false;
+        throw new Error('unregister refused');
+      }
+      actual.delete(p);
+    },
+  });
+  const pluginPath = '/plugins/review';
+  await reg.apply(new Map([['old:review', pluginPath]]));
+  failRemoval = true;
+  const desired = new Map([['new:review', pluginPath]]);
+  const failed = await reg.apply(desired);
+  assert.deepEqual(failed, { added: [], removed: [], errors: [{ path: pluginPath, message: 'unregister refused' }] });
+  assert.deepEqual([...reg.current], [['old:review', pluginPath]]);
+
+  const retried = await reg.apply(desired);
+  assert.deepEqual(retried, { added: [pluginPath], removed: [pluginPath], errors: [] });
+  assert.deepEqual([...reg.current], [...desired]);
+  assert.deepEqual([...actual], [pluginPath]);
+});
+
+test('Registrar retains the resolved path when removal fails and the old alias disappears', async (t) => {
+  const original = '/aliases/old';
+  const alias = '/aliases/new';
+  const physical = '/plugins/review';
+  let originalGone = false;
+  t.mock.method(fs.realpathSync, 'native', (p) => {
+    if (p === original && originalGone) {
+      throw new Error('old alias is gone');
+    }
+    return p === original || p === alias ? physical : p;
+  });
+  const actual = new Set();
+  const removeCalls = [];
+  const reg = new Registrar({
+    add: async (p) => { actual.add(fs.realpathSync.native(p)); },
+    remove: async (p) => {
+      removeCalls.push(p);
+      if (removeCalls.length === 1) {
+        throw new Error('unregister refused');
+      }
+      actual.delete(fs.realpathSync.native(p));
+    },
+  });
+  await reg.apply(new Map([['old:review', original]]));
+  originalGone = true;
+  const desired = new Map([['new:review', alias]]);
+  const failed = await reg.apply(desired);
+  assert.deepEqual(failed, { added: [], removed: [], errors: [{ path: original, message: 'unregister refused' }] });
+  assert.deepEqual([...reg.current], [['old:review', original]]);
+  const retried = await reg.apply(desired);
+  assert.deepEqual(retried, { added: [alias], removed: [original], errors: [] });
+  assert.deepEqual([...reg.current], [...desired]);
+  assert.deepEqual(removeCalls, [physical, physical]);
+  assert.deepEqual([...actual], [physical]);
 });

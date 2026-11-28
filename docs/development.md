@@ -124,8 +124,10 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
 - For each selected plugin the extension calls `vscode.cursor.plugins.addPlugin({ path })` in every window, at startup
   and whenever the selection or a repository changes. Cursor does not persist these registrations.
 - If Cursor rejects a removal, `Registrar` keeps the registration, reports the error and retries on the next apply.
-  A replacement for that name waits for the removal to succeed. The old partial-copy holder stays protected from
-  cleanup while the registration is tracked. Direct removal before Move or Rename rejects with Cursor's reason.
+  A replacement for that name or resolved path waits for removal to succeed. Cursor deduplicates by real path
+  (Cursor 3.32.10 agent host code, 2026-11-28). The registrar remembers that path when registering, so it can
+  remove the same folder if an alias disappears or is redirected. The old partial-copy holder stays protected
+  while the registration is tracked. Direct removal before Move or Rename rejects with Cursor's reason.
 - Cursor keys registrations by path but names a plugin after its folder (measured on Cursor 3.31.15: two plugins in
   folders of the same name, `a/same` and `b/same`, both load and both are named `same` for the agent). So no two
   registered plugins may have the same folder name: when a plugin's folder name is taken (compared without case) by an
@@ -382,6 +384,9 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
   instead of marked. A missing working item is `removed` when HEAD confirms the absence of its recorded file,
   skill document or named MCP entry. This checks both standard MCP filenames and preserves the record when evidence
   is unavailable. A committed `renamed` entry moves the record when HEAD confirms both sides of the move.
+  If the content changed, the record's optional `seenPath` and `seenName` carry the location and name at the last-seen
+  commit. The latest path and name are retained for checking removals. For a moved skill, the diff pairs files by
+  their relative path inside each version's skill folder.
 - The sync's notification is not shown by `notifyAfterSync` any more: it only stores `s.updateNotice` (`from`, `to`,
   the commit count, the kept files). `refreshUpdates` shows it once the marks of the apply that follows are computed,
   naming the marked items whose last commit is in `from..to`, the enabled ones first (`noticeEntries`, `noticeText`).
@@ -409,8 +414,8 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
 - `pushProblems` (before **Commit and push** and **Push to a branch**, `confirmChecks` in `extension.js`) keeps the
   repository-level problems, those of the plugins that contain a path the push carries (`sync.changedPaths`: the status
   files, and the files of the unpushed commits) and, for a changed file outside any item, a conflict marker check. The
-  modal offers **Push anyway** and **Open files**. If the check throws, a modal gives the reason and requires
-  **Push anyway** before the push flow continues.
+  modal offers **Push anyway** and **Open files**. If the check throws, including a failed diff of unpushed commits,
+  a modal gives the reason and requires **Push anyway** before the push flow continues.
 - `doApply` ends with `updateDiagnostics`: every problem with a file goes to one `DiagnosticCollection` ("Team plugins"),
   mirrored on the same file of a partial copy (the path an agent edits). The collection is replaced only when its content
   changed.

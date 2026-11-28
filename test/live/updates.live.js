@@ -129,6 +129,42 @@ module.exports = {
     await t.idle();
     assert.deepEqual(hook.updates(key).counts, { new: 0, updated: 0, removed: 0 });
     assert.equal(hook.badge(), null);
+
+    t.step('a teammate renames and edits a rule, then removes it before it is seen');
+    const oldRule = 'review/rules/style.mdc';
+    const newRule = 'review/rules/renamed-style.mdc';
+    const originalText = fs.readFileSync(path.join(work, oldRule), 'utf8');
+    const marketplace = path.join(work, '.cursor-plugin', 'marketplace.json');
+    const manifest = JSON.parse(fs.readFileSync(marketplace, 'utf8'));
+    manifest.renamed = { [oldRule]: newRule };
+    fs.writeFileSync(marketplace, JSON.stringify(manifest));
+    fs.renameSync(path.join(work, oldRule), path.join(work, newRule));
+    fs.appendFileSync(path.join(work, newRule), '\nAn extra instruction.\n');
+    const publish = async (subject) => {
+      await must(t.git(['add', '-A'], work), 'add');
+      await must(t.git([...ALICE, 'commit', '-m', subject], work), 'commit');
+      await must(t.git(['push', 'origin', 'HEAD'], work), 'push');
+      await vscode.commands.executeCommand('teamPlugins.syncNow');
+      await t.idle();
+    };
+    await publish('Rename and edit the style rule');
+    assert.equal(hook.updates(key).marks[newRule], 'updated');
+    fs.unlinkSync(path.join(work, newRule));
+    await publish('Remove the renamed rule');
+    assert.deepEqual(hook.updates(key).removed, [newRule]);
+
+    t.step('the removal diff opens the last-seen content at the old path');
+    hook.respond(() => undefined);
+    await vscode.commands.executeCommand('teamPlugins.whatChanged', { repo: key });
+    const input = await t.waitFor(
+      () => vscode.window.tabGroups.all.flatMap((group) => group.tabs)
+        .find((tab) => tab.label.startsWith('renamed-style (Alice, '))?.input,
+      'the rule removal diff',
+    );
+    assert.ok(input instanceof vscode.TabInputTextDiff);
+    assert.equal(JSON.parse(decodeURIComponent(input.original.query)).path, oldRule);
+    const original = await vscode.workspace.openTextDocument(input.original);
+    assert.equal(original.getText().replace(/\r\n/g, '\n'), originalText.replace(/\r\n/g, '\n'));
     t.noSpinner();
   },
 };

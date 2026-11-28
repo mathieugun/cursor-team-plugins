@@ -260,10 +260,21 @@ test('computeMarks: a rename moves the record', () => {
   assert.deepEqual(changedContent.removed, []);
   assert.equal(changedContent.changed, true);
   assert.deepEqual(Object.keys(changedContent.record.items), ['review/skills/new']);
-  assert.equal(changedContent.record.items['review/skills/new'].commit, 'old');
+  assert.deepEqual(changedContent.record.items['review/skills/new'], {
+    oid: '1',
+    commit: 'old',
+    path: 'review/skills/new',
+    kind: 'skill',
+    name: 'new',
+    seenPath: 'review/skills/old',
+    seenName: 'old',
+  });
   const missingAfterRename = updates.computeMarks({ ...base, items: [], fps: new Map(), record: changedContent.record });
   assert.deepEqual(missingAfterRename.removed, []);
   assert.deepEqual(missingAfterRename.record, changedContent.record);
+  const removedAfterRename = updates.computeMarks({ ...base, items: [], fps: new Map(), record: changedContent.record, git: { tree: new Map() } });
+  assert.equal(removedAfterRename.removed[0].path, 'review/skills/new');
+  assert.equal(removedAfterRename.record.items['review/skills/new'].seenPath, 'review/skills/old');
   const sameContent = updates.computeMarks({ ...base, fps: new Map([['review/skills/new', '1']]) });
   assert.equal(sameContent.marks.size, 0);
   assert.equal(sameContent.changed, true);
