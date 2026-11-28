@@ -246,6 +246,8 @@ error or warning icon, `· problem` on the row, the message in the tooltip) and 
 agent can read them with its lint tool after its edits. The most common fix: put a value that contains `: ` (or starts with `*`, `[`, `@`...) in
 quotes, e.g. `globs: "*.ts"`.
 
+If the check itself fails, the warning shows the reason. Choose **Push anyway** to continue, or cancel to stop the push.
+
 Updates never overwrite your changes: they are kept on top of the team's new commits. Only a real conflict, where a
 teammate changed the same lines, pauses the updates until you push your changes to a branch or discard them.
 
