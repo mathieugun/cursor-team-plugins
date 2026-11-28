@@ -57,12 +57,34 @@ before pushing, which keeps an adopted repository healthy, is request 16.
   workflow. The animation should show how Team Plugins takes a teammate from editing the shared skill in use to
   proposing the change for review.
 
+## Personal plugin branches for Remote-SSH
+
+Publish plugin work in progress from the local Cursor window and pick it up in an SSH window. Both windows already
+read the same user setting for the repository and branch, but each machine has its own clone. A branch carries the
+committed files between machines through the Git remote.
+
+- Show the current branch and the team's default branch on the repository row. Offer **Switch branch** and
+  **Create branch**. The picker also works for existing branches such as `stable` and `beta`. Make it clear that
+  choosing a branch affects both local and SSH windows. If a clone has edits that prevent switching, keep them and
+  report which machine could not switch.
+- Add **Publish work in progress** to publish existing edits, including edits made directly by an agent and new
+  untracked plugins, to a personal branch. Change the shared branch setting only after the push succeeds. Unlike the
+  existing **Push to a branch** review flow, publication should leave the authoring clone following the personal
+  branch. Later updates can use **Commit and push** and the existing sync. A plugin in **Drafts** needs to be moved
+  into the repository before it can be published.
+- When an authoring command writes to a managed repository on the team branch, offer to switch to or create a
+  personal branch before continuing. Use the same prompt for creating plugins and items, renaming, sharing, and
+  moving a draft into a repository.
+- Keep the personal branch out of shared project settings when using **Add to this project**. Work pushed to a
+  branch is visible to readers of its Git repository. Bring team updates into the personal branch with a Git merge.
+
+Start with **Publish work in progress** and **Switch branch** so the workflow also covers edits made outside the
+extension's commands. Add the authoring prompts afterward.
+
 ## Smaller follow-ups
 
 - **MCP server readiness.** Show on an MCP server item what it needs and is missing: an environment variable it
   references (a token), its command not on PATH (`npx`, `uvx`, `docker`). Today such a server fails silently in Cursor.
-- **Switch branch** on a repository row: the `{ url, branch }` entry already gives per-user channels (stable, beta);
-  only the command is missing.
 - Search and filter in the view.
 - **Pick the files to commit**: checkboxes in Local changes, so **Commit and push** leaves half-done edits out.
 - Show in the view the `projectPlugins` entries that match nothing, instead of only in the log (the catalog warnings
