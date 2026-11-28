@@ -25,6 +25,8 @@ module.exports = {
     write(ctx.ws, '.cursor/rules/style.mdc', '---\ndescription: Style\n---\nStyle rule.\n');
     write(ctx.ws, '.cursor/rules/db.mdc', '---\ndescription: Database\n---\nText A.\n');
     write(ctx.ws, '.cursor/skills/code-review/SKILL.md', skill('code-review'));
+    write(ctx.ws, '.cursor/skills/layout/SKILL.md', skill('layout'));
+    write(ctx.ws, '.cursor/skills/layout/scripts', 'standalone script\n');
     write(
       ctx.ws,
       '.cursor/mcp.json',
@@ -36,6 +38,8 @@ module.exports = {
     );
     write(other, '.cursor/rules/db.mdc', '---\ndescription: Database\n---\nText B.\n');
     write(other, '.cursor/skills/code-review/SKILL.md', skill('code-review').replace(/\n/g, '\r\n'));
+    write(other, '.cursor/skills/layout/SKILL.md', `${skill('layout')}Run the checks.\n`);
+    write(other, '.cursor/skills/layout/scripts/check.py', 'print("check")\n');
     write(other, '.cursor/rules/api.mdc', '---\ndescription: Api\n---\nSee [t](mdc:src/x.ts)\n');
     write(other, 'src/x.ts', 'export {};\n');
     const bare = path.join(ctx.repos, 'new-team.git');
@@ -109,6 +113,9 @@ module.exports = {
             return items;
           }
           if (/versions\. Which one goes/.test(r.placeHolder)) {
+            if (/^Skill layout:/.test(r.placeHolder)) {
+              return items.find((i) => i.merge);
+            }
             seen.decisions++;
             if (seen.decisions === 1) {
               return items.find((i) => i.compare);
@@ -118,7 +125,7 @@ module.exports = {
             return items.find((i) => i.merge);
           }
           if (/^Version to start from/.test(r.placeHolder)) {
-            return items[0];
+            return items.find((i) => i.label.startsWith(`${path.basename(ws)}/`));
           }
           if (/^Originals to replace/.test(r.placeHolder)) {
             seen.replaceItems = items.filter((i) => i.original).map((i) => ({ label: i.label, picked: i.picked }));
@@ -147,11 +154,16 @@ module.exports = {
             return 'Back to the choices';
           }
           const merging = /\((.+)\), save it/.exec(r.message);
+          if (/^Merging the skill layout/.test(r.message) && merging) {
+            seen.layoutSides = diffSides(/^layout: .*\(SKILL\.md\)/);
+            assert.equal(fs.readFileSync(path.join(path.dirname(merging[1]), 'scripts', 'check.py'), 'utf8'), 'print("check")\n');
+            return 'Done';
+          }
           if (/^Merging the rule db/.test(r.message) && merging) {
             seen.mergeTries = (seen.mergeTries || 0) + 1;
             if (seen.mergeTries === 1) {
               // Done before any edit: the unchanged-merge warning must stop it
-              seen.mergeSides = diffSides(/your merge \(edit this side\)/);
+              seen.mergeSides = diffSides(/^db: .*your merge \(edit this side\)/);
               return 'Done';
             }
             // the edit goes through the editor of the diff's right side, then a save, as a user does it
@@ -171,6 +183,10 @@ module.exports = {
           seen.unchangedWarned = true;
           return 'Back to editing';
         }
+        if (r.kind === 'showWarningMessage' && /^The skill path scripts is a file/.test(r.message)) {
+          seen.layoutAsked = true;
+          return 'Use other version';
+        }
         if (r.kind === 'showWarningMessage' && /^Create the team repository at /.test(r.message)) {
           return 'Create and push';
         }
@@ -182,7 +198,7 @@ module.exports = {
 
       t.step('what the list offered');
       assert.ok(seen.groups, 'the list of what to import was not shown');
-      assert.equal(seen.groups.length, 6, JSON.stringify(seen.groups));
+      assert.equal(seen.groups.length, 7, JSON.stringify(seen.groups));
       assert.ok(seen.groups.every((g) => g.picked), JSON.stringify(seen.groups));
       const api = seen.groups.find((g) => g.label === 'api');
       assert.ok(api && api.description.endsWith('1 reference may break'), JSON.stringify(api));
@@ -196,6 +212,8 @@ module.exports = {
         'team-plugins-readonly',
       ]);
       assert.deepEqual(seen.mergeSides && [seen.mergeSides.original, seen.mergeSides.modified], ['team-plugins-readonly', 'file']);
+      assert.ok(seen.layoutAsked, 'the file and directory conflict did not prompt for a choice');
+      assert.deepEqual(seen.layoutSides, { original: 'team-plugins-readonly', modified: 'file' });
       assert.ok(seen.unchangedWarned, 'Done on an unchanged merge did not warn');
       assert.equal(seen.mergeTries, 2);
       assert.ok(seen.previewOpen, JSON.stringify(seen.tabs));
@@ -212,6 +230,7 @@ module.exports = {
       assert.equal(await show('shared/rules/db.mdc'), 'MERGED');
       assert.ok((await show('shared/rules/api.mdc')).includes('mdc:src/x.ts'));
       assert.ok((await show('shared/skills/code-review/SKILL.md')).includes('Review the change.'));
+      assert.equal(await show('shared/skills/layout/scripts/check.py'), 'print("check")');
       const mcp = await show('shared/mcp.json');
       assert.ok(mcp.includes('${env:GITHUB_TOKEN}'), mcp);
       assert.ok(!mcp.includes('ghp_'), mcp);
@@ -233,6 +252,7 @@ module.exports = {
       const has = (root, rel) => fs.existsSync(path.join(root, ...rel.split('/')));
       assert.ok(!has(ws, '.cursor/rules/style.mdc'), 'style.mdc should be gone');
       assert.ok(!has(ws, '.cursor/skills/code-review'), 'the skill should be gone');
+      assert.equal(fs.readFileSync(path.join(ws, '.cursor/skills/layout/scripts'), 'utf8'), 'standalone script\n');
       assert.ok(has(ws, '.cursor/rules/db.mdc'), 'db.mdc was merged by hand: it stays');
       const servers = JSON.parse(fs.readFileSync(path.join(ws, '.cursor', 'mcp.json'), 'utf8')).mcpServers;
       assert.deepEqual(Object.keys(servers), ['github']);

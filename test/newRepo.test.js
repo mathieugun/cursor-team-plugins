@@ -421,6 +421,22 @@ test('skillDiff lists the files that differ or exist on one side', (t) => {
   assert.deepEqual(n.skillDiff(path.join(root, 'a'), path.join(root, 'b')), ['SKILL.md', 'only-a.md', 'only-b.md']);
 });
 
+test('preparing a skill merge reports a file and directory at the same path', (t) => {
+  const root = fixture(t);
+  const fileVersion = path.join(root, 'file-version');
+  const directoryVersion = path.join(root, 'directory-version');
+  const script = writeFile(fileVersion, 'scripts', 'standalone script');
+  const check = writeFile(directoryVersion, 'scripts/check.py', 'nested script');
+
+  assert.deepEqual(n.prepareSkillMergeFile(fileVersion, 'scripts/check.py'), { conflict: 'scripts' });
+  assert.deepEqual(n.prepareSkillMergeFile(directoryVersion, 'scripts'), { conflict: 'scripts' });
+  assert.equal(fs.readFileSync(script, 'utf8'), 'standalone script');
+  assert.equal(fs.readFileSync(check, 'utf8'), 'nested script');
+  const placeholder = n.prepareSkillMergeFile(fileVersion, 'docs/notes.md');
+  assert.equal(placeholder.created, true);
+  assert.equal(fs.readFileSync(placeholder.file, 'utf8'), '');
+});
+
 function builtRepository(root) {
   const api = project(root, 'api', {
     '.cursor/skills/code-review/SKILL.md': skillText('code-review'),

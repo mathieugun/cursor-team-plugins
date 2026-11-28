@@ -3138,7 +3138,7 @@ function readonlyUri(file) {
 // The file a skill's version holds at `rel` (read-only unless `editable`), or the empty scratch file.
 function skillSide(staging, dir, rel, editable = false) {
   const file = path.join(dir, ...rel.split('/'));
-  if (!fs.existsSync(file)) {
+  if (!fs.existsSync(file) || !fs.statSync(file, { throwIfNoEntry: false })?.isFile()) {
     return readonlyUri(path.join(staging, 'compare', 'empty'));
   }
   return editable ? vscode.Uri.file(file) : readonlyUri(file);
@@ -3199,6 +3199,49 @@ async function compareVersions(group, g, staging) {
   return true;
 }
 
+// Resolve file and directory conflicts before opening editors, so replacing a path cannot invalidate an open diff.
+async function prepareSkillMerge(dir, versions, placeholders) {
+  const keep = 'Keep current merge';
+  const use = 'Use other version';
+  for (const version of versions) {
+    const kept = new Set();
+    for (const { rel } of newRepo.skillFiles(version.src)) {
+      const target = newRepo.prepareSkillMergeFile(dir, rel);
+      if (target.created) {
+        placeholders.add(target.file);
+      }
+      if (!target.conflict || kept.has(target.conflict)) {
+        continue;
+      }
+      const choice = await ui.showWarningMessage(
+        `The skill path ${target.conflict} is a file in one version and a folder in the other. Which should the merge use?`,
+        { modal: true, detail: `The other version is from ${version.where}. Your choice applies to this whole path in the scratch copy.` },
+        keep,
+        use,
+      );
+      if (choice === keep) {
+        kept.add(target.conflict);
+      } else if (choice === use) {
+        const parts = target.conflict.split('/');
+        const dest = path.join(dir, ...parts);
+        sync.removeTree(dest);
+        fs.cpSync(path.join(version.src, ...parts), dest, {
+          recursive: true,
+          filter: (file) => !fs.lstatSync(file).isSymbolicLink(),
+        });
+        for (const placeholder of placeholders) {
+          if (samePath(placeholder, dest) || insideFolded(dest, placeholder)) {
+            placeholders.delete(placeholder);
+          }
+        }
+      } else {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 // Lets the user merge the versions of a group by hand in a scratch copy: a choice { kind: 'merged', ... }, or null
 // when they went back.
 async function mergeByHand(group, g, staging) {
@@ -3223,7 +3266,14 @@ async function mergeByHand(group, g, staging) {
     fs.copyFileSync(base.src, mergeFile);
   }
   let tabs = 0;
-  const placeholders = []; // empty files in the merge folder for what only another version has; dropped at Done if still empty
+  const placeholders = new Set(); // empty files for what only another version has; dropped at Done if still empty
+  if (group.kind === 'skill') {
+    const others = group.versions.filter((_, i) => i !== start).map((v) => v[0]);
+    if (!(await prepareSkillMerge(dir, others, placeholders))) {
+      sync.removeTree(dir);
+      return null;
+    }
+  }
   for (let i = 0; i < group.versions.length; i++) {
     if (i === start) {
       continue;
@@ -3231,20 +3281,14 @@ async function mergeByHand(group, g, staging) {
     const other = group.versions[i][0];
     const title = `${group.name}: ${other.where} ↔ your merge (edit this side)`;
     if (group.kind === 'skill') {
-      for (const rel of newRepo.skillDiff(other.src, dir)) {
-        if (tabs++ < 10) {
-          const target = path.join(dir, ...rel.split('/'));
-          if (!fs.existsSync(target)) {
-            fs.mkdirSync(path.dirname(target), { recursive: true });
-            fs.writeFileSync(target, '');
-            placeholders.push(target);
-          }
-          await vscode.commands.executeCommand(
-            'vscode.diff',
-            skillSide(staging, other.src, rel),
-            skillSide(staging, dir, rel, true),
-            `${title} (${rel})`,
-          );
+      for (const rel of newRepo.skillDiff(other.src, dir, placeholders)) {
+        if (tabs >= 10) {
+          break;
+        }
+        const right = skillSide(staging, dir, rel, true);
+        if (right.scheme === 'file') {
+          tabs++;
+          await vscode.commands.executeCommand('vscode.diff', skillSide(staging, other.src, rel), right, `${title} (${rel})`);
         }
       }
     } else if (group.kind === 'mcp') {
@@ -3259,7 +3303,7 @@ async function mergeByHand(group, g, staging) {
     if (group.kind === 'skill') {
       const mine = newRepo
         .skillFiles(dir)
-        .filter((f) => !(placeholders.includes(f.full) && fs.statSync(f.full).size === 0));
+        .filter((f) => !(placeholders.has(f.full) && fs.statSync(f.full).size === 0));
       const theirs = newRepo.skillFiles(base.src);
       return (
         mine.length === theirs.length &&
