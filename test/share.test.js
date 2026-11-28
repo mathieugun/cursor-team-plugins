@@ -247,6 +247,13 @@ test('renameSkillName', () => {
   assert.equal(renameSkillName("---\nname: 'old'\n---\n", 'old', 'new'), '---\nname: new\n---\n');
 });
 
+test('renameSkillName writes a name that needs quotes quoted', () => {
+  assert.equal(
+    renameSkillName('---\nname: old\ndescription: d\n---\n', 'old', '123'),
+    '---\nname: "123"\ndescription: d\n---\n',
+  );
+});
+
 test('shareItem refuses a bad name and writes nothing', (t) => {
   const root = fixture(t);
   makePlugin(root, 'p');

@@ -215,7 +215,24 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
   can't carry files back into the deleted folder, and the ids of the user's `enabled` and `excluded` lists are
   renamed (`renameIds`) before the next apply. Names follow Cursor's own rule for plugin names
   (`/^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/`, at most 64 characters), used for skills, rules, commands and agents too.
-- Rename (`lib/rename.js`, `renameCommand`; F2 or right-click): `renamePlugin` renames the plugin folder (Cursor names a
+  A plugin folder built from repository data (`metadata.pluginRoot`, a new name) is checked by
+  `authoring.pluginDirError` (catalog's `inside`, on real paths: a link is resolved through the deepest folder that
+  exists, so a folder not created yet is checked too) before any write: it must be inside the repository and never the
+  repository root. New plugin, Move to a repository (through `placePlugin`, so the draft is never copied nor deleted
+  when it fails) and Rename (the new folder) all use it.
+- MCP files and frontmatter values written by the extension: `mcp.json` is JSONC, so Add MCP server
+  (`authoring.addMcpServer`) and Rename of a server (`renameItem`) edit its text with `lib/jsonc.js` instead of
+  writing `JSON.stringify` of the parsed object, which would drop the comments. `tokens` reads the text (BOM, comments
+  and strings skipped); `addMember` adds a member at the end of an object, indented like the members already there, with
+  the comma added where missing (a compact object stays compact, a multi-line one gets the member on its own lines,
+  line endings kept); `renameKey` replaces only the key tokens. The callers parse with `checks.parseJsonc` first.
+  `yamlScalar` writes a value plain only when it starts with a letter, has no `:`, `#` or control character and is not a
+  boolean or null word (`true`, `no`, `on`, `y`, ...), else as a JSON string: a date, a number or `true` would be read
+  back as another type and the description would be lost. Names go through it too (`itemFile`, `renameSkillName`).
+- Rename (`lib/rename.js`, `renameCommand`; F2 or right-click): `renamePlugin` refuses a plugin whose folder is the
+  repository root (`source: "."`: renaming it would move the clone, and Cursor names the plugin after that folder, so
+  renaming only the metadata would not change what Cursor shows) or the `metadata.pluginRoot` folder (it would move
+  every plugin below it), before any write. Otherwise it renames the plugin folder (Cursor names a
   registered plugin after its folder), sets `plugin.json`'s `name` and the marketplace entry (found by its resolved
   source; the source is rewritten as `./<path from the plugin root>`); `renameItem` renames a skill folder or a rule,
   command or agent file (extension kept) and a `name:` frontmatter that equalled the old name (`renameSkillName`), or an
@@ -492,6 +509,9 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
   plugin are not followed. An editor open on a renamed file is not reopened on the new path. The F2 binding is not
   tested by the live scenarios (key presses can't be automated): without a tree element the command takes
   `treeView.selection[0]`.
+- `filterMcpJson` drops the comments of the generated partial-copy MCP file (it is never written back to the
+  repository).
+- A JSONC `mcp.json` that `parseJsonc` rejects is refused by Add MCP server and skipped by Rename.
 - Pull requests from a fork (a user with no write access at all) are not supported: the message says to ask for write
   access.
 - The page of a branch pushed earlier (after the notification closed) is not offered again: its URL stays in the log.

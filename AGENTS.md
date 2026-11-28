@@ -10,7 +10,7 @@ only the current version, with no history). Internals, platform notes, detailed 
 - `extension.js`: the only file that requires `vscode` (activation, tree view, status bar, commands, timers,
   watchers). Not covered by the tests: check its syntax with the command below.
 - `lib/`: pure logic, never requires `vscode`, tested with node: `catalog` (read one repository: `name`, `plugins`,
-  `renamed` (the `renamed` record of `marketplace.json`), `mcpServerNames`, `filterMcpJson`, `frontmatterField`;
+  `renamed` (the `renamed` record of `marketplace.json`), `mcpServerNames`, `filterMcpJson`, `frontmatterField`, `inside`;
   `problems` on the catalog, its plugins and its items (see `checks`); its plugins carry `customPaths`, the kinds
   `plugin.json` declares), `checks` (`splitFrontmatter`, `lintFrontmatter`, `checkItemText`, `conflictMarkerLine`,
   `parseJsonc`, `checkJsonText`, `skillKey`, `pushProblems`: problems Cursor would drop or misread, shown in the view, as
@@ -29,8 +29,9 @@ only the current version, with no history). Internals, platform notes, detailed 
   `pullRequestPage`: the hosting service's new pull request page of a pushed branch), `cursorApi`,
   `registrar`, `remoteErrors` (`classify`, `remoteHost`, `describeRemote`, `remoteResult`: classified git failures with
   a message and the actions to offer), `authoring` (scaffolds and drafts: `nameError`, `serverNameError`, `yamlScalar`,
-  `itemFile`, `createItem`, `splitCommandLine`, `mcpEntry`, `addMcpServer`, `pluginLocation`, `createPlugin`,
-  `movePlugin`, `renameIds`, `declaredPathsError`, `clashError`), `share` (`shareKind`, `shareableItem`, `projectItems`,
+  `itemFile`, `createItem`, `splitCommandLine`, `mcpEntry`, `addMcpServer`, `pluginLocation`, `pluginDirError`,
+  `createPlugin`, `movePlugin`, `renameIds`, `declaredPathsError`, `clashError`), `jsonc` (`tokens`, `addMember`,
+  `renameKey`: edits of JSONC files that keep comments and layout), `share` (`shareKind`, `shareableItem`, `projectItems`,
   `suggestName`, `shareNameError`, `shareItem`, `renameSkillName`: copying a project item into a plugin), `rename`
   (`renamePlugin`, `renameItem`, `recordRename`: renaming a plugin or an item and recording it in `marketplace.json`),
   `gitCheck` (`checkGit`, `gitCheckMessage`: the Check git command's check and message), `context` (`itemContext`,
@@ -238,6 +239,9 @@ On a Linux machine with a Cursor server (a Remote-SSH host), the suite runs with
   repository also imported as a Cursor marketplace: Cursor's schema ignores unknown keys. An id that exists in the
   catalog is never redirected (`followRenames`). Repository names are remembered in `<storage>/repo-names.json`, outside
   `state/` (watched: a write there applies in every window).
+- A plugin folder built from repository data (`metadata.pluginRoot`, a rename) is checked with
+  `authoring.pluginDirError` before any write; a plugin whose folder is the repository root or the `pluginRoot` folder
+  is never renamed (it would move the clone or every plugin).
 - An Explorer context command gets `(clickedUri, selectedUris)` and its `when` is evaluated on the clicked item only;
   `resourcePath` is `fsPath` for `file:` (backslashes on Windows), `uri.path` otherwise: `share.shareKind` and the
   menu's regexes must match (`share.test.js` checks it).
@@ -266,6 +270,8 @@ On a Linux machine with a Cursor server (a Remote-SSH host), the suite runs with
   must never flag valid YAML: when in doubt it says nothing.
 - `plugin.json` and `marketplace.json` are strict JSON in Cursor (a BOM makes it ignore them); `mcp.json` is JSONC
   (comments, trailing commas): `parseJsonc` reads it, `checkJsonText` reports what Cursor would ignore.
+- Add MCP server and Rename edit `mcp.json` as text (`lib/jsonc.js`), not `JSON.stringify` of the parsed object: a
+  rewrite would drop the comments Cursor accepts there.
 - The agent's `ReadLints` tool reads an extension's diagnostics of any file by absolute path (code reading, not seen
   live yet; only errors and warnings;
   markers older than an open document's version are dropped): `updateDiagnostics` runs at every apply, sets the
