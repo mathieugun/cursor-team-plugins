@@ -276,18 +276,23 @@ team's.
   - In a repository you follow, the new folder is a local change of its managed clone until you **Commit and push**
     it. In your own clone it is new files for your own git tools.
   - When the repository's `marketplace.json` lists its plugins, the new plugin is added to that list.
+  - A plugin folder is only ever created inside the repository: a `metadata.pluginRoot` that leads outside it (a `..`
+    or a link) is refused before anything is written.
 - **Move to a repository** (right-click a draft plugin) copies it to a repository you follow or to your own clone and
   deletes the draft. The ids in your selection follow the plugin. In a managed clone the plugin appears in **Local
   changes**: commit and push it to share it with the team. A draft can't be added to a project.
 - **Rename** (right-click a plugin or an item, or select it in the view and press F2) renames:
   - a plugin: its folder, the `name` of its `plugin.json` and its entry in the repository's `marketplace.json`;
   - a skill: its folder and the `name` in its `SKILL.md`; a rule, command or agent: its file and its `name` when it has
-    one; an MCP server: its key in `mcp.json` (and `.mcp.json`).
+    one; an MCP server: its key in `mcp.json` (and `.mcp.json`), edited in place so the file keeps its comments and
+    layout.
 
-  Your selection follows. In a repository (not in the drafts) the rename is recorded in `marketplace.json` (a `renamed`
-  list of old to new ids), so your teammates' choices and the projects' lists follow the new name at their next sync
-  instead of silently losing the item. It is a local change like any other: in a managed clone it shows in **Local
-  changes**, commit and push it to share it.
+  A plugin that is the repository's root folder (`source: "."` in `marketplace.json`) can't be renamed, nor can the
+  folder of `metadata.pluginRoot`: Cursor names a plugin after its folder, and renaming either would move the clone or
+  every plugin below it. Your selection follows. In a repository (not in the drafts) the rename is recorded in
+  `marketplace.json` (a `renamed` list of old to new ids), so your teammates' choices and the projects' lists follow
+  the new name at their next sync instead of silently losing the item. It is a local change like any other: in a
+  managed clone it shows in **Local changes**, commit and push it to share it.
 - **Share with team...** copies a rule, skill, command or agent that lives in a project's `.cursor` folder into a
   plugin. Right-click it in the Explorer (several at once; for a skill, its folder or its `SKILL.md`), or run the
   command from the command palette: it lists the project's items and your personal skills, commands and agents of
@@ -306,7 +311,9 @@ team's.
   - a skill is `skills/<name>/SKILL.md`, a rule `rules/<name>.mdc`, a command `commands/<name>.md` and an agent
     `agents/<name>.md`, each with a frontmatter holding the description you typed and a body to fill in;
   - an MCP server is added to the plugin's `mcp.json` (to `.mcp.json` when that is the only one there is), from a
-    command line or a URL.
+    command line or a URL; an existing file is edited in place, so its comments and layout stay;
+  - a name or description that YAML would read as something else (a date, `true`, a number) is written in quotes, so
+    it reads back as you typed it.
 
   A kind whose paths the plugin's `plugin.json` sets gets no file: Cursor would ignore it, so add it there by hand.
 

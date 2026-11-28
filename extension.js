@@ -2501,6 +2501,18 @@ async function newItemCommand(kind, node) {
   await vscode.window.showTextDocument(vscode.Uri.file(result.file));
 }
 
+// After the plugin or item `from` became `to` (ids with the repository name), the user's own lists follow it.
+async function renameUserIds(from, to) {
+  const config = cfg();
+  for (const key of ['enabled', 'excluded']) {
+    const current = stringList(config.get(key));
+    const next = authoring.renameIds(current, from, to);
+    if (JSON.stringify(next) !== JSON.stringify(current)) {
+      await config.update(key, next, vscode.ConfigurationTarget.Global);
+    }
+  }
+}
+
 async function moveDraftCommand(node) {
   const isDraft = (p) => descs.some((d) => d.key === p.repoKey && d.kind === 'drafts');
   let plugin;
@@ -2577,15 +2589,8 @@ async function moveDraftCommand(node) {
     await apply(); // the draft was unregistered above
     return;
   }
-  const to =`${labelOf(target)}:${plugin.pluginName}`;
-  const config = cfg();
-  for (const key of ['enabled', 'excluded']) {
-    const current = stringList(config.get(key));
-    const next = authoring.renameIds(current, plugin.name, to);
-    if (JSON.stringify(next) !== JSON.stringify(current)) {
-      await config.update(key, next, vscode.ConfigurationTarget.Global);
-    }
-  }
+  const to = `${labelOf(target)}:${plugin.pluginName}`;
+  await renameUserIds(plugin.name, to);
   await apply();
   log(`moved draft ${plugin.pluginName} to ${labelOf(target)} (${result.dir})`);
   if (result.leftover) {
@@ -2691,14 +2696,7 @@ async function renameCommand(node) {
   }
   const from = child ? child.id : plugin.name;
   const to = `${plugin.repo}:${result.id}`;
-  const config = cfg();
-  for (const key of ['enabled', 'excluded']) {
-    const current = stringList(config.get(key));
-    const next = authoring.renameIds(current, from, to);
-    if (JSON.stringify(next) !== JSON.stringify(current)) {
-      await config.update(key, next, vscode.ConfigurationTarget.Global);
-    }
-  }
+  await renameUserIds(from, to);
   await apply();
   log(`renamed ${label} ${from} to ${to}`);
   if (repo.kind === 'managed') {

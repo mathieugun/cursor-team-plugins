@@ -4,7 +4,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { readCatalog } = require('../lib/catalog');
+const { readCatalog, frontmatterField } = require('../lib/catalog');
+const { checkItemText } = require('../lib/checks');
 const {
   NAME_RULE,
   SERVER_RULE,
@@ -21,6 +22,7 @@ const {
   movePlugin,
   renameIds,
   declaredPathsError,
+  pluginDirError,
 } = require('../lib/authoring');
 const { tmpDir, rmDir, writeFile, makePlugin } = require('./helpers');
 
@@ -58,6 +60,34 @@ test('yamlScalar', () => {
   assert.equal(yamlScalar('- item'), '"- item"');
   assert.equal(yamlScalar('say "hi"'), 'say "hi"');
   assert.equal(yamlScalar('  padded  '), 'padded');
+  assert.equal(yamlScalar('2026-11-27'), '"2026-11-27"');
+  assert.equal(yamlScalar('true'), '"true"');
+  assert.equal(yamlScalar('No'), '"No"');
+  assert.equal(yamlScalar('123abc'), '"123abc"');
+  assert.equal(yamlScalar('Checks code'), 'Checks code');
+  assert.equal(yamlScalar('yes please'), 'yes please');
+});
+
+test('itemFile quotes a name that YAML would read as something else', () => {
+  assert.ok(itemFile('skill', '123', 'd').text.includes('\nname: "123"\n'));
+  assert.ok(itemFile('agent', 'true', 'd').text.includes('\nname: "true"\n'));
+  assert.ok(itemFile('skill', 'code-review', 'd').text.includes('\nname: code-review\n'));
+});
+
+test('a new item reads back its description, whatever it looks like', (t) => {
+  const root = fixture(t);
+  makePlugin(root, 'p');
+  const dir = path.join(root, 'p');
+  let i = 0;
+  for (const kind of ['skill', 'rule', 'command', 'agent']) {
+    for (const d of ['2026-11-27', 'true', 'null', '123', 'True', '1e3']) {
+      const made = createItem(dir, kind, `n-${i++}`, d);
+      assert.ok(made.file, made.error);
+      const text = readText(made.file);
+      assert.deepEqual(checkItemText(kind, text, made.file, frontmatterField), [], `${kind} ${d}`);
+      assert.equal(frontmatterField(text, 'description'), d, `${kind} ${d}`);
+    }
+  }
 });
 
 test('itemFile', () => {
@@ -193,6 +223,30 @@ test('addMcpServer', (t) => {
   assert.deepEqual(addMcpServer(fresh, 'a b', { command: 'x' }), { error: SERVER_RULE });
 });
 
+const JSONC_IN =
+  '{\n  // team servers\n  "mcpServers": {\n    "a": { "command": "x" }, // main\n  },\n}\n';
+const JSONC_OUT =
+  '{\n  // team servers\n  "mcpServers": {\n    "a": { "command": "x" }, // main\n' +
+  '    "b": {\n      "command": "y"\n    }\n  },\n}\n';
+
+test('addMcpServer keeps comments and accepts a trailing comma', (t) => {
+  const root = fixture(t);
+  makePlugin(root, 'p', { extra: { 'mcp.json': JSONC_IN } });
+  const p = path.join(root, 'p');
+  assert.deepEqual(addMcpServer(p, 'b', { command: 'y' }), { file: path.join(p, 'mcp.json') });
+  assert.equal(readText(p, 'mcp.json'), JSONC_OUT);
+  const plugin = readCatalog(root).plugins.find((x) => x.name === 'p');
+  assert.deepEqual(plugin.children.map((c) => c.id), ['p/mcp/a', 'p/mcp/b']);
+});
+
+test('addMcpServer refuses a "mcpServers" that is not an object', (t) => {
+  const root = fixture(t);
+  makePlugin(root, 'p', { extra: { 'mcp.json': '{"mcpServers": null}' } });
+  const p = path.join(root, 'p');
+  assert.deepEqual(addMcpServer(p, 'a', { command: 'x' }), { error: 'mcp.json: "mcpServers" is not an object' });
+  assert.equal(readText(p, 'mcp.json'), '{"mcpServers": null}');
+});
+
 function teamRepo(root, extra = {}) {
   writeFile(root, '.cursor-plugin/marketplace.json', JSON.stringify({ name: 'team', plugins: [{ name: 'a', source: './a' }], ...extra }));
   makePlugin(root, extra.metadata && extra.metadata.pluginRoot ? `${extra.metadata.pluginRoot}/a` : 'a', { name: 'a' });
@@ -315,6 +369,73 @@ for (const removal of ['throws EPERM', 'returns with the draft still listed']) {
     assert.equal(readText(r.dir, 'skills', 's', 'SKILL.md'), readText(src, 'skills', 's', 'SKILL.md'));
   });
 }
+
+function junction(target, link) {
+  fs.mkdirSync(path.dirname(link), { recursive: true });
+  fs.symlinkSync(target, link, 'junction');
+}
+
+test('pluginDirError', (t) => {
+  const root = fixture(t);
+  const repo = path.join(root, 'repo');
+  fs.mkdirSync(repo);
+  assert.equal(pluginDirError(repo, path.join(repo, 'a')), '');
+  assert.equal(pluginDirError(repo, repo), 'the plugin folder would be the repository root');
+  assert.equal(pluginDirError(repo, path.join(repo, '..', 'x')), '../x is outside the repository');
+  fs.mkdirSync(path.join(root, 'outside'));
+  junction(path.join(root, 'outside'), path.join(repo, 'plugins'));
+  assert.equal(
+    pluginDirError(repo, path.join(repo, 'plugins', 'new')),
+    'plugins/new leads outside the repository through a link',
+  );
+});
+
+// a repository whose marketplace.json puts new plugins outside it, and the folder they would go to
+function outsideRepo(root, pluginRoot) {
+  const repo = path.join(root, 'repo');
+  writeFile(
+    repo,
+    '.cursor-plugin/marketplace.json',
+    JSON.stringify({ name: 'team', metadata: { pluginRoot }, plugins: [] }),
+  );
+  return repo;
+}
+
+test('createPlugin refuses a pluginRoot outside the repository', (t) => {
+  const root = fixture(t);
+  const repo = outsideRepo(root, '../outside');
+  const before = readText(repo, '.cursor-plugin', 'marketplace.json');
+  assert.deepEqual(createPlugin(repo, { name: 'new' }), {
+    error: '../outside/new is outside the repository (see metadata.pluginRoot in marketplace.json)',
+  });
+  assert.equal(fs.existsSync(path.join(root, 'outside', 'new')), false);
+  assert.equal(readText(repo, '.cursor-plugin', 'marketplace.json'), before);
+});
+
+test('movePlugin keeps the draft when pluginRoot leads outside', (t) => {
+  const root = fixture(t);
+  const repo = outsideRepo(root, '../outside');
+  const draft = path.join(root, 'drafts', 'd');
+  writeFile(draft, '.cursor-plugin/plugin.json', JSON.stringify({ name: 'd' }));
+  writeFile(draft, 'skills/s/SKILL.md', '---\nname: s\ndescription: S.\n---\nbody\n');
+  assert.deepEqual(movePlugin(draft, 'd', '', repo), {
+    error: '../outside/d is outside the repository (see metadata.pluginRoot in marketplace.json)',
+  });
+  assert.ok(fs.existsSync(path.join(draft, '.cursor-plugin', 'plugin.json')));
+  assert.ok(fs.existsSync(path.join(draft, 'skills', 's', 'SKILL.md')));
+  assert.equal(fs.existsSync(path.join(root, 'outside', 'd')), false);
+});
+
+test('createPlugin refuses a pluginRoot that is a link to outside', (t) => {
+  const root = fixture(t);
+  const repo = outsideRepo(root, 'plugins');
+  fs.mkdirSync(path.join(root, 'outside'));
+  junction(path.join(root, 'outside'), path.join(repo, 'plugins'));
+  assert.deepEqual(createPlugin(repo, { name: 'new' }), {
+    error: 'plugins/new leads outside the repository through a link (see metadata.pluginRoot in marketplace.json)',
+  });
+  assert.deepEqual(fs.readdirSync(path.join(root, 'outside')), []);
+});
 
 test('renameIds', () => {
   assert.deepEqual(

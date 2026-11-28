@@ -95,7 +95,7 @@ test('renameItem keeps the extension of a command, and rewrites the name of an a
   assert.equal(read(root, 'review/commands/y.txt'), '---\ndescription: D\n---\nrun\n');
   const agent = renameItem(itemOf(root, 'agent', 'x'), 'y', { repoDir: root, record: false });
   assert.equal(agent.id, 'review/agents/y.md');
-  assert.equal(read(root, 'review/agents/y.md'), '---\nname: y\ndescription: D\n---\nrole\n');
+  assert.equal(read(root, 'review/agents/y.md'), '---\nname: "y"\ndescription: D\n---\nrole\n'); // `y` is a boolean word of YAML 1.1
 });
 
 test('renameItem refuses a bad name and the same name', (t) => {
@@ -261,6 +261,52 @@ test('renamePlugin refuses a name another plugin has or an existing folder, and 
   assert.deepEqual(renamePlugin(plugin, 'taken', { repoDir: root, record: true }), {
     error: 'a plugin named taken already exists in this repository',
   });
+});
+
+test("renamePlugin refuses the repository's root plugin and moves nothing", (t) => {
+  const root = fixture(t);
+  const repo = path.join(root, 'repo');
+  writeFile(repo, MARKET, JSON.stringify({ name: 'team', plugins: [{ name: 'whole', source: '.' }] }));
+  writeFile(repo, '.cursor-plugin/plugin.json', JSON.stringify({ name: 'whole' }));
+  writeFile(repo, 'skills/s/SKILL.md', '---\nname: s\ndescription: S.\n---\nbody\n');
+  const before = read(repo, MARKET);
+  const result = renamePlugin({ dir: repo, pluginName: 'whole' }, 'other', { repoDir: repo, record: true });
+  assert.deepEqual(result, {
+    error:
+      'whole is the repository\'s root folder (source "." in marketplace.json): renaming it would move the whole clone, ' +
+      "and Cursor names a plugin after its folder, so it can't be renamed.",
+  });
+  assert.deepEqual(fs.readdirSync(root), ['repo']);
+  assert.ok(has(repo, '.cursor-plugin/plugin.json') && has(repo, 'skills/s/SKILL.md'));
+  assert.equal(read(repo, MARKET), before);
+});
+
+test('renamePlugin refuses the pluginRoot folder', (t) => {
+  const root = fixture(t);
+  writeFile(
+    root,
+    MARKET,
+    JSON.stringify({ name: 'team', metadata: { pluginRoot: 'plugins' }, plugins: [{ name: 'all', source: '.' }] }),
+  );
+  writeFile(root, 'plugins/.cursor-plugin/plugin.json', JSON.stringify({ name: 'all' }));
+  const result = renamePlugin({ dir: path.join(root, 'plugins'), pluginName: 'all' }, 'x', { repoDir: root, record: false });
+  assert.deepEqual(result, {
+    error:
+      'all is the folder of metadata.pluginRoot in marketplace.json: renaming it would move every plugin below it, ' +
+      "so it can't be renamed.",
+  });
+  assert.ok(has(root, 'plugins/.cursor-plugin/plugin.json'));
+  assert.ok(!has(root, 'x'));
+});
+
+test('renameItem renames a server in a JSONC file and keeps its comments', (t) => {
+  const root = fixture(t);
+  makePlugin(root, 'review', {});
+  const input = '{\n  // team servers\n  "mcpServers": {\n    "a": { "command": "x" }, // main\n  },\n}\n';
+  writeFile(root, 'review/mcp.json', input);
+  const result = renameItem(itemOf(root, 'mcp', 'a'), 'z', { repoDir: root, record: false });
+  assert.deepEqual(result, { id: 'review/mcp/z', file: path.join(root, 'review', 'mcp.json') });
+  assert.equal(read(root, 'review/mcp.json'), input.replace('"a"', '"z"'));
 });
 
 test('renamePlugin refuses a marketplace without an entry for the folder', (t) => {
