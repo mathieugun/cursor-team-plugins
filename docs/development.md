@@ -8,7 +8,12 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
 - Install Node 24, the major version inside Cursor's runtime and the one CI uses. On Windows, the exact match for
   Cursor 3.31: `winget install --id OpenJS.NodeJS.24 --version 24.22.1 --exact`.
 - Build the VSIX: `node scripts/package.js` (writes `dist/cursor-team-plugins-<version>.vsix`).
-- Changes are made on a branch and merged into `main` when ready (see `AGENTS.md`). Release from `main`: bump
+- Changes are made on a branch and merged into `main` when ready (see `AGENTS.md`). Before the merge, the suite
+  passes on Windows and on Linux: `python scripts/live_check.py test --host <ssh host>` runs it on this machine and on
+  a Linux host at once, on the working tree, and fails if either run fails; the lint runs in the pre-commit hook. The
+  branch is not pushed: CI on `main` only confirms. When CI fails where both runs passed, find out why the
+  environments differ before changing anything on `main`.
+- Release from `main`: bump
   `version` in `package.json`, commit, then push a tag `v<version>` (`git tag v<version>`,
   `git push origin main v<version>`). `.github/workflows/release.yml` requires the shared tests and lint to pass before
   it validates the tag and builds the VSIX. It attaches the VSIX to a GitHub release and publishes it to Open VSX,
@@ -84,7 +89,8 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
   the look of the view (icons, colours). `python scripts/live_check.py` helps there: `install` (package and install
   in the Cursor you use, or with `--host` on a Remote-SSH host), `status --since install` (installed files against
   the working tree, the Team Plugins log and Cursor's plugin registrations since the install, across reloads) and
-  `settings backup|diff|restore <dir>` around a test that changes `teamPlugins.*` settings.
+  `settings backup|diff|restore <dir>` around a test that changes `teamPlugins.*` settings. Its `test --host <ssh
+  host>` runs the unit suite here and on a Linux host before a merge (see Building and releasing).
 
 ## How it works
 

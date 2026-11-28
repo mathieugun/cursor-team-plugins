@@ -1,9 +1,11 @@
-"""Live-test helper for cursor-team-plugins: read Cursor's logs, install the build, back up settings.
+"""Live-test helper for cursor-team-plugins: read Cursor's logs, install the build, back up settings, run the suite
+here and on a Linux host.
 Standard library only; run from the repository root (or pass --repo).
 
   python scripts/live_check.py status   [--repo DIR] [--host SSH_HOST] [--since WHEN] [--grep REGEX] [--lines N]
   python scripts/live_check.py install  [--repo DIR] [--host SSH_HOST] [--no-package] [--dry-run]
   python scripts/live_check.py settings backup|diff|restore DIR [--settings FILE] [--force]
+  python scripts/live_check.py test     --host SSH_HOST [--repo DIR] [--timeout SECONDS]
 
 status   Which version is installed and whether its files match the working tree, then for each window of the
          newest Cursor session that has an extension host: the Team Plugins output lines and Cursor's plugin
@@ -14,20 +16,30 @@ install  Package the working tree (scripts/package.js), install the VSIX in the 
          server's CLI on SSH_HOST), then print the installed check. Changes the Cursor the user works in: ask first.
 settings Back up Cursor's user settings.json to DIR (refuses to overwrite a backup without --force), show the diff
          between the backup and the current file, or restore the backup.
+test     Run the test suite here and on SSH_HOST (Linux) at the same time, on the working tree as a commit of it would
+         be (uncommitted and untracked files included, ignored ones left out; LF line endings on the host, as in CI).
+         The host's node is the newest Cursor server's, else node on PATH. Prints each run's totals and failures and
+         exits 1 when either fails or runs longer than SECONDS (600; the host stops its own run then, and gets 15 s
+         more to report it). Refuses a tree with submodules or export-ignore paths, which an archive would leave out.
+         The host needs bash. Run it before merging a branch into main.
 """
 
 import argparse
 import datetime as dt
 import difflib
 import hashlib
+import io
 import json
 import os
 import re
+import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 from pathlib import Path
 
 ISO = re.compile(r"\[(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?)Z\]")
@@ -352,6 +364,199 @@ def cmd_settings(args):
         print(f"restored {backup} -> {settings}")
 
 
+def working_tree_archive(repo):
+    """A tar.gz of the working tree as `git add -A` would commit it, in the repository's form (LF), like a CI
+    checkout. A temporary index leaves the real one untouched."""
+    git_dir = Path(subprocess.run(["git", "rev-parse", "--absolute-git-dir"], cwd=repo, capture_output=True, text=True,
+                                  check=True).stdout.strip())
+    with tempfile.TemporaryDirectory(prefix="live_check_") as tmp:
+        index = Path(tmp) / "index"
+        if (git_dir / "index").is_file():
+            shutil.copy2(git_dir / "index", index)
+        env = {**os.environ, "GIT_INDEX_FILE": str(index)}
+        subprocess.run(["git", "add", "-A"], cwd=repo, env=env, check=True, capture_output=True)
+        tree = subprocess.run(["git", "write-tree"], cwd=repo, env=env, check=True, capture_output=True,
+                              text=True).stdout.strip()
+    # git archive applies the checkout conversions CI gets (eol, working-tree-encoding) and, given a tree id, expands
+    # no export-subst. It leaves out a submodule's files and what export-ignore marks, files or whole folders: compare
+    # its names with the tree's and refuse rather than run the host's suite on less than CI would. Names are compared
+    # as UTF-8 with surrogateescape, so any byte sequence compares and none fails to decode.
+    listing = subprocess.run(["git", "ls-tree", "-r", "-z", tree], cwd=repo, check=True,
+                             capture_output=True).stdout.split(b"\0")
+    entries = [e.split(b"\t", 1) for e in listing if e]
+
+    def names(raw):
+        return raw.decode("utf-8", "surrogateescape")
+
+    submodules = [names(p) for meta, p in entries if meta.startswith(b"160000 ")]
+    if submodules:
+        sys.exit(f"submodules are not sent by git archive: {', '.join(submodules)}")
+    # core.eol=lf: a `text` path without an eol of its own gets LF, as on a Linux checkout (native would be CRLF here).
+    # Not covered: git streams blobs above core.bigFileThreshold (512 MB) without conversion.
+    archive = subprocess.run(["git", "-c", "core.autocrlf=false", "-c", "core.eol=lf", "archive", "--format=tar.gz",
+                              tree], cwd=repo, check=True, capture_output=True).stdout
+    with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz", encoding="utf-8", errors="surrogateescape") as tar:
+        sent = {m.name for m in tar.getmembers() if not m.isdir()}
+    missing = sorted({names(p) for _, p in entries} - sent)
+    if missing:
+        shown = ", ".join(missing[:10]) + (f" and {len(missing) - 10} more" if len(missing) > 10 else "")
+        sys.exit(f"git archive leaves out (export-ignore?): {shown}")
+    return archive
+
+
+ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def summary(name, code, output):
+    """The node version line, the skipped tests, the runner's totals (the ℹ lines) and, on failure, its list of
+    failing tests."""
+    lines = ANSI.sub("", output).splitlines()
+    state = "passed" if code == 0 else f"FAILED ({code})" if isinstance(code, str) else f"FAILED (exit code {code})"
+    print(f"\n== {name}: {state}")
+    shown = [l for l in lines if l.startswith(("node v", "ℹ ")) or l.lstrip().startswith("﹣ ")]
+    print("\n".join(shown))
+    if code != 0:
+        start = next((i for i, l in enumerate(lines) if l.startswith("✖ failing tests")), None)
+        # Without the runner's list (a run stopped or broken early): its last lines, minus those just printed.
+        tail = lines[start:] if start is not None else [l for l in lines[-15:] if l not in shown]
+        print("\n".join(tail))
+
+
+def stop(proc, killer=None):
+    """Stops a process and its children (the test runner starts one node per test file): the process tree on Windows,
+    the session the process was started in (start_new_session) elsewhere. Not covered on Linux and macOS: the git
+    commands the suite starts in sessions of their own (this machine is Windows, where the tree covers them).
+    `killer`: the taskkill a begin_stop already started, waited for instead of starting another."""
+    killer = killer or begin_stop(proc)
+    if killer:
+        try:
+            killer.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            killer.kill()
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+
+
+def begin_stop(proc):
+    """Starts stopping a process without waiting: returns the taskkill process on Windows (None elsewhere, where
+    killpg is immediate, or when the process has ended)."""
+    if proc.poll() is not None:
+        return None
+    if os.name == "nt":
+        return subprocess.Popen(["taskkill", "/T", "/F", "/PID", str(proc.pid)], stdin=subprocess.DEVNULL,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    return None
+
+
+# The host's side of `test`, run by bash whatever the account's shell is. Killing ssh doesn't stop it (no terminal, so
+# no hang-up), so the host enforces the deadline itself. The supervisor (this shell) keeps out of the workload's tree:
+# the workload (tar, then the runner) is a background subshell, the watchdog another one, started right after it, so
+# the deadline covers the extraction too. The watchdog kills the workload's whole tree, collected in one pass through
+# parent ids (which also finds the git commands the suite starts in their own sessions; a process already reparented
+# to init escapes it). It marks the stop in a file the supervisor made before anything ran (outside the checkout, so no
+# test file can stand in its place), then kills, so the supervisor, not the watchdog, reports it. The supervisor reaps,
+# forgets the reaped pid (it may be reused before the EXIT trap runs), reports a stop, removes its files and exits with
+# the workload's code (137 when killed; 124 when the deadline passed but the runner exited 0 meanwhile). The trap kills
+# the watchdog before its sleep, so it can't wake up into its kill step with a reaped pid. Not covered: a stall in
+# mktemp, before the watchdog.
+# A background command of a non-interactive bash reads /dev/null unless redirected: the archive goes through fd 3.
+REMOTE_TEST = r'''
+tree() { local c; for c in $(ps -o pid= --ppid "$1"); do tree "$c"; done; echo "$1"; }
+d=$(mktemp -d /tmp/team-plugins-test.XXXXXX) || exit 1
+mark=$(mktemp /tmp/team-plugins-test.XXXXXX.stopped) || { rm -rf "$d"; exit 1; }
+wl=; w=
+cleanup() {
+  if [ -n "$w" ]; then
+    s=$(ps -o pid= --ppid "$w")
+    kill -KILL "$w" $s 2>/dev/null
+  fi
+  [ -n "$wl" ] && kill -KILL $(tree "$wl") 2>/dev/null
+  wait 2>/dev/null
+  rm -rf "$d" "$mark"
+}
+trap cleanup EXIT
+exec 3<&0
+(
+  tar -xz -C "$d" <&3 || exit 1
+  exec 3<&-
+  node=$(ls -td ~/.cursor-server/bin/linux-x64/*/ 2>/dev/null | head -1)node
+  [ -x "$node" ] || node=node
+  echo "node $("$node" --version) ($node)"
+  cd "$d" && exec "$node" scripts/test.js </dev/null
+) & wl=$!
+exec 3<&- </dev/null
+( sleep TIMEOUT; echo stopped >"$mark"; kill -KILL $(tree "$wl") 2>/dev/null ) & w=$!
+wait "$wl"
+c=$?
+wl=
+if [ -s "$mark" ]; then
+  echo "stopped after TIMEOUT s on the host"
+  [ "$c" = 0 ] && c=124
+fi
+exit $c
+'''
+
+# How much longer than the local suite the host may take: its deadline starts once ssh is connected, and its own stop
+# should be reported rather than cut off.
+HOST_GRACE = 15
+
+
+def cmd_test(args):
+    repo = Path(args.repo).resolve()
+    archive = working_tree_archive(repo)
+    local_node = subprocess.run(["node", "--version"], capture_output=True, text=True).stdout.strip()
+    remote = "bash -c " + shlex.quote(REMOTE_TEST.replace("TIMEOUT", str(args.timeout)))
+    # -T: no terminal, so the archive on stdin stays binary. ServerAlive: a connection that goes silent fails after a
+    # minute instead of hanging.
+    ssh = [SSH, "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15",
+           "-o", "ServerAliveCountMax=4", args.host, remote]
+    group = {} if os.name == "nt" else {"start_new_session": True}
+    procs = {}
+    codes = {}
+    with tempfile.TemporaryDirectory(prefix="live_check_") as tmp:
+        # ssh reads the archive from a file: Python never writes to a pipe that could block past the deadline.
+        archive_file = Path(tmp) / "tree.tgz"
+        archive_file.write_bytes(archive)
+        logs = {n: open(Path(tmp) / f"{n}.log", "w+b") for n in ("local", "host")}
+        try:
+            start = time.monotonic()
+            procs["local"] = subprocess.Popen(["node", "scripts/test.js"], cwd=repo, stdin=subprocess.DEVNULL,
+                                              stdout=logs["local"], stderr=subprocess.STDOUT, **group)
+            with open(archive_file, "rb") as stdin:
+                procs["host"] = subprocess.Popen(ssh, stdin=stdin, stdout=logs["host"], stderr=subprocess.STDOUT,
+                                                 **group)
+            # A run past its deadline is only started stopping here (taskkill can take a while), so it never delays
+            # the other run's deadline; the stops are finished after both deadlines.
+            late = {}
+            for n, limit in (("local", args.timeout), ("host", args.timeout + HOST_GRACE)):
+                try:
+                    codes[n] = procs[n].wait(timeout=max(0.1, start + limit - time.monotonic()))
+                except subprocess.TimeoutExpired:
+                    late[n] = begin_stop(procs[n])
+                    codes[n] = f"stopped after {limit} s"
+            for n, killer in late.items():
+                stop(procs[n], killer)
+            for n, f in logs.items():
+                f.seek(0)
+                output = f.read().decode("utf-8", errors="replace")
+                if n == "local":
+                    output = f"node {local_node} (node on PATH)\n{output}"
+                summary("this machine" if n == "local" else f"{args.host} (Linux)", codes[n], output)
+        finally:
+            for p in procs.values():
+                stop(p)
+            for f in logs.values():
+                f.close()
+    if any(codes.values()):
+        sys.exit(1)
+
+
 def main():
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -372,8 +577,12 @@ def main():
     t.add_argument("dir")
     t.add_argument("--settings")
     t.add_argument("--force", action="store_true")
+    r = sub.add_parser("test")
+    r.add_argument("--repo", default=".")
+    r.add_argument("--host", required=True)
+    r.add_argument("--timeout", type=int, default=600)
     args = p.parse_args()
-    {"status": cmd_status, "install": cmd_install, "settings": cmd_settings}[args.cmd](args)
+    {"status": cmd_status, "install": cmd_install, "settings": cmd_settings, "test": cmd_test}[args.cmd](args)
 
 
 if __name__ == "__main__":
