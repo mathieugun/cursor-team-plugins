@@ -37,6 +37,7 @@ test('buildVsix', (t) => {
     'extension/resources/activity.svg',
     'extension/resources/icon.png',
     'extension/resources/walkthrough-git.md',
+    'extension/resources/walkthrough-create.md',
     'extension/resources/walkthrough-repository.md',
     'extension/resources/walkthrough-plugins.md',
   ]) {

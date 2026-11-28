@@ -4,10 +4,11 @@ const vscode = require('vscode');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { readCatalog } = require('./lib/catalog');
+const { readCatalog, inside } = require('./lib/catalog');
 const checks = require('./lib/checks');
 const authoring = require('./lib/authoring');
 const share = require('./lib/share');
+const newRepo = require('./lib/newRepo');
 const rename = require('./lib/rename');
 const selection = require('./lib/selection');
 const contextCost = require('./lib/context'); // not `context`: activate and others take a parameter of that name
@@ -2936,6 +2937,1049 @@ async function removeOriginals(shared, pluginName, remote) {
   }
 }
 
+// ---- Create team repository ---------------------------------------------------------------------------------------
+
+const NEW_REPO_CANCELLED = 'Team plugins: nothing was written.';
+const PREVIEW_FILE = 'new-team-repository-preview.md';
+const STAGING_STALE_MS = 24 * 60 * 60 * 1000;
+const STAGING_ALIVE_MS = 60 * 1000;
+const PLUGIN_WAIT_MS = 120 * 1000;
+const REGISTER_WAIT_MS = 30 * 1000;
+const WAIT_STEP_MS = 500;
+
+// Shows a message nobody waits for: a notification's promise ends only when it is closed.
+function notify(show, ...args) {
+  Promise.resolve(ui[show](...args)).then(undefined, (err) => log(`cannot show a message: ${err.message}`));
+}
+
+function cancelNewRepo() {
+  notify('showInformationMessage', NEW_REPO_CANCELLED);
+  return null;
+}
+
+function realPathOr(p) {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return path.resolve(p);
+  }
+}
+
+// `inside` that folds case where paths do (VS Code's fsPath has a lower-case drive letter on Windows).
+function insideFolded(root, p) {
+  const norm = (x) => (process.platform === 'win32' ? path.resolve(x).toLowerCase() : path.resolve(x));
+  return inside(norm(root), norm(p));
+}
+
+// <storage>/new-repository/<time>-<pid> with repo/, merge/ and compare/; .alive is touched every minute so that another
+// window can tell a run in progress from a leftover (those are removed after 24 hours).
+function makeStaging() {
+  const root = path.join(storage, 'new-repository');
+  fs.mkdirSync(root, { recursive: true });
+  for (const e of fs.readdirSync(root, { withFileTypes: true })) {
+    if (!e.isDirectory()) {
+      continue;
+    }
+    const dir = path.join(root, e.name);
+    try {
+      let touched;
+      try {
+        touched = fs.statSync(path.join(dir, '.alive')).mtimeMs;
+      } catch {
+        touched = fs.statSync(dir).mtimeMs;
+      }
+      if (Date.now() - touched > STAGING_STALE_MS) {
+        sync.removeTree(dir);
+      }
+    } catch {
+      // not ours to clean up now: the next run tries again
+    }
+  }
+  const dir = path.join(root, `${Date.now()}-${process.pid}`);
+  for (const name of ['repo', 'merge', 'compare']) {
+    fs.mkdirSync(path.join(dir, name), { recursive: true });
+  }
+  const alive = path.join(dir, '.alive');
+  fs.writeFileSync(alive, '');
+  const timer = setInterval(() => {
+    try {
+      const now = new Date();
+      fs.utimesSync(alive, now, now);
+    } catch {
+      // the folder is gone: nothing to keep alive
+    }
+  }, STAGING_ALIVE_MS);
+  return { dir, stop: () => clearInterval(timer) };
+}
+
+// Closes the scratch tabs of a run: the text and diff tabs that show a file of the staging folder (unless unsaved) and
+// the preview.
+async function closeScratchTabs(staging) {
+  try {
+    const tabs = vscode.window.tabGroups.all.flatMap((g) => g.tabs).filter((tab) => {
+      if (tab.isDirty) {
+        return false;
+      }
+      if (tab.label.includes(PREVIEW_FILE)) {
+        return true;
+      }
+      const input = tab.input;
+      let uris = [];
+      if (input instanceof vscode.TabInputText) {
+        uris = [input.uri];
+      } else if (input instanceof vscode.TabInputTextDiff) {
+        uris = [input.original, input.modified];
+      }
+      return uris.some((u) => u.scheme === READONLY_SCHEME || (u.scheme === 'file' && insideFolded(staging, u.fsPath)));
+    });
+    if (tabs.length > 0) {
+      await vscode.window.tabGroups.close(tabs);
+    }
+  } catch (err) {
+    log(`cannot close the scratch tabs: ${err.message}`);
+  }
+}
+
+// The folders to scan: [{ label, root, uri, personal }] or null (cancelled or nothing picked).
+async function pickNewRepoSources() {
+  const folders = vscode.workspace.workspaceFolders || [];
+  const items = [
+    ...folders.map((folder) => ({ label: folder.name, description: folder.uri.fsPath, picked: true, folder })),
+    { label: '~/.cursor', description: 'your personal skills, commands, agents and MCP servers', picked: true, personal: true },
+    { label: '$(folder-opened) Other folders...', description: 'project folders that are not open', picked: false, other: true },
+  ];
+  const picked = await ui.showQuickPick(items, {
+    canPickMany: true,
+    ignoreFocusOut: true,
+    placeHolder: 'Where to look for rules, skills, commands, agents and MCP servers',
+  });
+  if (!picked || picked.length === 0) {
+    return null;
+  }
+  const found = [];
+  for (const p of picked) {
+    if (p.folder) {
+      found.push({ label: p.label, root: p.folder.uri.fsPath, uri: p.folder.uri, personal: false });
+    } else if (p.personal) {
+      found.push({ label: '~/.cursor', root: os.homedir(), uri: vscode.Uri.file(os.homedir()), personal: true });
+    }
+  }
+  if (picked.some((p) => p.other)) {
+    const dirs = await ui.showOpenDialog({
+      canSelectFolders: true,
+      canSelectFiles: false,
+      canSelectMany: true,
+      openLabel: 'Scan',
+      title: 'Project folders to scan',
+    });
+    for (const uri of dirs || []) {
+      found.push({ label: path.basename(uri.fsPath), root: uri.fsPath, uri, personal: false });
+    }
+  }
+  const sources = [];
+  for (const s of found) {
+    const real = realPathOr(s.root);
+    if (!sources.some((o) => samePath(o.real, real))) {
+      sources.push({ ...s, real });
+    }
+  }
+  const counts = new Map();
+  for (const s of sources) {
+    const count = (counts.get(s.label) || 0) + 1;
+    counts.set(s.label, count);
+    if (count > 1) {
+      s.label = `${s.label} (${count})`;
+    }
+  }
+  return sources.length > 0 ? sources : null;
+}
+
+const capitalized = (text) => text.charAt(0).toUpperCase() + text.slice(1);
+
+function groupPickItem(group) {
+  const n = group.references.length;
+  const status = {
+    single: group.copies[0].where,
+    identical: `identical in ${group.copies.length} places`,
+    variants: `${group.versions.length} versions: you pick one next`,
+  }[group.status];
+  const description =
+    `${authoring.KINDS[group.kind].label} · ${status}` +
+    (group.suspects.length > 0 ? ' · may contain a secret' : '') +
+    (n > 0 ? ` · ${n} reference${n === 1 ? '' : 's'} may break` : '');
+  return { label: group.name, description, picked: group.suspects.length === 0, group };
+}
+
+function versionDescription(group, version) {
+  const copy = version[0];
+  const age = updates.ago(copy.mtimeMs, Date.now());
+  return group.kind === 'mcp' ? age : `${copy.lines} lines · ${age}`;
+}
+
+function writeScratch(file, text) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, text);
+  return vscode.Uri.file(file);
+}
+
+// A read-only view of a file for the compare and merge diffs: an original must never be edited by mistake there (hand
+// check, request 26: an edit typed in the wrong pane never reached the merge). Served by the READONLY_SCHEME provider,
+// only for the files registered here during a run.
+const READONLY_SCHEME = 'team-plugins-readonly';
+const readonlyFiles = new Set();
+
+function readonlyUri(file) {
+  const full = path.resolve(file);
+  readonlyFiles.add(full);
+  // the path keeps the file's name (tab title, language); the query says which file it is
+  return vscode.Uri.from({ scheme: READONLY_SCHEME, path: `/${path.basename(full)}`, query: encodeURIComponent(full) });
+}
+
+// The file a skill's version holds at `rel` (read-only unless `editable`), or the empty scratch file.
+function skillSide(staging, dir, rel, editable = false) {
+  const file = path.join(dir, ...rel.split('/'));
+  if (!fs.existsSync(file)) {
+    return readonlyUri(path.join(staging, 'compare', 'empty'));
+  }
+  return editable ? vscode.Uri.file(file) : readonlyUri(file);
+}
+
+async function pickVersion(group, placeHolder, exclude) {
+  const items = group.versions.map((v, i) => ({ label: v[0].where, version: i })).filter((i) => i.version !== exclude);
+  const picked = await ui.showQuickPick(items, { placeHolder });
+  return picked ? picked.version : undefined;
+}
+
+// Opens Cursor's diff editor for two versions of a group; false when the user backed out.
+async function compareVersions(group, g, staging) {
+  let a = 0;
+  let b = 1;
+  if (group.versions.length > 2) {
+    a = await pickVersion(group, 'Left side of the diff');
+    if (a === undefined) {
+      return false;
+    }
+    b = await pickVersion(group, 'Right side of the diff', a);
+    if (b === undefined) {
+      return false;
+    }
+  }
+  const left = group.versions[a][0];
+  const right = group.versions[b][0];
+  let leftUri;
+  let rightUri;
+  if (group.kind === 'mcp') {
+    leftUri = readonlyUri(writeScratch(path.join(staging, 'compare', `${g}-${a}.json`), `${JSON.stringify(left.entry, null, 2)}\n`).fsPath);
+    rightUri = readonlyUri(writeScratch(path.join(staging, 'compare', `${g}-${b}.json`), `${JSON.stringify(right.entry, null, 2)}\n`).fsPath);
+  } else if (group.kind === 'skill') {
+    const rels = newRepo.skillDiff(left.src, right.src);
+    let rel = rels[0] || 'SKILL.md';
+    if (rels.length > 1) {
+      const picked = await ui.showQuickPick(
+        rels.map((label) => ({ label })),
+        { placeHolder: 'File of the skill to compare' },
+      );
+      if (!picked) {
+        return false;
+      }
+      rel = picked.label;
+    }
+    leftUri = skillSide(staging, left.src, rel);
+    rightUri = skillSide(staging, right.src, rel);
+  } else {
+    leftUri = readonlyUri(left.src);
+    rightUri = readonlyUri(right.src);
+  }
+  await vscode.commands.executeCommand('vscode.diff', leftUri, rightUri, `${group.name}: ${left.where} ↔ ${right.where}`);
+  // the choices come back only when the user asks: reopened at once, the pick would cover the top of the diff
+  await ui.showInformationMessage(
+    `Comparing the ${authoring.KINDS[group.kind].label} ${group.name}: ${left.where} ↔ ${right.where}. Back to the choices when you are done.`,
+    'Back to the choices',
+  );
+  return true;
+}
+
+// Lets the user merge the versions of a group by hand in a scratch copy: a choice { kind: 'merged', ... }, or null
+// when they went back.
+async function mergeByHand(group, g, staging) {
+  const start = await pickVersion(group, 'Version to start from');
+  if (start === undefined) {
+    return null;
+  }
+  const label = authoring.KINDS[group.kind].label;
+  const dir = path.join(staging, 'merge', String(g));
+  sync.removeTree(dir);
+  fs.mkdirSync(dir, { recursive: true });
+  const base = group.versions[start][0];
+  let mergeFile;
+  if (group.kind === 'skill') {
+    fs.cpSync(fs.realpathSync(base.src), dir, { recursive: true, filter: (s) => !fs.lstatSync(s).isSymbolicLink() });
+    mergeFile = path.join(dir, 'SKILL.md');
+  } else if (group.kind === 'mcp') {
+    mergeFile = path.join(dir, 'server.json');
+    fs.writeFileSync(mergeFile, `${JSON.stringify(base.entry, null, 2)}\n`);
+  } else {
+    mergeFile = path.join(dir, `item${base.ext}`);
+    fs.copyFileSync(base.src, mergeFile);
+  }
+  let tabs = 0;
+  const placeholders = []; // empty files in the merge folder for what only another version has; dropped at Done if still empty
+  for (let i = 0; i < group.versions.length; i++) {
+    if (i === start) {
+      continue;
+    }
+    const other = group.versions[i][0];
+    const title = `${group.name}: ${other.where} ↔ your merge (edit this side)`;
+    if (group.kind === 'skill') {
+      for (const rel of newRepo.skillDiff(other.src, dir)) {
+        if (tabs++ < 10) {
+          const target = path.join(dir, ...rel.split('/'));
+          if (!fs.existsSync(target)) {
+            fs.mkdirSync(path.dirname(target), { recursive: true });
+            fs.writeFileSync(target, '');
+            placeholders.push(target);
+          }
+          await vscode.commands.executeCommand(
+            'vscode.diff',
+            skillSide(staging, other.src, rel),
+            skillSide(staging, dir, rel, true),
+            `${title} (${rel})`,
+          );
+        }
+      }
+    } else if (group.kind === 'mcp') {
+      const scratch = writeScratch(path.join(staging, 'compare', `${g}-${i}.json`), `${JSON.stringify(other.entry, null, 2)}\n`);
+      await vscode.commands.executeCommand('vscode.diff', readonlyUri(scratch.fsPath), vscode.Uri.file(mergeFile), title);
+    } else {
+      await vscode.commands.executeCommand('vscode.diff', readonlyUri(other.src), vscode.Uri.file(mergeFile), title);
+    }
+  }
+  // whether the merge still is the starting version (empty placeholders aside)
+  const sameAsBase = () => {
+    if (group.kind === 'skill') {
+      const mine = newRepo
+        .skillFiles(dir)
+        .filter((f) => !(placeholders.includes(f.full) && fs.statSync(f.full).size === 0));
+      const theirs = newRepo.skillFiles(base.src);
+      return (
+        mine.length === theirs.length &&
+        mine.every((f, i) => f.rel === theirs[i].rel && fs.readFileSync(f.full).equals(fs.readFileSync(theirs[i].full)))
+      );
+    }
+    if (group.kind === 'mcp') {
+      try {
+        return newRepo.canonicalJson(checks.parseJsonc(fs.readFileSync(mergeFile, 'utf8'))) === newRepo.canonicalJson(base.entry);
+      } catch {
+        return false;
+      }
+    }
+    return fs.readFileSync(mergeFile).equals(fs.readFileSync(base.src));
+  };
+  for (;;) {
+    const choice = await ui.showInformationMessage(
+      `Merging the ${label} ${group.name}: edit the right side of the diff (${mergeFile}), save it, then press Done.`,
+      'Done',
+      'Back',
+    );
+    if (choice !== 'Done') {
+      sync.removeTree(dir);
+      return null;
+    }
+    const unsaved = vscode.workspace.textDocuments.find(
+      (d) => d.isDirty && d.uri.scheme === 'file' && insideFolded(dir, d.uri.fsPath),
+    );
+    if (unsaved) {
+      notify('showWarningMessage', `Team plugins: save ${unsaved.uri.fsPath} first.`);
+      continue;
+    }
+    if (sameAsBase()) {
+      const keep = await ui.showWarningMessage(
+        `Team plugins: your merge of the ${label} ${group.name} is still the ${base.where} version. Use it as is?`,
+        { modal: true, detail: `Edit the right side of the diff (your merge), save it, then press Done again.` },
+        'Use it as is',
+        'Back to editing',
+      );
+      if (keep !== 'Use it as is') {
+        continue;
+      }
+    }
+    if (group.kind === 'mcp') {
+      let parsed = null;
+      try {
+        parsed = checks.parseJsonc(fs.readFileSync(mergeFile, 'utf8'));
+      } catch {
+        // reported below, without the parser's words (they quote the text)
+      }
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        notify('showErrorMessage', 'Team plugins: the merged MCP server is not a valid JSON object.');
+        continue;
+      }
+      const redacted = newRepo.redactServer(group.name, parsed);
+      group.replaced.push(...redacted.replaced.map((r) => ({ where: 'your merge', field: r.where, variable: r.variable })));
+      group.suspects.push(...redacted.suspects.map((text) => ({ where: 'your merge', text })));
+      return { kind: 'merged', src: redacted.entry, replaced: redacted.replaced };
+    }
+    for (const p of placeholders) {
+      try {
+        if (fs.statSync(p).size === 0) {
+          fs.unlinkSync(p); // not filled in: the merge doesn't take that file
+        }
+      } catch {
+        // already gone
+      }
+    }
+    for (const text of newRepo.itemSuspects({ kind: group.kind, src: group.kind === 'skill' ? dir : mergeFile })) {
+      group.suspects.push({ where: 'your merge', text });
+    }
+    return {
+      kind: 'merged',
+      src: group.kind === 'skill' ? dir : mergeFile,
+      ext: group.kind === 'skill' ? '' : base.ext,
+      originalName: base.originalName,
+    };
+  }
+}
+
+// What to do with a group that has several versions: a choice, or undefined when the user cancelled the command.
+async function decideVariant(group, g, staging, taken) {
+  const label = authoring.KINDS[group.kind].label;
+  const reserved = taken.get(group.kind);
+  for (;;) {
+    const names = newRepo.splitNames(group, reserved);
+    const items = [
+      ...group.versions.map((v, i) => ({
+        label: `$(check) Use ${v[0].where}`,
+        description: versionDescription(group, v),
+        detail: v.length > 1 ? `same as ${v.slice(1).map((c) => c.where).join(', ')}` : undefined,
+        version: i,
+      })),
+      { label: '$(diff) Compare...', compare: true },
+      { label: '$(edit) Merge by hand...', merge: true },
+      { label: '$(split) Keep each under its own name', description: names.join(', '), split: true },
+      { label: '$(close) Leave out', out: true },
+    ];
+    const pick = await ui.showQuickPick(items, {
+      ignoreFocusOut: true,
+      placeHolder: `${capitalized(label)} ${group.name}: ${group.versions.length} versions. Which one goes in the team repository?`,
+    });
+    if (!pick) {
+      return undefined;
+    }
+    if (pick.version !== undefined) {
+      reserved.add(group.name);
+      return { kind: 'use', version: pick.version };
+    }
+    if (pick.split) {
+      for (const name of names) {
+        reserved.add(name);
+      }
+      return { kind: 'split', names };
+    }
+    if (pick.out) {
+      return { kind: 'out' };
+    }
+    if (pick.compare) {
+      await compareVersions(group, g, staging);
+    } else if (pick.merge) {
+      const merged = await mergeByHand(group, g, staging);
+      if (merged) {
+        reserved.add(group.name);
+        return merged;
+      }
+    }
+  }
+}
+
+// The error message of a remote check or push with its buttons: 'change', 'again' (the terminal was opened) or 'stop'.
+async function showNewRepoError(result, url, { change = false, retry = false } = {}) {
+  const terminal = (result.actions || []).includes('terminal') ? [ACTIONS.terminal.label] : [];
+  const buttons = [...(retry ? ['Try again'] : []), ...(change ? ['Change URL'] : []), ...terminal, 'Show log'];
+  const choice = await ui.showErrorMessage(`Team plugins: ${result.message}`, ...buttons);
+  if (choice === 'Try again') {
+    return 'retry';
+  }
+  if (choice === 'Change URL') {
+    return 'change';
+  }
+  if (choice === ACTIONS.terminal.label) {
+    openGitTerminal(url);
+    return 'again';
+  }
+  if (choice === 'Show log') {
+    output.show();
+  }
+  return 'stop';
+}
+
+// Asks for the URL of the empty repository until one answers as empty: the URL, or null (cancelled, or stopped).
+async function askNewRepoUrl(git) {
+  let previous = '';
+  const configured = () => parseRepositories(cfg().get('repositories')).map((e) => normalizeUrl(e.url));
+  for (;;) {
+    const typed = await ui.showInputBox({
+      prompt: 'Git URL of an empty repository for the team (create it on your Git host first)',
+      placeHolder: 'https://github.com/your-org/team-plugins.git',
+      value: previous,
+      ignoreFocusOut: true,
+      validateInput: (v) =>
+        newRepo.urlError(v) ||
+        (configured().includes(normalizeUrl(newRepo.destination(v))) ? `${v.trim()} is already in teamPlugins.repositories` : null),
+    });
+    if (typed === undefined) {
+      return { cancelled: true };
+    }
+    previous = typed.trim();
+    const url = newRepo.destination(typed);
+    for (;;) {
+      const result = await newRepo.checkEmptyRemote({ run: git, cwd: storage, url, idleMs: sync.CHECK_IDLE_MS });
+      if (result.kind === 'empty') {
+        return { url };
+      }
+      const next = await showNewRepoError(result, url, { change: true });
+      if (next === 'change') {
+        break;
+      }
+      if (next === 'stop') {
+        return { stopped: true };
+      }
+    }
+  }
+}
+
+function countsText(items, servers) {
+  const counts = [];
+  for (const kind of ['skill', 'rule', 'command', 'agent']) {
+    const k = items.filter((i) => i.kind === kind).length;
+    if (k > 0) {
+      counts.push(`${k} ${authoring.KINDS[kind].label}${k === 1 ? '' : 's'}`);
+    }
+  }
+  if (servers.length > 0) {
+    counts.push(`${servers.length} ${authoring.KINDS.mcp.label}${servers.length === 1 ? '' : 's'}`);
+  }
+  return counts.join(', ');
+}
+
+// The groups whose imported copy Cursor would drop: a file of it (or of its skill folder) has an error-level problem.
+function droppedGroups(plan, pluginDir, problems) {
+  const files = problems.filter((p) => p.severity === 'error' && p.file).map((p) => p.file);
+  const dropped = new Set();
+  const itemOf = new Map(plan.items.map((i) => [`${i.kind}:${i.name}`, i]));
+  for (const entry of plan.imported) {
+    const kind = entry.group.kind;
+    if (kind === 'mcp') {
+      if (files.some((f) => samePath(f, path.join(pluginDir, 'mcp.json')))) {
+        dropped.add(entry.group.id);
+      }
+      continue;
+    }
+    const item = itemOf.get(`${kind}:${entry.name}`);
+    const target = path.join(pluginDir, authoring.KINDS[kind].folder, kind === 'skill' ? entry.name : entry.name + item.ext);
+    if (files.some((f) => (kind === 'skill' ? insideFolded(target, f) : samePath(f, target)))) {
+      dropped.add(entry.group.id);
+    }
+  }
+  return dropped;
+}
+
+// The lines of the confirmation dialog (those with a zero count are left out).
+function confirmDetail({ pluginName, plan, skipped, problems, repoDir, branch, url }) {
+  const lines = [];
+  const total = plan.items.length + plan.servers.length;
+  lines.push(`The plugin ${pluginName} with ${total} item${total === 1 ? '' : 's'}: ${countsText(plan.items, plan.servers)}.`);
+  const replaced = plan.imported.flatMap((e) => e.variables);
+  if (replaced.length > 0) {
+    const variables = [...new Set(replaced)].join(', ');
+    lines.push(`${replaced.length} secret value${replaced.length === 1 ? '' : 's'} replaced by environment variables: ${variables}.`);
+  }
+  const suspects = [...new Set(plan.imported.filter((e) => e.group.suspects.length > 0).map((e) => e.name))];
+  if (suspects.length > 0) {
+    lines.push(`${suspects.length} item${suspects.length === 1 ? '' : 's'} may contain a secret: ${suspects.join(', ')}.`);
+  }
+  const references = [...new Set(plan.imported.map((e) => e.group))].reduce((sum, g) => sum + g.references.length, 0);
+  if (references > 0) {
+    lines.push(`${references} reference${references === 1 ? '' : 's'} may break (see the preview).`);
+  }
+  if (skipped.length > 0) {
+    lines.push(`Links left out of skills: ${skipped.join(', ')}.`);
+  }
+  if (problems.length > 0) {
+    const errors = problems.filter((p) => p.severity === 'error').length;
+    const first = problems.slice(0, 5).map((p) => {
+      const rel = p.file ? path.relative(repoDir, p.file).split(path.sep).join('/') : '';
+      return `${rel}:${p.line} ${p.message}`;
+    });
+    lines.push(
+      `${problems.length} problem${problems.length === 1 ? '' : 's'} Cursor would report, ${errors} that make it drop an item: ${first.join('; ')}.`,
+    );
+  }
+  lines.push(`The branch ${branch} is pushed to ${url}, then the repository is added to the ones you follow.`);
+  return lines.join('\n');
+}
+
+// The Create team repository command. Returns the promise of the closing message (and of Replace the originals).
+async function createTeamRepositoryCommand() {
+  const run = makeGit(gitPath());
+  const ready = await newRepo.gitReady({ run, cwd: storage });
+  if (!ready.ok) {
+    notify('showErrorMessage', `Team plugins: ${ready.message}`);
+    return undefined;
+  }
+  const staging = makeStaging();
+  let closing = null;
+  try {
+    closing = await createRepositoryFlow(staging.dir, sync.logged(run, log));
+  } finally {
+    staging.stop();
+    await closeScratchTabs(staging.dir);
+    readonlyFiles.clear();
+    try {
+      sync.removeTree(staging.dir);
+    } catch (err) {
+      log(`cannot remove ${staging.dir}: ${err.message}`);
+    }
+  }
+  return closing ? closing() : undefined;
+}
+
+// Steps 3 to 18: asks, builds, pushes and follows the repository. Returns null (nothing more to do) or a function that
+// shows the closing message once the staging folder is gone.
+async function createRepositoryFlow(staging, git) {
+  const sources = await pickNewRepoSources();
+  if (!sources) {
+    return cancelNewRepo();
+  }
+  const { groups, errors } = newRepo.scan(sources);
+  for (const e of errors) {
+    log(`not read: ${e.file}: ${e.message}`);
+  }
+  if (groups.length === 0) {
+    notify(
+      'showInformationMessage',
+      `Team plugins: no rule, skill, command, agent or MCP server found in ${sources.map((s) => s.label).join(', ')}.` +
+        (errors.length > 0 ? ` ${errors.length} file(s) could not be read: see the log.` : ''),
+    );
+    return null;
+  }
+  const previewFile = path.join(staging, PREVIEW_FILE);
+  fs.writeFileSync(previewFile, newRepo.previewMarkdown({ sources, groups, errors }));
+  try {
+    await vscode.commands.executeCommand('markdown.showPreview', vscode.Uri.file(previewFile));
+    log(`opened the preview ${previewFile}`);
+  } catch (err) {
+    log(`cannot open the preview ${previewFile}: ${err.message}`);
+  }
+  // the list waits until the preview has been read: open at once, it would cover the top of the preview
+  const read = await ui.showInformationMessage(
+    `Team plugins: read the preview of the new team repository (${groups.length} item${groups.length === 1 ? '' : 's'} found), then press Continue to pick what goes in.`,
+    'Continue',
+    'Cancel',
+  );
+  if (read !== 'Continue') {
+    return cancelNewRepo();
+  }
+  const picked = await ui.showQuickPick(groups.map(groupPickItem), {
+    canPickMany: true,
+    ignoreFocusOut: true,
+    placeHolder: 'What goes in the team repository (the preview lists the details)',
+  });
+  if (!picked || picked.length === 0) {
+    return cancelNewRepo();
+  }
+  const ids = new Set(picked.map((p) => p.group.id));
+  const chosen = groups.filter((g) => ids.has(g.id));
+
+  const choices = new Map();
+  const taken = new Map(Object.keys(authoring.KINDS).map((kind) => [kind, new Set()]));
+  // every picked group's name is reserved before any decision, so a split never takes a name a later group uses
+  for (const g of chosen) {
+    taken.get(g.kind).add(g.name);
+  }
+  for (const g of chosen.filter((x) => x.status !== 'variants')) {
+    choices.set(g.id, { kind: 'use', version: 0 });
+  }
+  for (const g of chosen.filter((x) => x.status === 'variants')) {
+    const choice = await decideVariant(g, groups.indexOf(g), staging, taken);
+    if (!choice) {
+      return cancelNewRepo();
+    }
+    choices.set(g.id, choice);
+  }
+  const plan = newRepo.planImport(groups, choices);
+  if (plan.items.length + plan.servers.length === 0) {
+    return cancelNewRepo();
+  }
+  // the copied originals must still be what the preview showed: checked now, right before the build and right after it,
+  // so what is published is what was previewed (the build reads the files again)
+  const unchanged = () => {
+    const changed = plan.imported.find((e) => e.copy && !newRepo.stillSame(e.copy));
+    if (changed) {
+      notify('showErrorMessage', `Team plugins: ${changed.copy.where} changed since the preview: run Create team repository again.`);
+      return false;
+    }
+    return true;
+  };
+  if (!unchanged()) {
+    return null;
+  }
+
+  const asked = await askNewRepoUrl(git);
+  if (asked.cancelled) {
+    return cancelNewRepo();
+  }
+  if (asked.stopped) {
+    return null;
+  }
+  const url = asked.url;
+  const pluginName = await ui.showInputBox({
+    prompt: 'Name of the plugin that holds the imported items',
+    value: share.suggestName(baseName(url)) || 'team',
+    ignoreFocusOut: true,
+    validateInput: (v) => authoring.nameError(v.trim()) || null,
+  });
+  if (pluginName === undefined) {
+    return cancelNewRepo();
+  }
+  const name = pluginName.trim();
+  const repoDir = path.join(staging, 'repo');
+  if (!unchanged()) {
+    return null;
+  }
+  const built = newRepo.buildRepository(repoDir, {
+    marketplaceName: repoName(baseName(url)),
+    pluginName: name,
+    items: plan.items,
+    servers: plan.servers,
+  });
+  if (built.errors.length > 0) {
+    notify(
+      'showErrorMessage',
+      `Team plugins: could not write the new repository: ${built.errors.map((e) => `${e.name}: ${e.message}`).join('; ')}`,
+    );
+    return null;
+  }
+  if (!unchanged()) {
+    return null;
+  }
+  const problems = checks.pushProblems({
+    catalog: readCatalog(repoDir),
+    repoDir,
+    changed: built.files,
+    readFile: (file) => {
+      try {
+        return fs.readFileSync(file, 'utf8');
+      } catch {
+        return null;
+      }
+    },
+  });
+  const dropped = droppedGroups(plan, built.pluginDir, problems);
+  const branch = await newRepo.defaultBranch({ run: git, cwd: storage });
+  const hasError = problems.some((p) => p.severity === 'error');
+  const button = hasError ? 'Create and push anyway' : 'Create and push';
+  const detail = confirmDetail({ pluginName: name, plan, skipped: built.skipped, problems, repoDir, branch, url });
+  const confirmed = await ui.showWarningMessage(`Create the team repository at ${url}?`, { modal: true, detail }, button);
+  if (confirmed !== button) {
+    return cancelNewRepo();
+  }
+
+  const again = await newRepo.checkEmptyRemote({ run: git, cwd: storage, url, idleMs: sync.CHECK_IDLE_MS });
+  if (again.kind !== 'empty') {
+    await showNewRepoError(again, url);
+    return null;
+  }
+  const progress = (fn) =>
+    vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: 'Team plugins: creating the team repository' },
+      fn,
+    );
+  const committed = await progress(() => newRepo.initAndCommit({ run: git, dir: repoDir, branch, files: built.files }));
+  if (!committed.head) {
+    notify('showErrorMessage', `Team plugins: ${committed.message}`);
+    return null;
+  }
+  let pushed = await progress(() => newRepo.pushNew({ run: git, dir: repoDir, url, branch }));
+  while (pushed.kind !== 'pushed') {
+    const next = await showNewRepoError(pushed, url, { retry: true });
+    if (next === 'stop') {
+      return null;
+    }
+    if (next === 'retry') {
+      const state = await newRepo.remoteBranchState({ run: git, cwd: storage, url, branch, head: committed.head });
+      if (state === 'pushed') {
+        break;
+      }
+      if (state === 'other') {
+        notify('showErrorMessage', `Team plugins: the branch ${branch} of ${url} now holds other commits: nothing more was pushed.`);
+        return null;
+      }
+      pushed = state === 'absent' ? await progress(() => newRepo.pushNew({ run: git, dir: repoDir, url, branch })) : state;
+    }
+  }
+
+  const check = await sync.checkRemote({ run: git, cwd: storage, repoUrl: url, idleMs: sync.CHECK_IDLE_MS });
+  const entry = newRepo.repositoryEntry(url, branch, check);
+  for (;;) {
+    try {
+      await addRepositoryEntry(entry);
+      break;
+    } catch (err) {
+      const choice = await ui.showErrorMessage(
+        `Team plugins: pushed ${url}, but could not add it to your repositories: ${err.message}`,
+        'Try again',
+      );
+      if (choice !== 'Try again') {
+        return null;
+      }
+    }
+  }
+  const count = plan.items.length + plan.servers.length;
+  log(`created the team repository ${url} (${branch}) with ${count} items`);
+  const text =
+    `Team plugins: created ${url} with the plugin ${name} (${count} items). It is being cloned. Your originals are still in your projects: ` +
+    "replace them with the plugin so the agent doesn't read each item twice, or keep them and tick the plugin later in the Team Plugins view.";
+  return () =>
+    ui.showInformationMessage(text, 'Replace the originals', 'Keep them').then((choice) =>
+      choice === 'Replace the originals' ? replaceOriginals({ groups, choices, dropped, plan, url, pluginName: name, head: committed.head }) : undefined,
+    );
+}
+
+function waitStep() {
+  return new Promise((resolve) => setTimeout(resolve, WAIT_STEP_MS));
+}
+
+// The plugin of the new repository once it is cloned and holds every imported item (null after the wait).
+async function waitForNewPlugin({ url, pluginName, plan }) {
+  const wanted = [
+    ...plan.items.map((i) => ({ kind: i.kind, name: i.name })),
+    ...plan.servers.map((s) => ({ kind: 'mcp', name: s.name })),
+  ];
+  const end = Date.now() + PLUGIN_WAIT_MS;
+  for (;;) {
+    const d = listConfigured().find((x) => x.normalized === normalizeUrl(url));
+    const plugin = d && catalog.plugins.find((p) => p.repoKey === d.key && p.pluginName === pluginName);
+    if (plugin && wanted.every((w) => plugin.children.some((c) => c.kind === w.kind && c.name === w.name))) {
+      return plugin;
+    }
+    if (Date.now() >= end) {
+      return null;
+    }
+    await waitStep();
+  }
+}
+
+async function waitForRegistration(name) {
+  const end = Date.now() + REGISTER_WAIT_MS;
+  while (!(registrar && registrar.current.has(name))) {
+    if (Date.now() >= end) {
+      return false;
+    }
+    await waitStep();
+  }
+  return true;
+}
+
+// Removes the servers of `originals` (scanned copies of one mcp.json) whose entry still has the fingerprint the scan
+// read, in the same read that prepares the edit: backs the file up first, then replaces it atomically, keeping its
+// mode. -> { removed: [original], left: [original], reason?, failed? } (failed: a write failed, the file is untouched).
+function removeServersFromFile(file, originals, backupDir, number) {
+  const none = (reason, failed = false) => ({ removed: [], left: originals, reason, failed });
+  try {
+    if (fs.lstatSync(file).isSymbolicLink()) {
+      return none('a link');
+    }
+    const text = fs.readFileSync(file, 'utf8');
+    const same = originals.filter((o) => newRepo.serverKeyIn(text, o.serverName) === o.copy.originalKey);
+    const left = originals.filter((o) => !same.includes(o));
+    if (same.length === 0) {
+      return none('changed since the preview');
+    }
+    const result = newRepo.removeServers(
+      text,
+      same.map((o) => o.serverName),
+    );
+    if (result.error) {
+      return none(result.error);
+    }
+    fs.mkdirSync(backupDir, { recursive: true });
+    const backup = path.join(backupDir, `${number}-mcp.json`);
+    fs.writeFileSync(backup, text, { flag: 'wx', mode: 0o600 });
+    fs.writeFileSync(`${backup}.source`, file, { flag: 'wx', mode: 0o600 });
+    log(`backed up ${file} to ${backup}`);
+    if (fs.readFileSync(file, 'utf8') !== text) {
+      return none('changed while replacing');
+    }
+    const mode = fs.statSync(file).mode & 0o777;
+    const temporary = `${file}.team-plugins-${process.pid}.tmp`;
+    let created = false;
+    try {
+      fs.writeFileSync(temporary, result.text, { flag: 'wx', mode });
+      created = true;
+      fs.chmodSync(temporary, mode); // the umask may have narrowed or the platform ignored the mode
+      fs.renameSync(temporary, file);
+    } catch (err) {
+      if (created) {
+        try {
+          fs.rmSync(temporary, { force: true });
+        } catch {
+          // nothing more to clean up
+        }
+      }
+      return none(`could not write it: ${err.message}`, true);
+    }
+    return { removed: same, left };
+  } catch (err) {
+    return none(err.code || 'unreadable');
+  }
+}
+
+// Replace the originals: after the new plugin is cloned and registered, moves the originals the user ticks to the trash
+// and removes the imported MCP servers from their mcp.json (backed up first).
+async function replaceOriginals({ groups, choices, dropped, plan, url, pluginName, head }) {
+  const originals = newRepo.originalsOf(groups, choices, { dropped });
+  for (const o of originals) {
+    if (o.src) {
+      o.uri = vscode.Uri.joinPath(o.source.uri, ...o.rel.split('/'));
+    }
+  }
+  const items = [];
+  let section = null;
+  for (const original of originals) {
+    if (original.sourceLabel !== section) {
+      section = original.sourceLabel;
+      items.push({ kind: vscode.QuickPickItemKind.Separator, label: section });
+    }
+    items.push({
+      label: original.where,
+      description: `${authoring.KINDS[original.kind].label} ${original.name}${original.reason ? ` · ${original.reason}` : ''}`,
+      picked: original.picked,
+      original,
+    });
+  }
+  const picked = await ui.showQuickPick(items, {
+    canPickMany: true,
+    ignoreFocusOut: true,
+    placeHolder: 'Originals to replace with the plugin (a project file tracked by git is a change to commit there)',
+  });
+  if (!picked || picked.length === 0) {
+    return;
+  }
+  const chosen = picked.map((p) => p.original);
+  const remote = Boolean(vscode.env.remoteName);
+  if (remote) {
+    const list = chosen.map((o) => o.src || o.file).join('\n');
+    const choice = await ui.showWarningMessage(
+      `Delete the ${chosen.length} originals for good?`,
+      { modal: true, detail: `This remote window has no trash: files can't be recovered. The plugin keeps its copies.\n\n${list}` },
+      'Delete',
+    );
+    if (choice !== 'Delete') {
+      return;
+    }
+  }
+  const unsavedIn = (original) => {
+    const target = original.src || original.file;
+    return vscode.workspace.textDocuments.some(
+      (d) => d.isDirty && (samePath(d.uri.fsPath, target) || (original.src && insideFolded(target, d.uri.fsPath))),
+    );
+  };
+  // checked before anything is ticked, and again right before each original is touched
+  const movable = (original) => {
+    if (!newRepo.stillSame(original.copy) || unsavedIn(original)) {
+      return false;
+    }
+    return inside(realPathOr(original.source.root), realPathOr(original.src || original.file));
+  };
+  if (!chosen.some(movable)) {
+    notify(
+      'showInformationMessage',
+      'Team plugins: nothing was replaced: every original you ticked changed since the preview, has unsaved edits, or moved.',
+    );
+    return;
+  }
+  const plugin = await waitForNewPlugin({ url, pluginName, plan });
+  if (!plugin) {
+    notify(
+      'showInformationMessage',
+      `Team plugins: the new repository is not cloned yet, so nothing was replaced: tick ${pluginName} in the Team Plugins view once it shows, and remove the originals yourself.`,
+    );
+    return;
+  }
+  // the clone must hold the pushed commit, with the plugin folder as it was pushed
+  const d = listConfigured().find((x) => x.normalized === normalizeUrl(url));
+  const run = makeGit(gitPath());
+  const folder = path.relative(d.dir, plugin.dir).split(path.sep).join('/');
+  const ancestor = await run(['merge-base', '--is-ancestor', head, 'HEAD'], d.dir);
+  const same = ancestor.code === 0 ? await run(['diff', '--quiet', head, 'HEAD', '--', folder], d.dir) : ancestor;
+  if (same.code !== 0) {
+    log(`replace the originals: the clone of ${url} does not hold ${head} with ${folder} unchanged (${same.stderr || 'differs'})`);
+    notify(
+      'showInformationMessage',
+      `Team plugins: ${pluginName} changed in the repository since you pushed it, so nothing was replaced: check it, then remove the originals yourself.`,
+    );
+    return;
+  }
+  await enableNew(plugin.name);
+  if (!(await waitForRegistration(plugin.name))) {
+    notify('showErrorMessage', `Team plugins: ${plugin.name} was not registered, so nothing was replaced: see the log.`);
+    return;
+  }
+  const left = [];
+  let removed = 0;
+  const variables = new Set();
+  const byFile = new Map();
+  for (const original of chosen) {
+    if (!movable(original)) {
+      left.push(original.where);
+    } else if (original.src) {
+      try {
+        await vscode.workspace.fs.delete(original.uri, { recursive: true, useTrash: !remote });
+        log(`${remote ? 'deleted' : 'moved to the trash'}: ${original.src}`);
+        removed++;
+      } catch (err) {
+        const how = remote ? 'delete' : 'move';
+        notify('showErrorMessage', `Team plugins: could not ${how} ${original.src}${remote ? '' : ' to the trash'}: ${err.message}`);
+      }
+    } else {
+      if (!byFile.has(original.file)) {
+        byFile.set(original.file, []);
+      }
+      byFile.get(original.file).push(original);
+    }
+  }
+  const backupDir = path.join(storage, 'replaced-originals', `${Date.now()}-${process.pid}`);
+  let backedUp = false;
+  let number = 0;
+  for (const [file, list] of byFile) {
+    const result = removeServersFromFile(file, list, backupDir, ++number);
+    removed += result.removed.length;
+    if (result.removed.length > 0) {
+      backedUp = true;
+    }
+    for (const o of result.removed) {
+      o.replaced.forEach((v) => variables.add(v));
+    }
+    if (result.left.length > 0) {
+      if (result.failed) {
+        notify('showErrorMessage', `Team plugins: ${file}: ${result.reason}`);
+      }
+      log(`left ${result.left.map((o) => o.serverName).join(', ')} in ${file}: ${result.reason || 'changed since the preview'}`);
+      left.push(...result.left.map((o) => o.where));
+    }
+  }
+  let message = `Team plugins: replaced ${removed} original${removed === 1 ? '' : 's'} with the plugin ${plugin.name}.`;
+  if (left.length > 0) {
+    message += ` Left in place: ${left.join(', ')} (changed since the preview, unsaved edits, or moved).`;
+  }
+  if (variables.size > 0) {
+    message += ` Set these environment variables, then restart Cursor: ${[...variables].join(', ')}.`;
+  }
+  if (backedUp) {
+    message += ` The edited mcp.json files are backed up in ${backupDir}.`;
+  }
+  notify('showInformationMessage', message);
+}
+
 // The Check git command. `teamPlugins.gitReady` completes the walkthrough's first step: only this command sets it,
 // never the activation (Cursor never completes a step whose context key is already true when it registers the
 // walkthrough). Returns the promise of the message chain so that a scenario can wait for it.
@@ -3097,12 +4141,26 @@ function registerCommands(context) {
   reg('teamPlugins.moveDraft', moveDraftCommand);
   reg('teamPlugins.rename', renameCommand);
   reg('teamPlugins.shareWithTeam', shareCommand);
+  reg('teamPlugins.createTeamRepository', createTeamRepositoryCommand);
   reg('teamPlugins.commitAndPush', commitAndPushCommand);
   reg('teamPlugins.pushToBranch', pushToBranchCommand);
   reg('teamPlugins.openChange', openChangeCommand);
   reg('teamPlugins.openConflict', openConflictCommand);
   reg('teamPlugins.keepRepositoryVersion', (node) => resolveConflictCommand(node, 'source'));
   reg('teamPlugins.keepCopyVersion', (node) => resolveConflictCommand(node, 'copy'));
+  context.subscriptions.push(
+    vscode.workspace.registerTextDocumentContentProvider(READONLY_SCHEME, {
+      provideTextDocumentContent(uri) {
+        try {
+          const file = path.resolve(decodeURIComponent(uri.query));
+          // only a file that Create team repository showed in this window, never any path a URI names
+          return readonlyFiles.has(file) ? fs.readFileSync(file, 'utf8') : '';
+        } catch {
+          return '';
+        }
+      },
+    }),
+  );
   context.subscriptions.push(
     vscode.workspace.registerTextDocumentContentProvider(GIT_SCHEME, {
       async provideTextDocumentContent(uri) {

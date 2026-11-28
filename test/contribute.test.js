@@ -8,7 +8,7 @@ const { spawnSync } = require('child_process');
 const { makeGit } = require('../lib/git');
 const { caseInsensitive } = require('../lib/materialize');
 const sync = require('../lib/sync');
-const { defaultBranchName, commitAndPush, pushToBranch } = require('../lib/contribute');
+const { defaultBranchName, commitAndPush, pushToBranch, IDENTITY_MESSAGE } = require('../lib/contribute');
 const { tmpDir, rmDir, writeFile, git, gitAvailable, commitAll } = require('./helpers');
 
 const fwd = (p) => p.replace(/\\/g, '/');
@@ -538,6 +538,7 @@ test('commitAndPush says how to set a missing git identity', async (t) => {
   const r = await commitAndPush({ ...f.args, run });
   assert.equal(r.kind, 'error');
   assert.equal(r.step, 'commit');
+  assert.equal(r.message, IDENTITY_MESSAGE);
   assert.ok(r.message.startsWith("git doesn't know your name and email"), r.message);
   assert.ok(r.message.includes('git config --global user.email'));
   assert.equal(git(['status', '--porcelain'], f.clone), 'M g.md');

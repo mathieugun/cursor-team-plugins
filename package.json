@@ -296,6 +296,11 @@
         "icon": "$(new-folder)"
       },
       {
+        "command": "teamPlugins.createTeamRepository",
+        "title": "Create team repository...",
+        "category": "Team Plugins"
+      },
+      {
         "command": "teamPlugins.newSkill",
         "title": "New skill",
         "category": "Team Plugins"
@@ -378,6 +383,11 @@
           "command": "teamPlugins.newPlugin",
           "when": "view == teamPlugins.plugins",
           "group": "1_author@1"
+        },
+        {
+          "command": "teamPlugins.createTeamRepository",
+          "when": "view == teamPlugins.plugins",
+          "group": "1_author@0"
         },
         {
           "command": "teamPlugins.getStarted",
@@ -583,7 +593,7 @@
       {
         "view": "teamPlugins.plugins",
         "when": "teamPlugins.state == unconfigured",
-        "contents": "No team plugin repository is configured.\n[Add repository](command:teamPlugins.addRepository)\nPlugin authors can use their own clone instead:\n[Add a local clone](command:teamPlugins.addLocalRepository)\nNew here? [Get started](command:teamPlugins.getStarted)"
+        "contents": "No team plugin repository is configured.\n[Add repository](command:teamPlugins.addRepository)\nPlugin authors can use their own clone instead:\n[Add a local clone](command:teamPlugins.addLocalRepository)\nNo team repository yet? [Create one from your rules and skills](command:teamPlugins.createTeamRepository)\nNew here? [Get started](command:teamPlugins.getStarted)"
       }
     ],
     "walkthroughs": [
@@ -598,6 +608,13 @@
             "description": "Team plugins clones and updates the team repositories in the background, with your own git and its credentials: git 2.38 or later must reach the repository without asking anything.\n[Check git](command:teamPlugins.checkGit)",
             "media": { "markdown": "resources/walkthrough-git.md" },
             "completionEvents": ["onContext:teamPlugins.gitReady"]
+          },
+          {
+            "id": "createRepository",
+            "title": "No team repository yet?",
+            "description": "Turn the rules, skills, commands, agents and MCP servers you already have in your projects into a team repository: a preview first, then you pick what goes in and push it to an empty Git repository.\n[Create team repository](command:teamPlugins.createTeamRepository)\nAlready have one? Go to the next step.",
+            "media": { "markdown": "resources/walkthrough-create.md" },
+            "completionEvents": ["onSettingChanged:teamPlugins.repositories"]
           },
           {
             "id": "addRepository",

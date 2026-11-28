@@ -10,30 +10,22 @@ picked.
 
 Ranked for adoption. Two people must say yes before the walkthrough even starts: the **champion**, who creates and
 fills the team repository, and each **teammate**, who installs the extension and must see why it's worth it. The
-walkthrough assumes a team repository URL already exists. The first two picks cover what comes before it (no
-repository yet, getting teammates in) and together make a two-minute demo; the third is the gate for an
-organisation-wide rollout. The update summary, which kept the value visible after day one, is request 15; the check
-before pushing, which keeps an adopted repository healthy, is request 16.
+walkthrough assumes a team repository URL already exists. Request 26 covers having no repository yet (create one from
+what you already have); the first pick below covers getting teammates in, and together they make a two-minute demo;
+the second is the gate for an organisation-wide rollout. The update summary, which kept the value visible after day
+one, is request 15; the check before pushing, which keeps an adopted repository healthy, is request 16.
 
-1. **Create a team repository from what you already have.** A **Create team repository** command, and a walkthrough
-   branch "I don't have a team repository yet". It scans the open projects (and the user-level folders) for
-   `.cursor/rules`, skills, commands, agents and `mcp.json`, groups them into a plugin, writes
-   `.cursor-plugin/marketplace.json`, runs `git init`, pushes to an empty remote the user gives, and adds the
-   repository. Start with a read-only preview that shows identical copies that can be consolidated, variants that need
-   a decision, and references to project-local files that may break when moved. Show the differences and let the user
-   choose a version or merge the copies before importing. Builds on Share with team (09, one item at a time today)
-   and drafts (08).
-2. **Invite link and presets.** **Copy invite link** gives a
+1. **Invite link and presets.** **Copy invite link** gives a
    `cursor://mathieugun.cursor-team-plugins/add?url=…&preset=…` link (`registerUriHandler`): the champion posts it in
    the team chat, one click adds the repository and ticks the preset's plugins. `marketplace.json` declares named
    presets ("backend", "data") and file patterns per plugin (for example `**/*.py`): a new user picks a preset in one
    click, a matching project suggests the plugin. To probe first: that Cursor routes its `cursor://` scheme to an
    extension's URI handler, and what happens when the extension isn't installed yet.
-3. **Review executable changes before they run.** When an update changes hooks, MCP servers or scripts, show the diff
+2. **Review executable changes before they run.** When an update changes hooks, MCP servers or scripts, show the diff
    and ask before applying it. Today a team commit reaches everyone's agent with no check. Not a convincer for one
    developer, but what a lead or security team asks before rolling the extension out widely. Follow-up: pin a tag or
    commit, and roll back the last update.
-4. **One repository for Cursor and Claude Code** (to check). Claude Code's plugin format
+3. **One repository for Cursor and Claude Code** (to check). Claude Code's plugin format
    (`.claude-plugin/marketplace.json`, skills, commands, agents, `.mcp.json`) is close to Cursor's: a repository that
    serves both lets a team using both tools adopt it as its one source of truth. Writing both manifests (when creating
    a repository or a plugin) looks cheap; syncing into Claude Code itself is out of scope. First check how far the two
