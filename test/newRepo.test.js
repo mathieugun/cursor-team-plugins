@@ -11,7 +11,7 @@ const { checkRemote } = require('../lib/sync');
 const { projectItems } = require('../lib/share');
 const { nameError } = require('../lib/authoring');
 const n = require('../lib/newRepo');
-const { tmpDir, rmDir, writeFile, git, gitAvailable } = require('./helpers');
+const { tmpDir, rmDir, writeFile, git, gitAvailable, commitAll } = require('./helpers');
 
 function fixture(t) {
   const root = tmpDir();
@@ -544,6 +544,40 @@ test('stillSame notices an original that changed, went or was edited', (t) => {
   assert.equal(n.stillSame(copy('mcp:b')), true);
   fs.writeFileSync(path.join(p.root, '.cursor/mcp.json'), '{ "mcpServers": { "other": { "command": "x" } } }');
   assert.equal(n.stillSame(copy('mcp:b')), false);
+});
+
+test('stillSame rejects a skill with a link added after preview', (t) => {
+  const root = fixture(t);
+  const p = project(root, 'p', { '.cursor/skills/s/SKILL.md': skillText('s') });
+  const copy = n.scan([p]).groups[0].copies[0];
+  assert.equal(n.stillSame(copy), true);
+
+  const link = path.join(copy.src, 'scripts');
+  fs.mkdirSync(link);
+  // Simulate the link's lstat on hosts where creating symlinks or junctions needs extra privileges.
+  const lstatSync = fs.lstatSync;
+  t.mock.method(fs, 'lstatSync', (file, ...args) =>
+    file === link ? { isSymbolicLink: () => true } : lstatSync(file, ...args),
+  );
+  assert.deepEqual(n.skillLinks(copy.src), ['scripts']);
+  assert.equal(n.stillSame(copy), false);
+});
+
+test('checkReplacementPlugin rejects local edits to the plugin before removing originals', async (t) => {
+  const dir = fixture(t);
+  git(['init', '-q'], dir);
+  const rule = writeFile(dir, 'team/rules/style.mdc', 'published\n');
+  const readme = writeFile(dir, 'README.md', 'published\n');
+  const head = commitAll(dir, 'Publish team plugin');
+  const check = () => n.checkReplacementPlugin({ run: makeGit(), dir, folder: 'team', head });
+
+  assert.equal((await check()).code, 0);
+  fs.writeFileSync(readme, 'unrelated local edit\n');
+  assert.equal((await check()).code, 0);
+  fs.writeFileSync(rule, 'local plugin edit\n');
+  assert.equal((await check()).code, 1);
+  git(['add', 'team/rules/style.mdc'], dir);
+  assert.equal((await check()).code, 1);
 });
 
 test('urlError and destination', (t) => {
