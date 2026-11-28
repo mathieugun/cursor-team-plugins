@@ -84,6 +84,21 @@ test('Cursor-invalid hook configurations do not add a checkbox', (t) => {
   assert.deepEqual(readHooks(f.dir).events, []);
 });
 
+test('a manifest with invalid metadata cannot hide fallback hooks', (t) => {
+  const f = fixture(t);
+  const fallback = f.json('.claude-plugin/plugin.json', { name: 'example', hooks: config('sessionEnd') });
+  for (const metadata of [{ author: {} }, { version: 1 }, { capabilities: ['invalid'] }]) {
+    f.json(MANIFEST, { name: 'example', displayName: 'Example', ...metadata });
+    const plugin = f.plugin();
+    const hooks = plugin.children.find((child) => child.id === HOOKS);
+    assert.deepEqual([hooks?.file, hooks?.events], [fallback, ['sessionEnd']]);
+    const holder = path.join(f.root, 'filtered', holderName(plugin, [SKILL]));
+    const { copyRoot } = syncCopy(plugin, [SKILL], holder);
+    assert.deepEqual(readHooks(copyRoot).events, []);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(copyRoot, '.claude-plugin/plugin.json'), 'utf8')).hooks, {});
+  }
+});
+
 test('Claude-compatible hooks show the Cursor events and skip unsupported or empty groups', (t) => {
   const f = fixture(t);
   const group = (matcher) => [{ matcher, hooks: [{ type: 'command', command: 'fixture-hook' }] }];
@@ -211,6 +226,38 @@ test('a selected hook source survives independently of an excluded skill or MCP 
   const shared = syncCopy(f.plugin(), ids, path.join(f.root, 'filtered', 'second')).copyRoot;
   assert.deepEqual(readHooks(shared).events, ['sessionEnd']);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(shared, 'mcp.json'), 'utf8')).mcpServers, {});
+});
+
+test('omitting default hooks keeps an MCP server that shares their file across sync', (t) => {
+  const f = fixture(t);
+  f.json(MANIFEST, { name: 'example', mcpServers: DEFAULT });
+  const settings = { ...config('sessionEnd'), mcpServers: { fixture: { command: 'fixture-mcp' } } };
+  const source = f.json(DEFAULT, settings);
+  const ids = [SKILL];
+  const holder = path.join(f.root, 'filtered', holderName(f.plugin(), ids));
+  const { copyRoot } = syncCopy(f.plugin(), ids, holder);
+  const copied = path.join(copyRoot, DEFAULT);
+  const read = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.deepEqual(read(copied).mcpServers, settings.mcpServers);
+  assert.deepEqual(readHooks(copyRoot).events, []);
+
+  writeFile(copyRoot, DEFAULT, JSON.stringify(config('stop')));
+  settings.mcpServers.fixture.args = ['updated'];
+  f.json(DEFAULT, settings);
+  syncCopy(f.plugin(), ids, holder);
+  assert.deepEqual(read(copied).mcpServers, settings.mcpServers);
+  assert.deepEqual(readHooks(copyRoot).events, []);
+  assert.deepEqual(read(source), settings);
+
+  f.json(DEFAULT, config('sessionEnd'));
+  syncCopy(f.plugin(), ids, holder);
+  assert.ok(!fs.existsSync(copied));
+
+  const jsonc = '{\n  // An MCP-only config at the default hook path\n  "mcpServers": {"fixture": {"command": "fixture-mcp"}},\n}\n';
+  writeFile(f.dir, DEFAULT, jsonc);
+  syncCopy(f.plugin(), ids, holder);
+  assert.equal(fs.readFileSync(copied, 'utf8'), jsonc);
+  assert.deepEqual(readHooks(copyRoot).events, []);
 });
 
 test('linked hook configs cannot become active in a copy and script rows stay in the plugin', (t) => {

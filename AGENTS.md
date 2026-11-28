@@ -194,8 +194,9 @@ line endings, as CI checks it out, and uses the newest server's node, else `node
   unchanged since the last sync, otherwise left there and reported.
 - A plugin's Hooks group is one item (`<repository>:<plugin>/hooks`). The catalog reads the hook configuration
   Cursor would load, lists its events and opens the original file. Script rows under a plugin's or skill's `scripts/`
-  have no checkbox. Copies with hooks left out use a separate holder, omit the default hook file and generate
-  `hooks: {}` in manifests that declare hooks. The holder stays filtered while a saved exclusion has no catalog item.
+  have no checkbox. Copies with hooks left out use a separate holder, strip the hook table from a default file
+  shared with MCP, and generate `hooks: {}` in manifests that declare hooks. A file containing only default hooks
+  is omitted. The holder stays filtered while a saved exclusion has no catalog item.
 - Two plugins registered with the same folder name both load, and both are named after that folder (Cursor 3.31.15,
   probe with two extension plugins `a/same` and `b/same`): so `mergeCatalogs` gives a plugin whose folder name is taken
   the folder `<folder>-<repository>` (`plugin.folder`), and `desiredRegistrations` always registers it from a copy

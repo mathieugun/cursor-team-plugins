@@ -186,9 +186,10 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
   directories. They follow their owner and have no selection IDs. Hook rows stay out of the update summary because
   an inline hook can share a manifest with unrelated settings.
 - Partial copies without a selected hook group use a separate holder when there is a candidate hook configuration
-  or a saved exclusion. `syncCopy` leaves out the default file and substitutes `hooks: {}` for hook declarations in
-  supported manifest paths. These generated manifests go from the repository to the copy. The custom hook files and
-  scripts remain available according to their file or skill ownership. A selected custom hook file inside an omitted
+  or a saved exclusion. Candidates include declarations shadowed by another manifest. `syncCopy` strips the hook
+  table from the default file so other data, such as MCP servers, stays available. Hook-only files are omitted.
+  Manifest copies substitute `hooks: {}` for hook declarations. These generated files go from the repository to the copy.
+  Custom hook files and scripts remain available according to their file or skill ownership. A selected custom hook file inside an omitted
   skill folder is copied on its own. A shared MCP config keeps its hook configuration while omitting unchecked servers.
   A saved hook exclusion continues to request a filtered copy while its hook configuration is temporarily absent.
 - What Cursor does with these (measured on Cursor 3.31, 2026-11-25, agent host `cursor-agent-host/dist/7361.js` and a
