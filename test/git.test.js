@@ -3,7 +3,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { makeGit, cleanProgress } = require('../lib/git');
-const fs = require('fs');
 const path = require('path');
 const { gitAvailable, tmpDir, rmDir } = require('./helpers');
 
@@ -47,23 +46,32 @@ test('a command running too long is stopped', async () => {
   assert.ok(r.stderr.endsWith('git stopped: still running after 1 s'), r.stderr);
 });
 
-test('stopping a command kills its child processes too', async (t) => {
-  const pidFile = path.join(tmpDir(), 'child.pid');
+async function stopCommandWithChild(t, stdio) {
+  const script =
+    "const child = require('child_process').spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], " +
+    `{ stdio: ${JSON.stringify(stdio)} }); ` +
+    "require('fs').writeSync(1, String(child.pid)); setTimeout(() => {}, 30000);";
+  // The PID reports readiness and resets the idle timer. Allow time for both processes to start on CI.
+  const result = await fake(['-e', script], process.cwd(), 0, { idleMs: 3000 });
+  const pid = Number(result.stdout);
+  assert.ok(
+    Number.isInteger(pid) && pid > 0 && pid <= 0x7fffffff && pid !== process.pid,
+    `expected a child PID, got ${JSON.stringify(result.stdout)} (${result.stderr})`,
+  );
   t.after(() => {
     try {
-      process.kill(Number(fs.readFileSync(pidFile, 'utf8')));
+      process.kill(pid);
     } catch {
       // already gone
     }
-    rmDir(path.dirname(pidFile));
   });
-  const script =
-    "const c = require('child_process').spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: 'ignore' }); " +
-    "require('fs').writeFileSync(" + JSON.stringify(pidFile) + ", String(c.pid)); setTimeout(() => {}, 30000);";
-  const r = await fake(['-e', script], process.cwd(), 0, { idleMs: 1000 });
-  assert.equal(r.timedOut, 'idle');
+  assert.equal(result.timedOut, 'idle');
+  return pid;
+}
+
+test('stopping a command kills its child processes too', async (t) => {
+  const pid = await stopCommandWithChild(t, 'ignore');
   // the kill is not awaited: give it up to 10 s under a loaded machine
-  const pid = Number(fs.readFileSync(pidFile, 'utf8'));
   const alive = () => {
     try {
       process.kill(pid, 0);
@@ -79,22 +87,9 @@ test('stopping a command kills its child processes too', async (t) => {
 });
 
 test("a child process holding the output open doesn't keep a stopped command waiting", async (t) => {
-  const pidFile = path.join(tmpDir(), 'child.pid');
-  t.after(() => {
-    try {
-      process.kill(Number(fs.readFileSync(pidFile, 'utf8')));
-    } catch {
-      // already gone
-    }
-    rmDir(path.dirname(pidFile));
-  });
   // the grandchild shares the stderr pipe (stdio: 'inherit') and outlives git unless the whole tree is killed
-  const script =
-    "const c = require('child_process').spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: 'inherit' }); " +
-    "require('fs').writeFileSync(" + JSON.stringify(pidFile) + ", String(c.pid)); setTimeout(() => {}, 30000);";
   const started = Date.now();
-  const r = await fake(['-e', script], process.cwd(), 0, { idleMs: 1000 });
-  assert.equal(r.timedOut, 'idle');
+  await stopCommandWithChild(t, 'inherit');
   assert.ok(Date.now() - started < 10000, `took ${Date.now() - started} ms`);
 });
 
