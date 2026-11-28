@@ -1147,50 +1147,49 @@ function updateItemOf(node) {
   return item ? { d, u, item } : null;
 }
 
-// What an item's diff shows: the content of the version the user last saw ('' for an item that is new) against HEAD
-// ('' for an item that was removed). verb: 'new' | 'updated' | 'removed'.
-function seenDiff(u, id, verb) {
-  if (verb === 'new') {
-    return { leftRev: '', rightRev: u.git.head };
-  }
-  const entry = verb === 'removed' ? u.removed.find((r) => r.id === id) : u.record.items[id];
-  return { leftRev: (entry && entry.commit) || '', rightRev: verb === 'removed' ? '' : u.git.head };
-}
-
 function commitTitle(name, commit) {
   return commit ? `${name} (${commit.author}, ${updates.ago(commit.date, new Date())})` : `${name} (changes since you last looked)`;
 }
 
 // Opens the diff of an item between two revisions of its repository: one file as a diff, a skill with several files
 // as a multi-file diff. item: { kind, name, path }; a revision of '' is an absent side.
-async function openItemDiff(d, item, { leftRev, rightRev, title }) {
-  const side = (rev, file) => gitUri(d.dir, rev, file, item.kind === 'mcp' ? item.name : undefined);
-  const diff = (file) => vscode.commands.executeCommand('vscode.diff', side(leftRev, file), side(rightRev, file), title);
+async function openItemDiff(d, item, { leftRev, rightRev, leftItem = item, title }) {
+  const side = (rev, location, file = location.path) =>
+    gitUri(d.dir, rev, file, location.kind === 'mcp' ? location.name : undefined);
   if (item.kind !== 'skill') {
-    await diff(item.path);
+    await vscode.commands.executeCommand('vscode.diff', side(leftRev, leftItem), side(rightRev, item), title);
     return;
   }
   const run = makeGit(gitPath());
-  const [before, after] = await Promise.all(
-    [leftRev, rightRev].map((rev) => updates.treeFiles({ run, repoDir: d.dir, rev, dir: item.path })),
-  );
+  const skillFiles = async (rev, dir) =>
+    (await updates.treeFiles({ run, repoDir: d.dir, rev, dir })).map((file) => file.slice(dir.length + 1));
+  const [before, after] = await Promise.all([skillFiles(leftRev, leftItem.path), skillFiles(rightRev, item.path)]);
+  const left = (file) => side(leftRev, leftItem, `${leftItem.path}/${file}`);
+  const right = (file) => side(rightRev, item, `${item.path}/${file}`);
   const files = [...new Set([...before, ...after])].sort();
   if (files.length <= 1) {
-    await diff(files.length === 1 ? files[0] : `${item.path}/SKILL.md`);
+    const file = files[0] || 'SKILL.md';
+    await vscode.commands.executeCommand('vscode.diff', left(file), right(file), title);
     return;
   }
   // vscode.changes takes [label, left, right] and needs both sides: an absent one is a document with an empty rev
   await vscode.commands.executeCommand(
     'vscode.changes',
     title,
-    files.map((f) => [after.includes(f) ? side(rightRev, f) : side(leftRev, f), side(leftRev, f), side(rightRev, f)]),
+    files.map((f) => [after.includes(f) ? right(f) : left(f), left(f), right(f)]),
   );
 }
 
 // The diff of a marked or removed item since the user last saw it; the item counts as seen once it is open.
 async function openSeenDiff(d, u, entry) {
-  const { leftRev, rightRev } = seenDiff(u, entry.id, entry.verb);
-  await openItemDiff(d, entry, { leftRev, rightRev, title: commitTitle(entry.name, u.last.get(entry.id)) });
+  const seen = entry.verb === 'new' ? undefined : u.record.items[entry.id];
+  const leftItem = seen && { kind: seen.kind, path: seen.seenPath ?? seen.path, name: seen.seenName ?? seen.name };
+  await openItemDiff(d, entry, {
+    leftRev: seen?.commit || '',
+    rightRev: entry.verb === 'removed' ? '' : u.git.head,
+    leftItem,
+    title: commitTitle(entry.name, u.last.get(entry.id)),
+  });
   await markItemsSeen(d, u, [entry]);
 }
 

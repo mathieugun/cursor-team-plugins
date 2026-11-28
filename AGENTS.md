@@ -173,8 +173,9 @@ line endings, as CI checks it out, and uses the newest server's node, else `node
   registered commands show the reason through `ui`. Move and Rename apply again if a write throws after unregistering
   a plugin.
 - `Registrar` keeps a registration when Cursor rejects its removal, retries on the next apply and defers a replacement
-  for the same name until removal succeeds. A tracked partial copy stays protected from cleanup. Direct removal
-  before Move or Rename rejects with Cursor's reason.
+  for the same name or resolved path until removal succeeds. It remembers the physical path at registration, so a
+  failed removal can be retried even if the catalog's alias changes or disappears. A tracked partial copy stays
+  protected from cleanup. Direct removal before Move or Rename rejects with Cursor's reason.
 - `acquireLock` never deletes a lock that vanished between `open` and `stat` (it may be another window's fresh one): it
   tries again; only a lock older than 10 minutes is removed.
 - The README is the extension's details page, which opens only `http`, `https` and `mailto` links (`command` only for
@@ -294,6 +295,8 @@ line endings, as CI checks it out, and uses the newest server's node, else `node
   `updateSeen` under its `.json.lock`, and changed JSON is published by renaming a unique temporary file. The user's
   own changes (author email = `git var GIT_AUTHOR_IDENT`, which honours the environment unlike `git config user.email`)
   are recorded without a mark.
+- A committed rename with changed content adds `seenPath` and `seenName` to the record. What changed uses them for
+  the last-seen side of its diff, and the current path and name are used to check for removal.
 - `vscode.changes` takes `[label, left, right]` and both sides are required (an absent side is a
   `team-plugins-git:` URI with an empty rev); a `FileDecoration` badge is at most 2 characters (`PN`, `PM`).
 - Cursor drops a skill, rule, command or agent whose frontmatter gray-matter can't parse, silently (no log line), and

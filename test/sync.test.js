@@ -859,6 +859,19 @@ test('changedPaths throws when git status fails', async () => {
   await assert.rejects(() => sync.changedPaths({ run, repo: '/nowhere' }), /git status failed/);
 });
 
+test('changedPaths throws when the diff of unpushed commits fails', async () => {
+  const run = async ([command]) => {
+    if (command === 'status') {
+      return { code: 0, stdout: '' };
+    }
+    if (command === 'rev-list') {
+      return { code: 0, stdout: '1' };
+    }
+    return { code: 128, stdout: '', stderr: 'fatal: @{u}...HEAD: no merge base' };
+  };
+  await assert.rejects(() => sync.changedPaths({ run, repo: '/repo' }), /git diff failed: .*no merge base/);
+});
+
 // The removeTree tests clean up with the real fs functions, captured before any mock, and without removeTree: a broken
 // removeTree must neither consume a mocked failure in the cleanup nor leave a tree nobody can enter.
 const realRmSync = fs.rmSync;
