@@ -133,7 +133,8 @@ no commit), then run the command:
    choices** in the notification when you are done), **Merge by hand** in a scratch copy (edit the side titled "your
    merge (edit this side)", save, press **Done**; pressing **Done** on an unchanged copy asks first), **Keep each under
    its own name**, or leave it out. The originals are shown read-only in these diffs: nothing you type there can
-   change a project file.
+   change a project file. If a skill path is a file in one version and a folder in another, choose which version of
+   that path to keep in the merge before editing the scratch copy.
 4. **The URL and the plugin name.** The URL of the empty repository: no user name or password in it (git gets them from
    your credential manager), and an absolute path for a local repository. The plugin is named after the repository by
    default; there is one plugin per new repository.
