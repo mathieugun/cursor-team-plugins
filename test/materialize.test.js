@@ -15,8 +15,10 @@ const {
   conflictVersions,
   gcFiltered,
   hashCache,
+  caseInsensitive,
 } = require('../lib/materialize');
 const { removeTree } = require('../lib/sync');
+const { spawnSync } = require('child_process');
 const { tmpDir, rmDir, writeFile, makePlugin } = require('./helpers');
 
 function setup(t) {
@@ -37,9 +39,13 @@ const SKILL_A = 'skills/a/SKILL.md';
 const FOUR = ['.cursor-plugin/plugin.json', 'rules/x.mdc', 'hooks/z.md', SKILL_A].sort();
 
 function setupCopy(t) {
-  const f = setup(t);
+  return buildCopy(setup(t));
+}
+
+// The first sync of a partial copy of the plugin set up by `setup`, its holder below `parent`.
+function buildCopy(f, parent = path.join(f.root, 'filtered')) {
   f.ids = ['p/skills/a', 'p/rules/x.mdc'];
-  f.holder = path.join(f.root, 'filtered', holderName(f.plugin, f.ids));
+  f.holder = path.join(parent, holderName(f.plugin, f.ids));
   f.first = syncCopy(f.plugin, f.ids, f.holder);
   f.copyRoot = f.first.copyRoot;
   f.manifest = () => JSON.parse(fs.readFileSync(path.join(f.holder, '.team-plugins-sync.json'), 'utf8'));
@@ -227,6 +233,40 @@ test('resolveConflict keeps the copy version', (t) => {
   assert.deepEqual(r.actions, []);
   assert.deepEqual(r.conflicts, []);
   assert.deepEqual(f.manifest().conflicts, []);
+});
+
+// readFileSync throws `code` for the file `file` (compared resolved, case-insensitive on Windows); the hash cache is
+// cleared so the file is read
+function unreadableFile(t, file, code = 'EACCES') {
+  const real = fs.readFileSync;
+  const key = (p) => (process.platform === 'win32' ? path.resolve(String(p)).toLowerCase() : path.resolve(String(p)));
+  hashCache.entries.clear();
+  t.mock.method(fs, 'readFileSync', (p, ...rest) => {
+    if (typeof p === 'string' && key(p) === key(file)) {
+      throw Object.assign(new Error(`${code}: cannot open ${p}`), { code });
+    }
+    return real.call(fs, p, ...rest);
+  });
+}
+
+test('a conflict side that can not be read is never taken for a deletion', (t) => {
+  const f = setupCopy(t);
+  makeConflict(f);
+  // unreadable before the dialog: no versions to offer
+  unreadableFile(t, f.cp(SKILL_A));
+  assert.throws(
+    () => conflictVersions(f.plugin, f.holder, SKILL_A),
+    /the partial copy version of skills\/a\/SKILL\.md can't be read \(EACCES\)/,
+  );
+  t.mock.restoreAll();
+  // unreadable between the dialog and the choice: Keep copy version refuses
+  const shown = conflictVersions(f.plugin, f.holder, SKILL_A);
+  unreadableFile(t, f.cp(SKILL_A));
+  assert.throws(() => resolveConflict(f.plugin, f.holder, SKILL_A, 'copy', shown), /can't be read \(EACCES\)/);
+  t.mock.restoreAll();
+  assert.equal(S(f, SKILL_A), 'team');
+  assert.equal(C(f, SKILL_A), 'agent');
+  assert.deepEqual(f.manifest().conflicts, [SKILL_A]);
 });
 
 test('resolveConflict with the kept side deleted deletes the other', (t) => {
@@ -879,4 +919,435 @@ test('after markCopySynced the filtered file is regenerated', (t) => {
   const r = syncCopy(f.plugin, f.ids, f.holder);
   assert.deepEqual(r.actions, [{ action: 'toCopy', rel: 'mcp.json' }]);
   assert.deepEqual(readJsonFile(f.cp('mcp.json')), { mcpServers: { a: { command: 'x' } } });
+});
+
+// A case-only rename goes through an intermediate name (a direct rename may be a no-op on Windows).
+function renameCase(from, to) {
+  const mid = `${from}-intermediate`;
+  fs.renameSync(from, mid);
+  fs.renameSync(mid, to);
+}
+
+const names = (dir) => fs.readdirSync(dir).sort();
+const recordKeys = (f) => Object.keys(f.manifest().files);
+
+test('caseInsensitive tells the filesystem of a folder', (t) => {
+  const root = tmpDir();
+  t.after(() => rmDir(root));
+  // the answer the filesystem itself gives: a file written in one case is found in the other
+  writeFile(root, 'probe/marker.txt', 'x');
+  const dir = path.join(root, 'probe');
+  const found = fs.existsSync(path.join(root, 'probe', 'MARKER.TXT'));
+  assert.equal(caseInsensitive(dir), found);
+  // a folder that is not there: the platform's usual answer, never an error
+  assert.equal(typeof caseInsensitive(path.join(root, 'missing')), 'boolean');
+});
+
+test('a case-only rename of a copy file is carried to the repository', (t) => {
+  const f = setupCopy(t);
+  if (!caseInsensitive(f.root)) {
+    return t.skip('case-sensitive filesystem');
+  }
+  const text = S(f, 'rules/x.mdc');
+  renameCase(f.cp('rules/x.mdc'), f.cp('rules/X.mdc'));
+  for (const round of [1, 2]) {
+    const r = syncCopy(f.plugin, f.ids, f.holder);
+    assert.deepEqual(r.actions, round === 1 ? [{ action: 'renamedInSource', rel: 'rules/X.mdc' }] : []);
+    assert.deepEqual(r.notes, []);
+    assert.deepEqual(names(f.src('rules')), ['X.mdc', 'y.mdc']);
+    assert.deepEqual(names(f.cp('rules')), ['X.mdc']);
+    assert.equal(S(f, 'rules/x.mdc'), text);
+    assert.equal(C(f, 'rules/x.mdc'), text);
+    assert.ok(recordKeys(f).includes('rules/X.mdc'));
+    assert.ok(!recordKeys(f).includes('rules/x.mdc'));
+  }
+});
+
+test('a case-only rename of a copy folder is carried to the repository', (t) => {
+  const f = setupCopy(t);
+  if (!caseInsensitive(f.root)) {
+    return t.skip('case-sensitive filesystem');
+  }
+  const text = S(f, 'rules/x.mdc');
+  renameCase(f.cp('rules'), f.cp('Rules'));
+  for (let round = 1; round <= 2; round++) {
+    const r = syncCopy(f.plugin, f.ids, f.holder);
+    assert.deepEqual(r.conflicts, []);
+    assert.ok(names(f.plugin.dir).includes('Rules'));
+    assert.ok(!names(f.plugin.dir).includes('rules'));
+    assert.ok(names(f.copyRoot).includes('Rules'));
+    assert.equal(S(f, 'rules/x.mdc'), text);
+    assert.equal(C(f, 'rules/x.mdc'), text);
+    assert.deepEqual(names(f.src('rules')), ['x.mdc', 'y.mdc']);
+    assert.deepEqual(names(f.cp('rules')), ['x.mdc']);
+  }
+});
+
+test('a case-only rename in the repository is carried to the copy', (t) => {
+  const f = setupCopy(t);
+  if (!caseInsensitive(f.root)) {
+    return t.skip('case-sensitive filesystem');
+  }
+  const text = S(f, 'rules/x.mdc');
+  renameCase(f.src('rules/x.mdc'), f.src('rules/X.mdc'));
+  for (const round of [1, 2]) {
+    const r = syncCopy(f.plugin, f.ids, f.holder);
+    assert.deepEqual(r.actions, round === 1 ? [{ action: 'renamedInCopy', rel: 'rules/X.mdc' }] : []);
+    assert.deepEqual(names(f.cp('rules')), ['X.mdc']);
+    assert.deepEqual(names(f.src('rules')), ['X.mdc', 'y.mdc']);
+    assert.equal(S(f, 'rules/x.mdc'), text);
+    assert.equal(C(f, 'rules/x.mdc'), text);
+  }
+});
+
+test('an unreadable folder in another case deletes nothing, and the spelling is carried once it can be read', (t) => {
+  const f = setupCopy(t);
+  if (!caseInsensitive(f.root)) {
+    return t.skip('case-sensitive filesystem');
+  }
+  const text = S(f, 'rules/x.mdc');
+  const before = f.manifest().files['rules/x.mdc'];
+  renameCase(f.cp('rules'), f.cp('Rules'));
+  unreadable(t, f.cp('Rules'));
+  const r = syncCopy(f.plugin, f.ids, f.holder);
+  assert.deepEqual(r.actions, []);
+  assert.ok(r.skipped.some((s) => s.rel === 'Rules' && s.unreadable));
+  assert.equal(S(f, 'rules/x.mdc'), text);
+  assert.equal(C(f, 'rules/x.mdc'), text);
+  assert.equal(f.manifest().files['rules/x.mdc'], before);
+  t.mock.restoreAll();
+  const again = syncCopy(f.plugin, f.ids, f.holder);
+  assert.deepEqual(again.actions, [{ action: 'renamedInSource', rel: 'Rules/x.mdc' }]);
+  assert.deepEqual(names(f.src('rules')), ['x.mdc', 'y.mdc']);
+  assert.ok(names(f.plugin.dir).includes('Rules'));
+  assert.equal(S(f, 'rules/x.mdc'), text);
+  assert.equal(C(f, 'rules/x.mdc'), text);
+});
+
+test('a spelling that differs on both sides from the record is reported, not renamed', (t) => {
+  const f = setupCopy(t);
+  if (!caseInsensitive(f.root)) {
+    return t.skip('case-sensitive filesystem');
+  }
+  const text = S(f, 'rules/x.mdc');
+  renameCase(f.cp('rules'), f.cp('Rules'));
+  renameCase(f.src('rules/x.mdc'), f.src('rules/X.mdc'));
+  const r = syncCopy(f.plugin, f.ids, f.holder);
+  assert.deepEqual(r.actions, []);
+  assert.deepEqual(r.notes, [
+    {
+      rel: 'Rules/x.mdc',
+      reason: 'spelled rules/X.mdc in the repository and Rules/x.mdc in the partial copy: rename one of them so both match',
+    },
+  ]);
+  assert.deepEqual(names(f.src('rules')), ['X.mdc', 'y.mdc']);
+  assert.ok(names(f.copyRoot).includes('Rules'));
+  assert.equal(S(f, 'rules/x.mdc'), text);
+  assert.equal(C(f, 'rules/x.mdc'), text);
+});
+
+test('a copy file renamed in case and edited reaches the repository under its new spelling', (t) => {
+  const f = setupCopy(t);
+  if (!caseInsensitive(f.root)) {
+    return t.skip('case-sensitive filesystem');
+  }
+  renameCase(f.cp('rules/x.mdc'), f.cp('rules/X.mdc'));
+  fs.writeFileSync(f.cp('rules/X.mdc'), 'edited');
+  const r = syncCopy(f.plugin, f.ids, f.holder);
+  assert.deepEqual(r.actions, [
+    { action: 'renamedInSource', rel: 'rules/X.mdc' },
+    { action: 'toSource', rel: 'rules/X.mdc' },
+  ]);
+  assert.deepEqual(names(f.src('rules')), ['X.mdc', 'y.mdc']);
+  assert.equal(S(f, 'rules/X.mdc'), 'edited');
+});
+
+test('on a case-sensitive filesystem two names that differ only in case stay two files', (t) => {
+  const f = setup(t);
+  if (caseInsensitive(f.root)) {
+    return t.skip('case-insensitive filesystem');
+  }
+  writeFile(f.plugin.dir, 'skills/a/n.txt', 'lower');
+  writeFile(f.plugin.dir, 'skills/a/N.txt', 'upper');
+  buildCopy(f);
+  for (let round = 1; round <= 2; round++) {
+    const r = syncCopy(f.plugin, f.ids, f.holder);
+    assert.deepEqual(r.notes, []);
+    assert.deepEqual(r.skipped, []);
+    assert.equal(C(f, 'skills/a/n.txt'), 'lower');
+    assert.equal(C(f, 'skills/a/N.txt'), 'upper');
+  }
+  fs.writeFileSync(f.cp('skills/a/N.txt'), 'upper edited');
+  const r = syncCopy(f.plugin, f.ids, f.holder);
+  assert.deepEqual(r.actions, [{ action: 'toSource', rel: 'skills/a/N.txt' }]);
+  assert.equal(S(f, 'skills/a/N.txt'), 'upper edited');
+  assert.equal(S(f, 'skills/a/n.txt'), 'lower');
+});
+
+// A new folder that looks names up with case (on Windows through fsutil's per-folder flag, inherited by the folders
+// created in it; elsewhere a temp folder usually is one), or null.
+function caseSensitiveDir(t) {
+  const dir = tmpDir();
+  t.after(() => rmDir(dir));
+  if (process.platform === 'win32') {
+    const r = spawnSync('fsutil.exe', ['file', 'setCaseSensitiveInfo', dir, 'enable'], { encoding: 'utf8' });
+    if (r.error || r.status !== 0) {
+      return null;
+    }
+  }
+  writeFile(dir, 'marker.txt', 'x');
+  return fs.existsSync(path.join(dir, 'MARKER.TXT')) ? null : dir;
+}
+
+test('caseInsensitive judges a folder by the names inside it, not by its parent', (t) => {
+  if (process.platform !== 'win32') {
+    return t.skip('needs a case-sensitive folder inside a case-insensitive one (Windows)');
+  }
+  const dir = caseSensitiveDir(t);
+  if (!dir || !caseInsensitive(path.dirname(dir))) {
+    return t.skip('needs a case-sensitive folder inside a case-insensitive one');
+  }
+  assert.equal(caseInsensitive(dir), false);
+});
+
+// A plugin repository that looks names up without case and a partial copy in a folder that does not, or null.
+function mixedCopy(t) {
+  const f = setup(t);
+  const sensitive = caseSensitiveDir(t);
+  if (!sensitive || !caseInsensitive(f.plugin.dir)) {
+    return null;
+  }
+  return buildCopy(f, sensitive);
+}
+
+test('Keep copy version finds the copy file spelled in another case when only the repository ignores case', (t) => {
+  const f = mixedCopy(t);
+  if (!f) {
+    return t.skip('needs a case-insensitive repository and a case-sensitive copy folder');
+  }
+  writeFile(f.plugin.dir, 'skills/a/Example.txt', 'base');
+  syncCopy(f.plugin, f.ids, f.holder);
+  fs.renameSync(f.cp('skills/a/Example.txt'), f.cp('skills/a/example.txt'));
+  fs.writeFileSync(f.cp('skills/a/example.txt'), 'copy edit');
+  fs.writeFileSync(f.src('skills/a/Example.txt'), 'repository edit');
+  const r = syncCopy(f.plugin, f.ids, f.holder);
+  assert.deepEqual(
+    r.conflicts.map((c) => c.rel),
+    ['skills/a/Example.txt'],
+  );
+  const shown = conflictVersions(f.plugin, f.holder, 'skills/a/Example.txt');
+  assert.equal(shown.copy, crypto.createHash('sha1').update('copy edit').digest('hex'));
+  assert.deepEqual(resolveConflict(f.plugin, f.holder, 'skills/a/Example.txt', 'copy', shown), {
+    action: 'toSource',
+    rel: 'skills/a/Example.txt',
+  });
+  assert.equal(S(f, 'skills/a/Example.txt'), 'copy edit');
+  assert.equal(C(f, 'skills/a/example.txt'), 'copy edit');
+});
+
+test('Discard keeps a conflicting copy file spelled in another case when only the repository ignores case', (t) => {
+  const f = mixedCopy(t);
+  if (!f) {
+    return t.skip('needs a case-insensitive repository and a case-sensitive copy folder');
+  }
+  writeFile(f.plugin.dir, 'skills/a/Example.txt', 'repository');
+  writeFile(f.copyRoot, 'skills/a/example.txt', 'copy');
+  const r = syncCopy(f.plugin, f.ids, f.holder);
+  assert.deepEqual(
+    r.conflicts.map((c) => c.rel),
+    ['skills/a/Example.txt'],
+  );
+  // Discard: the clone loses its new file, then the copies are marked synced
+  fs.rmSync(f.src('skills/a/Example.txt'));
+  markCopySynced(f.holder);
+  for (let round = 1; round <= 2; round++) {
+    syncCopy(f.plugin, f.ids, f.holder);
+    assert.equal(C(f, 'skills/a/example.txt'), 'copy');
+  }
+});
+
+test('a conflict lookup that two folder spellings of a case-sensitive copy match refuses to guess', (t) => {
+  const f = mixedCopy(t);
+  if (!f) {
+    return t.skip('needs a case-insensitive repository and a case-sensitive copy folder');
+  }
+  writeFile(f.plugin.dir, 'skills/a/assets/example.txt', 'base');
+  writeFile(f.plugin.dir, 'skills/a/assets/other.txt', 'other');
+  syncCopy(f.plugin, f.ids, f.holder);
+  // an agent moves the file to `Assets/` in the copy and edits it; the repository edits it too
+  fs.mkdirSync(f.cp('skills/a/Assets'));
+  fs.renameSync(f.cp('skills/a/assets/example.txt'), f.cp('skills/a/Assets/example.txt'));
+  fs.writeFileSync(f.cp('skills/a/Assets/example.txt'), 'copy edit');
+  fs.writeFileSync(f.src('skills/a/assets/example.txt'), 'repository edit');
+  const r = syncCopy(f.plugin, f.ids, f.holder);
+  assert.deepEqual(
+    r.conflicts.map((c) => c.rel),
+    ['skills/a/assets/example.txt'],
+  );
+  const rel = 'skills/a/assets/example.txt';
+  assert.throws(() => conflictVersions(f.plugin, f.holder, rel), /several names that differ only in case/);
+  assert.throws(
+    () => resolveConflict(f.plugin, f.holder, rel, 'copy', { source: null, copy: null }),
+    /several names that differ only in case/,
+  );
+  assert.equal(S(f, rel), 'repository edit');
+  assert.equal(C(f, 'skills/a/Assets/example.txt'), 'copy edit');
+});
+
+test('a conflict lookup through a copy folder that can not be listed refuses instead of reading the file as missing', (t) => {
+  const f = mixedCopy(t);
+  if (!f) {
+    return t.skip('needs a case-insensitive repository and a case-sensitive copy folder');
+  }
+  const rel = 'skills/a/assets/example.txt';
+  writeFile(f.plugin.dir, rel, 'base');
+  syncCopy(f.plugin, f.ids, f.holder);
+  fs.renameSync(f.cp('skills/a/assets'), f.cp('skills/a/Assets'));
+  fs.renameSync(f.cp('skills/a/Assets/example.txt'), f.cp('skills/a/Assets/Example.txt'));
+  fs.writeFileSync(f.cp('skills/a/Assets/Example.txt'), 'copy edit');
+  fs.writeFileSync(f.src(rel), 'repository edit');
+  assert.deepEqual(
+    syncCopy(f.plugin, f.ids, f.holder).conflicts.map((c) => c.rel),
+    [rel],
+  );
+  unreadable(t, f.cp('skills/a/Assets'));
+  assert.throws(() => conflictVersions(f.plugin, f.holder, rel), /can't be read \(EACCES\)/);
+  assert.throws(() => resolveConflict(f.plugin, f.holder, rel, 'copy', { source: null, copy: null }), /can't be read/);
+  t.mock.restoreAll();
+  assert.equal(S(f, rel), 'repository edit');
+  assert.equal(C(f, 'skills/a/Assets/Example.txt'), 'copy edit');
+});
+
+test('an excluded skill never matches a selected one that differs only in case', (t) => {
+  const sensitive = caseSensitiveDir(t);
+  const plain = tmpDir();
+  t.after(() => rmDir(plain));
+  writeFile(plain, 'marker.txt', 'x');
+  if (!sensitive || !fs.existsSync(path.join(plain, 'MARKER.TXT'))) {
+    return t.skip('needs a case-sensitive repository folder and a case-insensitive copy folder');
+  }
+  const repo = path.join(sensitive, 'repo');
+  makePlugin(repo, 'p', { name: 'p', skills: ['UP', 'up'] });
+  const plugin = readCatalog(repo).plugins[0];
+  const holder = path.join(plain, 'holder');
+  const selectedText = fs.readFileSync(path.join(repo, 'p/skills/UP/SKILL.md'), 'utf8');
+  for (let round = 1; round <= 2; round++) {
+    const r = syncCopy(plugin, ['p/skills/UP'], holder);
+    assert.deepEqual(r.actions, []);
+    assert.equal(fs.readFileSync(path.join(r.copyRoot, 'skills/UP/SKILL.md'), 'utf8'), selectedText);
+  }
+  assert.ok(fs.existsSync(path.join(repo, 'p/skills/UP/SKILL.md')));
+  assert.ok(fs.existsSync(path.join(repo, 'p/skills/up/SKILL.md')));
+});
+
+test('the first copy leaves out two names that differ only in case when the copy folder ignores case', (t) => {
+  const sensitive = caseSensitiveDir(t);
+  const plain = tmpDir();
+  t.after(() => rmDir(plain));
+  writeFile(plain, 'marker.txt', 'x');
+  if (!sensitive || !fs.existsSync(path.join(plain, 'MARKER.TXT'))) {
+    return t.skip('needs a case-sensitive repository folder and a case-insensitive copy folder');
+  }
+  const repo = path.join(sensitive, 'repo');
+  makePlugin(repo, 'p', { name: 'p', skills: ['a'] });
+  writeFile(repo, 'p/skills/a/n.txt', 'lower');
+  writeFile(repo, 'p/skills/a/N.txt', 'upper');
+  const plugin = readCatalog(repo).plugins[0];
+  const holder = path.join(plain, 'holder');
+  const dup = 'another file has the same name in another case: left out';
+  for (let round = 1; round <= 2; round++) {
+    const r = syncCopy(plugin, ['p/skills/a'], holder);
+    assert.deepEqual(r.skipped, [
+      { rel: 'skills/a/N.txt', reason: dup },
+      { rel: 'skills/a/n.txt', reason: dup },
+    ]);
+    assert.deepEqual(fs.readdirSync(path.join(r.copyRoot, 'skills', 'a')), ['SKILL.md']);
+    assert.equal(fs.readFileSync(path.join(repo, 'p/skills/a/n.txt'), 'utf8'), 'lower');
+    assert.equal(fs.readFileSync(path.join(repo, 'p/skills/a/N.txt'), 'utf8'), 'upper');
+  }
+});
+
+test('a conflict below an unreadable folder stays in the record', (t) => {
+  const f = setupCopy(t);
+  makeConflict(f);
+  unreadable(t, f.src('skills'));
+  const r = syncCopy(f.plugin, f.ids, f.holder);
+  assert.deepEqual(r.actions, []);
+  assert.deepEqual(f.manifest().conflicts, [SKILL_A]);
+  t.mock.restoreAll();
+  fs.writeFileSync(f.src(SKILL_A), 'new team version');
+  assert.equal(markCopySynced(f.holder), true);
+  const again = syncCopy(f.plugin, f.ids, f.holder);
+  assert.equal(C(f, SKILL_A), 'agent');
+  assert.deepEqual(again.conflicts.map((c) => c.rel), [SKILL_A]);
+});
+
+test('a conflict below an unreadable folder stays in the record when the copy folder changed case', (t) => {
+  const f = setupCopy(t);
+  if (!caseInsensitive(f.root)) {
+    return t.skip('case-sensitive filesystem');
+  }
+  fs.writeFileSync(f.src('rules/x.mdc'), 'team');
+  fs.writeFileSync(f.cp('rules/x.mdc'), 'agent');
+  assert.deepEqual(syncCopy(f.plugin, f.ids, f.holder).conflicts.map((c) => c.rel), ['rules/x.mdc']);
+  renameCase(f.cp('rules'), f.cp('Rules'));
+  unreadable(t, f.src('rules'));
+  syncCopy(f.plugin, f.ids, f.holder);
+  assert.deepEqual(f.manifest().conflicts, ['rules/x.mdc']);
+  t.mock.restoreAll();
+  fs.writeFileSync(f.src('rules/x.mdc'), 'new team version');
+  assert.equal(markCopySynced(f.holder), true);
+  const again = syncCopy(f.plugin, f.ids, f.holder);
+  assert.equal(C(f, 'rules/x.mdc'), 'agent');
+  assert.deepEqual(again.conflicts.map((c) => c.rel.toLowerCase()), ['rules/x.mdc']);
+});
+
+// A conflict on rules/x.mdc whose record spells it rules/X.mdc.
+function respelledConflict(t) {
+  const f = setupCopy(t);
+  fs.writeFileSync(f.src('rules/x.mdc'), 'team');
+  fs.writeFileSync(f.cp('rules/x.mdc'), 'agent');
+  assert.deepEqual(syncCopy(f.plugin, f.ids, f.holder).conflicts.map((c) => c.rel), ['rules/x.mdc']);
+  const file = path.join(f.holder, '.team-plugins-sync.json');
+  const record = JSON.parse(fs.readFileSync(file, 'utf8'));
+  record.files['rules/X.mdc'] = record.files['rules/x.mdc'];
+  delete record.files['rules/x.mdc'];
+  record.conflicts = ['rules/X.mdc'];
+  fs.writeFileSync(file, JSON.stringify(record));
+  return f;
+}
+
+for (const [keep, action, text] of [
+  ['source', 'toCopy', 'team'],
+  ['copy', 'toSource', 'agent'],
+]) {
+  test(`resolveConflict keeps the ${keep} when the record spells the file in another case`, (t) => {
+    const f = respelledConflict(t);
+    if (!caseInsensitive(f.root)) {
+      return t.skip('case-sensitive filesystem');
+    }
+    const shown = conflictVersions(f.plugin, f.holder, 'rules/x.mdc');
+    assert.deepEqual(resolveConflict(f.plugin, f.holder, 'rules/x.mdc', keep, shown), { action, rel: 'rules/x.mdc' });
+    assert.equal(S(f, 'rules/x.mdc'), text);
+    assert.equal(C(f, 'rules/x.mdc'), text);
+    assert.equal(recordKeys(f).filter((k) => k.toLowerCase() === 'rules/x.mdc').length, 1);
+    assert.deepEqual(f.manifest().conflicts, []);
+  });
+}
+
+test('an excluded prefix is compared without case where case does not count', (t) => {
+  const f = setupCopy(t);
+  if (!caseInsensitive(f.root)) {
+    return t.skip('case-sensitive filesystem');
+  }
+  const original = S(f, 'skills/b/SKILL.md');
+  writeFile(f.copyRoot, 'skills/B/SKILL.md', 'AGENT');
+  for (let round = 1; round <= 2; round++) {
+    const r = syncCopy(f.plugin, f.ids, f.holder);
+    assert.deepEqual(r.actions, []);
+    assert.deepEqual(r.conflicts, []);
+    assert.equal(S(f, 'skills/b/SKILL.md'), original);
+    assert.ok(r.skipped.some((s) => s.rel === 'skills/B/SKILL.md' && s.reason === NOT_SELECTED));
+    assert.deepEqual(names(f.src('skills')), ['a', 'b']);
+  }
 });

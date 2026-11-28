@@ -4,7 +4,9 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
+const { spawnSync } = require('child_process');
 const { makeGit } = require('../lib/git');
+const { caseInsensitive } = require('../lib/materialize');
 const sync = require('../lib/sync');
 const { defaultBranchName, commitAndPush, pushToBranch } = require('../lib/contribute');
 const { tmpDir, rmDir, writeFile, git, gitAvailable, commitAll } = require('./helpers');
@@ -313,6 +315,111 @@ test('pushToBranch leaves the clone as it is when a new file would be overwritte
   assert.equal(r.kind, 'pushedBranch');
   assert.deepEqual(r.resetSkipped.files, ['g.md']);
   assert.equal(fs.readFileSync(path.join(f.clone, 'g.md'), 'utf8'), 'mine\n');
+});
+
+test('pushToBranch leaves the clone as it is when an ignored file would be overwritten', async (t) => {
+  if (!gitAvailable()) {
+    return t.skip('git is not available');
+  }
+  const f = await setup(t);
+  fs.rmSync(path.join(f.clone, 'g.md'));
+  writeFile(f.clone, '.gitignore', 'g.md\n');
+  const run = writeAfterPush(f, () => writeFile(f.clone, 'g.md', 'mine\n'));
+  const r = await pushToBranch({ ...f.args, run, message: 'mine', branch: 'team-plugins/t6' });
+  assert.equal(r.kind, 'pushedBranch');
+  assert.deepEqual(r.resetSkipped.files, ['g.md']);
+  assert.ok(r.resetSkipped.message.includes('ignored files would be overwritten'), r.resetSkipped.message);
+  assert.equal(fs.readFileSync(path.join(f.clone, 'g.md'), 'utf8'), 'mine\n');
+  assert.equal(git(['rev-parse', 'HEAD'], f.clone), r.head);
+});
+
+test('pushToBranch leaves the clone as it is when an ignored folder holds the path of a file it would restore', async (t) => {
+  if (!gitAvailable()) {
+    return t.skip('git is not available');
+  }
+  const f = await setup(t);
+  fs.rmSync(path.join(f.clone, 'g.md'));
+  writeFile(f.clone, '.gitignore', 'g.md\n');
+  const run = writeAfterPush(f, () => writeFile(f.clone, 'g.md/notes.txt', 'notes\n'));
+  const r = await pushToBranch({ ...f.args, run, message: 'mine', branch: 'team-plugins/t8' });
+  assert.equal(r.kind, 'pushedBranch');
+  assert.deepEqual(r.resetSkipped.files, ['g.md']);
+  assert.equal(fs.readFileSync(path.join(f.clone, 'g.md', 'notes.txt'), 'utf8'), 'notes\n');
+  assert.equal(git(['rev-parse', 'HEAD'], f.clone), r.head);
+});
+
+test('pushToBranch leaves the clone as it is when an ignored file holds a folder of a path it would restore', async (t) => {
+  if (!gitAvailable()) {
+    return t.skip('git is not available');
+  }
+  const f = await setup(t);
+  f.teamPush('cache/item.txt', 'team\n', 'team cache');
+  assert.equal((await sync.syncManaged(f.sargs)).kind, 'updated');
+  fs.rmSync(path.join(f.clone, 'cache'), { recursive: true });
+  writeFile(f.clone, '.gitignore', 'cache\n');
+  const run = writeAfterPush(f, () => writeFile(f.clone, 'cache', 'mine\n'));
+  const r = await pushToBranch({ ...f.args, run, message: 'mine', branch: 'team-plugins/t9' });
+  assert.equal(r.kind, 'pushedBranch');
+  assert.deepEqual(r.resetSkipped.files, ['cache/item.txt']);
+  assert.equal(fs.readFileSync(path.join(f.clone, 'cache'), 'utf8'), 'mine\n');
+  assert.equal(git(['rev-parse', 'HEAD'], f.clone), r.head);
+});
+
+test('pushToBranch compares the ignored files without case where git does', async (t) => {
+  if (!gitAvailable()) {
+    return t.skip('git is not available');
+  }
+  const f = await setup(t);
+  const ignoreCase = spawnSync('git', ['config', '--bool', 'core.ignorecase'], { cwd: f.clone, encoding: 'utf8' });
+  if (ignoreCase.stdout.trim() !== 'true') {
+    return t.skip('the clone compares paths with case (core.ignorecase is not set)');
+  }
+  fs.rmSync(path.join(f.clone, 'g.md'));
+  writeFile(f.clone, '.gitignore', 'g.md\n');
+  const run = writeAfterPush(f, () => writeFile(f.clone, 'G.md', 'mine\n'));
+  const r = await pushToBranch({ ...f.args, run, message: 'mine', branch: 'team-plugins/t10' });
+  assert.equal(r.kind, 'pushedBranch');
+  assert.deepEqual(r.resetSkipped.files, ['g.md']);
+  assert.equal(fs.readFileSync(path.join(f.clone, 'G.md'), 'utf8'), 'mine\n');
+  assert.equal(git(['rev-parse', 'HEAD'], f.clone), r.head);
+});
+
+test('pushToBranch compares the ignored files without case where the folder does, whatever core.ignorecase says', async (t) => {
+  if (!gitAvailable()) {
+    return t.skip('git is not available');
+  }
+  const f = await setup(t);
+  if (!caseInsensitive(f.clone)) {
+    return t.skip('the clone folder looks names up with case');
+  }
+  git(['config', 'core.ignorecase', 'false'], f.clone);
+  fs.rmSync(path.join(f.clone, 'g.md'));
+  writeFile(f.clone, '.gitignore', '*.md\n');
+  const run = writeAfterPush(f, () => writeFile(f.clone, 'G.md', 'mine\n'));
+  const r = await pushToBranch({ ...f.args, run, message: 'mine', branch: 'team-plugins/t11' });
+  assert.equal(r.kind, 'pushedBranch');
+  assert.deepEqual(r.resetSkipped.files, ['g.md']);
+  assert.equal(fs.readFileSync(path.join(f.clone, 'G.md'), 'utf8'), 'mine\n');
+  assert.equal(git(['rev-parse', 'HEAD'], f.clone), r.head);
+});
+
+test('pushToBranch leaves the clone as it is when a change was staged during the push', async (t) => {
+  if (!gitAvailable()) {
+    return t.skip('git is not available');
+  }
+  const f = await setup(t);
+  writeFile(f.clone, 'f.md', withLine(1, 'mine'));
+  const run = writeAfterPush(f, () => {
+    writeFile(f.clone, 'g.md', 'staged\n');
+    git(['add', 'g.md'], f.clone);
+    writeFile(f.clone, 'g.md', 'g\n');
+  });
+  const r = await pushToBranch({ ...f.args, run, message: 'mine', branch: 'team-plugins/t7' });
+  assert.equal(r.kind, 'pushedBranch');
+  assert.deepEqual(r.resetSkipped.files, ['g.md']);
+  assert.ok(r.resetSkipped.message.includes('staged'), r.resetSkipped.message);
+  assert.equal(git(['show', ':g.md'], f.clone), 'staged');
+  assert.equal(git(['rev-parse', 'HEAD'], f.clone), r.head);
 });
 
 test('pushToBranch refuses bad or taken branch names and has nothing to push on a clean clone', async (t) => {

@@ -19,7 +19,7 @@ only the current version, with no history). Internals, platform notes, detailed 
   `originUrl`, `migratedSettings`, `missingRepos`, `unlocatedRepos`, `projectRepoEntry`,
   `withProjectRepo`, `withoutProjectRepo`), `selection` (selection model, on the merged catalog), `treeModel` (`buildTree`,
   `buildChangesNode`, `buildConflictsNode`, `repoStatus`, `buildRepoNode`, `buildMissingNodes`, `itemDecoration`), `materialize`
-  (`holderName`, `copyRootOf`, `syncCopy`, `markCopySynced`, `resolveConflict`, `conflictVersions`, `hashCache`: partial plugin copies kept
+  (`holderName`, `copyRootOf`, `syncCopy`, `markCopySynced`, `resolveConflict`, `conflictVersions`, `hashCache`, `caseInsensitive`: partial plugin copies kept
   in sync both ways), `git`, `sync` (managed clone: `syncManaged`, `localChanges`, `checkConflicts`, `gitVersionOf`, `parseStatusZ`,
   `discardLocalChanges`, `changedPaths`, `withLock`, `withLockSync`, `removeStaleIndexLock`, `removeLeftovers`, `recentlySynced`,
   `revFileArgs`, `checkRemote`), `updates` (`parseLsTree`, `parseLog`, `parseIdent`, `itemPath`, `pluginPath`, `updateItems`, `serverEntry`,
@@ -29,8 +29,8 @@ only the current version, with no history). Internals, platform notes, detailed 
   `pullRequestPage`: the hosting service's new pull request page of a pushed branch), `cursorApi`,
   `registrar`, `remoteErrors` (`classify`, `remoteHost`, `describeRemote`, `remoteResult`: classified git failures with
   a message and the actions to offer), `authoring` (scaffolds and drafts: `nameError`, `serverNameError`, `yamlScalar`,
-  `itemFile`, `createItem`, `splitCommandLine`, `mcpEntry`, `addMcpServer`, `pluginLocation`, `pluginDirError`,
-  `createPlugin`, `movePlugin`, `renameIds`, `declaredPathsError`, `clashError`), `jsonc` (`tokens`, `addMember`,
+  `itemFile`, `createItem`, `splitCommandLine`, `mcpEntry`, `addMcpServer`, `topLevelNameError`, `pluginLocation`,
+  `destinationError`, `pluginDirError`, `createPlugin`, `movePlugin`, `renameIds`, `declaredPathsError`, `clashError`), `jsonc` (`tokens`, `addMember`,
   `renameKey`: edits of JSONC files that keep comments and layout), `share` (`shareKind`, `shareableItem`, `projectItems`,
   `suggestName`, `shareNameError`, `shareItem`, `renameSkillName`: copying a project item into a plugin), `rename`
   (`renamePlugin`, `renameItem`, `recordRename`: renaming a plugin or an item and recording it in `marketplace.json`),
@@ -142,6 +142,11 @@ On a Linux machine with a Cursor server (a Remote-SSH host), the suite runs with
   repository (the key hashes the URL), so only a branch change switches a clone.
 - `localChanges` throws when `git status` fails (a failure must never read as "no changes"): the view shows a
   `changes.error` node and the commands report it.
+- Windows git (`core.ignorecase`) ignores a case-only rename and NTFS resolves any spelling: `syncCopy` compares paths by
+  `toLowerCase` when a side is case-insensitive and carries a spelling with a rename through an intermediate name (a
+  direct `a` -> `A` rename is unreliable on Windows). Case sensitivity is per folder on Windows (`fsutil file
+  setCaseSensitiveInfo`): `caseInsensitive` probes a name inside the folder (swapping the folder's own name tests its
+  parent), and the record's `foldCase` keeps Discard and conflict resolution comparing as the sync did.
 - Windows refuses to delete or rename the parent of a registered plugin folder (EPERM, in every window that
   registered it); the registered folder itself can be deleted, but while a window has it registered it is only "delete
   pending" (still listed by `readdir`, `lstat` fails with EPERM, gone at that window's reload): unregister it first

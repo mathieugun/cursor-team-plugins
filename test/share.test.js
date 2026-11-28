@@ -265,3 +265,17 @@ test('shareItem refuses a bad name and writes nothing', (t) => {
   assert.deepEqual(shareItem(shareKind(skill), dir, 'Bad'), { error: NAME_RULE });
   assert.equal(fs.existsSync(path.join(dir, 'skills')), false);
 });
+
+test('shareItem refuses a folder that is a link to outside the repository', (t) => {
+  const root = fixture(t);
+  const repo = path.join(root, 'repo');
+  makePlugin(repo, 'p');
+  const dir = path.join(repo, 'p');
+  fs.mkdirSync(path.join(root, 'outside'));
+  fs.symlinkSync(path.join(root, 'outside'), path.join(dir, 'rules'), 'junction');
+  const src = writeFile(root, 'project/.cursor/rules/a.mdc', 'x');
+  assert.deepEqual(shareItem(shareKind(src), dir, 'a', repo), {
+    error: 'p/rules/a.mdc leads outside the repository through a link',
+  });
+  assert.deepEqual(fs.readdirSync(path.join(root, 'outside')), []);
+});
