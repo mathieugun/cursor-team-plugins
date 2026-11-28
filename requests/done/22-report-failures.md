@@ -1,6 +1,6 @@
 # 22. Failures are reported, never mistaken for success or cancellation
 
-Three findings of the 2026-11-27 review ([review](../review.md)) catch an error and then return the value that means
+Three findings of the 2026-11-27 review ([review](01-review.md)) catch an error and then return the value that means
 "nothing to do" or "fine". The project already has this rule for `git status` (a failure must never read as "no
 changes", see `AGENTS.md`); these places don't follow it yet. (The directory walker has the same flaw and is fixed with
 the data-loss cases in request 19.)

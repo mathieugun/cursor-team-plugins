@@ -1,6 +1,6 @@
 # 21. Diagnostics never leak credentials or trust a remote archive
 
-Two findings of the 2026-11-27 review ([review](review.md)) are about the tools that help diagnose problems: the Team
+Two findings of the 2026-11-27 review ([review](01-review.md)) are about the tools that help diagnose problems: the Team
 Plugins log and the `live_check.py` helper.
 
 ## 1. Credentials in the Team Plugins log (P1)

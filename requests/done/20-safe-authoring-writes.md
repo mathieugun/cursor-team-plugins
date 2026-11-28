@@ -1,7 +1,7 @@
 # 20. Authoring and Rename write only inside the repository, and keep files valid
 
 The authoring commands (New plugin, New item, Add MCP server, Move draft, Rename) build paths and file contents from
-repository data and user input. The 2026-11-27 review ([review](review.md)) found that they trust both too much: they
+repository data and user input. The 2026-11-27 review ([review](01-review.md)) found that they trust both too much: they
 can write outside the checkout, move the checkout itself, reject or skip valid files, and generate a file that fails
 their own check.
 

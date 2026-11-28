@@ -1,6 +1,6 @@
 # 19. Sync and push never discard work they did not check
 
-Three P1 findings of the 2026-11-27 review ([review](review.md), data loss 1, 2 and 4) share one cause: a destructive
+Three P1 findings of the 2026-11-27 review ([review](01-review.md), data loss 1, 2 and 4) share one cause: a destructive
 step (delete, overwrite, `reset --hard`, `clean`) acts on what the extension *believed* about the files, not on what is
 there when it acts. The user sees success and the work is gone.
 

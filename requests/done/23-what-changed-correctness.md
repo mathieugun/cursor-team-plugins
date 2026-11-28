@@ -1,6 +1,6 @@
 # 23. What changed: committed evidence only, and seen marks that survive two windows
 
-Two findings of the 2026-11-27 review ([review](../review.md)) affect the update summary (request 15).
+Two findings of the 2026-11-27 review ([review](01-review.md)) affect the update summary (request 15).
 
 ## 1. An uncommitted deletion shows as "removed" (P2)
 
