@@ -29,7 +29,8 @@ module.exports = {
     git(['init', '-q', '-b', 'main'], seed);
     const initial = commitAll(seed, 'Plugin with default hooks and scripts');
     writeFile(seed, `example/${CUSTOM}`, HOOK_CONFIG);
-    writeFile(seed, 'example/.cursor-plugin/plugin.json', JSON.stringify({ name: 'example', hooks: CUSTOM }));
+    writeFile(seed, 'example/.cursor-plugin/plugin.json', JSON.stringify({ name: 'example', displayName: 'Example', author: {} }));
+    writeFile(seed, 'example/.claude-plugin/plugin.json', JSON.stringify({ name: 'example', hooks: CUSTOM }));
     writeFile(seed, 'example/scripts/tool.py', '# updated plugin script\n');
     const next = commitAll(seed, 'Move hook configuration');
     git(['clone', '-q', '--bare', seed, bare], ctx.repos);
@@ -71,7 +72,7 @@ module.exports = {
     assert.ok(fs.existsSync(path.join(partial, 'scripts/tool.py')));
     assert.ok(vscode.workspace.getConfiguration('teamPlugins').get('excluded').includes(`${PLUGIN}/hooks`));
 
-    t.step('sync a teammate’s change to the hook path');
+    t.step('sync hooks in the fallback manifest after Cursor rejects the higher-priority manifest');
     const update = await t.git(['update-ref', 'refs/heads/main', t.data.next], t.data.bare);
     assert.equal(update.code, 0, update.stderr);
     await vscode.commands.executeCommand('teamPlugins.syncNow');
