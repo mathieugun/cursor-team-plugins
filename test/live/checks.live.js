@@ -1,7 +1,7 @@
 'use strict';
 
 // A skill whose frontmatter Cursor can't parse shows as a problem in the view and as a diagnostic (on the clone file and
-// on its partial copy); Commit and push stops with the list until the user pushes anyway.
+// on its partial copy). Either push command asks before continuing if the check fails. A failed queued write is reported.
 
 const fs = require('fs');
 const path = require('path');
@@ -104,6 +104,101 @@ module.exports = {
       return n && n.icon === 'sparkle';
     }, 'the code-review row to show its skill icon again');
     await t.waitFor(() => Object.keys(hook.diagnostics()).length === 0, 'no diagnostic left', 30000);
+
+    t.step('a failed pre-push check can cancel either push command');
+    const failure = 'Could not collect changed paths in the live check';
+    const warning = `The check before pushing failed: ${failure}`;
+    const remoteRefs = async () => {
+      const refs = await t.git(['--git-dir', t.data.bare, 'show-ref']);
+      assert.equal(refs.code, 0, refs.stderr);
+      return refs.stdout;
+    };
+    // Repository selection still uses real git status.
+    hook.replaceChangedPaths(async () => {
+      throw new Error(failure);
+    });
+    try {
+      const refsBefore = await remoteRefs();
+      for (const command of ['teamPlugins.commitAndPush', 'teamPlugins.pushToBranch']) {
+        hook.clearCalls();
+        await vscode.commands.executeCommand(command, { repo: key });
+        const modal = t.messages('showWarningMessage').find((c) => c.message === warning);
+        assert.ok(modal, JSON.stringify(t.messages()));
+        assert.equal(modal.modal, true);
+        assert.deepEqual(modal.buttons, ['Push anyway']);
+        assert.equal(t.messages('showInputBox').length, 0, 'no branch or commit message was asked');
+        assert.equal(await remoteRefs(), refsBefore);
+      }
+
+      t.step('push to a branch anyway after the check fails');
+      hook.clearCalls();
+      hook.respond((c) => {
+        if (c.kind === 'showWarningMessage' && c.message === warning) {
+          return 'Push anyway';
+        }
+        if (c.kind === 'showInputBox' && /^Branch to push/.test(c.prompt)) {
+          return 'live-check';
+        }
+        if (c.kind === 'showInputBox' && /^Commit message for your changes to/.test(c.prompt)) {
+          return 'Live check branch commit';
+        }
+        return undefined;
+      });
+      await vscode.commands.executeCommand('teamPlugins.pushToBranch', { repo: key });
+      const branchLog = await t.git(['--git-dir', t.data.bare, 'log', '-1', '--format=%s', 'refs/heads/live-check']);
+      assert.equal(branchLog.stdout, 'Live check branch commit', branchLog.stderr);
+
+      t.step('commit and push anyway after the check fails');
+      fs.writeFileSync(skill, `${FIXED}\nEdited by the live test.\n`);
+      hook.clearCalls();
+      hook.respond((c) => {
+        if (c.kind === 'showWarningMessage' && c.message === warning) {
+          return 'Push anyway';
+        }
+        return c.kind === 'showInputBox' && /^Commit message for your changes to/.test(c.prompt)
+          ? 'Live check override commit'
+          : undefined;
+      });
+      await vscode.commands.executeCommand('teamPlugins.commitAndPush', { repo: key });
+      const mainLog = await t.git(['--git-dir', t.data.bare, 'log', '-1', '--format=%s', 'main']);
+      assert.equal(mainLog.stdout, 'Live check override commit', mainLog.stderr);
+    } finally {
+      hook.replaceChangedPaths(null);
+    }
+
+    t.step('New plugin reports a queued write failure, then works on retry');
+    const drafts = path.join(hook.storage, '.cursor', 'plugins', 'drafts');
+    const newPlugin = () => vscode.commands.executeCommand('teamPlugins.newPlugin');
+    hook.respond((c) => {
+      if (c.kind === 'showQuickPick' && c.placeHolder === 'Where to create the plugin') {
+        return 'drafts';
+      }
+      if (c.kind === 'showInputBox' && c.prompt === 'Plugin name') {
+        return 'live-check-draft';
+      }
+      return c.kind === 'showInputBox' && c.prompt === 'Plugin description (optional)' ? '' : undefined;
+    });
+    hook.clearCalls();
+    fs.writeFileSync(drafts, 'Blocks creation of the drafts directory', { flag: 'wx' });
+    try {
+      await newPlugin();
+      const errors = t.messages('showErrorMessage');
+      assert.equal(errors.length, 1, JSON.stringify(t.messages()));
+      assert.match(errors[0].message, /^Team plugins: EEXIST: .*mkdir /);
+    } finally {
+      fs.unlinkSync(drafts);
+    }
+    hook.clearCalls();
+    await newPlugin();
+    assert.equal(t.messages('showErrorMessage').length, 0, JSON.stringify(t.messages()));
+    assert.ok(fs.existsSync(path.join(drafts, 'live-check-draft', '.cursor-plugin', 'plugin.json')));
+
+    t.step('cancelling New plugin after choosing drafts stays silent');
+    hook.clearCalls();
+    hook.respond((c) => (c.kind === 'showQuickPick' ? 'drafts' : undefined));
+    await newPlugin();
+    assert.ok(t.messages('showInputBox').some((c) => c.prompt === 'Plugin name' && c.answer === null));
+    assert.equal(t.messages('showErrorMessage').length, 0, JSON.stringify(t.messages()));
     t.noSpinner();
   },
 };

@@ -123,6 +123,9 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
   adds or removes an item (a committed file is never rewritten by itself).
 - For each selected plugin the extension calls `vscode.cursor.plugins.addPlugin({ path })` in every window, at startup
   and whenever the selection or a repository changes. Cursor does not persist these registrations.
+- If Cursor rejects a removal, `Registrar` keeps the registration, reports the error and retries on the next apply.
+  A replacement for that name waits for the removal to succeed. The old partial-copy holder stays protected from
+  cleanup while the registration is tracked. Direct removal before Move or Rename rejects with Cursor's reason.
 - Cursor keys registrations by path but names a plugin after its folder (measured on Cursor 3.31.15: two plugins in
   folders of the same name, `a/same` and `b/same`, both load and both are named `same` for the agent). So no two
   registered plugins may have the same folder name: when a plugin's folder name is taken (compared without case) by an
@@ -136,6 +139,9 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
 - Syncs run in parallel, one per repository; an apply (catalog, partial copies, registrations) follows each one as soon
   as it ends, and applies never overlap. While a repository is syncing, applies keep using the catalog read before its
   sync (its folder is changing under git), and its local changes are not read.
+- `enqueue` returns the operation's promise to its caller. A separate promise logs a rejection and lets the queue
+  continue, including work from timers and watchers. Registered commands show the reason as an error through `ui`.
+  Move and Rename apply again if a write throws after unregistering a plugin.
 - The copy and the clone are kept in sync both ways, with a `.team-plugins-sync.json` record next to the copy (the
   content hash of each file at the last sync): a change on one side only, new files and deletions included, is carried
   to the other side; a file changed on both sides is a conflict that waits for the user's choice. A sync reads a file
@@ -398,7 +404,8 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
 - `pushProblems` (before **Commit and push** and **Push to a branch**, `confirmChecks` in `extension.js`) keeps the
   repository-level problems, those of the plugins that contain a path the push carries (`sync.changedPaths`: the status
   files, and the files of the unpushed commits) and, for a changed file outside any item, a conflict marker check. The
-  modal offers **Push anyway** and **Open files**.
+  modal offers **Push anyway** and **Open files**. If the check throws, a modal gives the reason and requires
+  **Push anyway** before the push flow continues.
 - `doApply` ends with `updateDiagnostics`: every problem with a file goes to one `DiagnosticCollection` ("Team plugins"),
   mirrored on the same file of a partial copy (the path an agent edits). The collection is replaced only when its content
   changed.

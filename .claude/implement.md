@@ -138,6 +138,8 @@ under the temp folder, nothing installed) may be run without asking.
   2026-11-25).
 - Each extension has its own `vscode` object: a test runner in the extension host can't patch the extension's
   `vscode.window` (probe, Cursor 3.31, 2026-11-25); hence the `ui` seam in `extension.js`.
+- Replacing `lib/sync.js`'s `changedPaths` export in a live scenario did not affect `confirmChecks`: the extension still
+  reached the commit prompt (Cursor 3.32.10, 2026-11-28, request 22). Inject that failure through the Test mode hook.
 - Settings written with `getConfiguration(...).update` from a runner persist in the isolated profile's
   `User/settings.json` for the next launch: write the file fresh before every launch (probe, Cursor 3.31, 2026-11-25).
 - The isolated instance creates `~/.cursor/projects/<slug of the workspace path>/` in the real user home: keep one fixed

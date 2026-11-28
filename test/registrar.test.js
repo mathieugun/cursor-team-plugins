@@ -104,3 +104,48 @@ test('Registrar remove unregisters one plugin; the next apply registers it again
   await reg.apply(new Map([['a', '/p/a'], ['b', '/p/b']]));
   assert.deepEqual(calls, ['add /p/a']);
 });
+
+test('Registrar retries a rejected removal before adding its replacement', async () => {
+  const calls = [];
+  const api = fakeApi(calls);
+  const remove = api.remove;
+  let reject = true;
+  api.remove = async (p) => {
+    await remove(p);
+    if (reject) {
+      throw new Error('unregister refused');
+    }
+  };
+  const reg = new Registrar(api);
+  await reg.apply(new Map([['a', '/p/a']]));
+  calls.length = 0;
+  const next = new Map([['a', '/p/a2'], ['b', '/p/b']]);
+  assert.deepEqual(await reg.apply(next), {
+    added: ['/p/b'],
+    removed: [],
+    errors: [{ path: '/p/a', message: 'unregister refused' }],
+  });
+  assert.equal(reg.current.get('a'), '/p/a');
+  assert.deepEqual(calls, ['remove /p/a', 'add /p/b']);
+
+  reject = false;
+  calls.length = 0;
+  assert.deepEqual(await reg.apply(next), { added: ['/p/a2'], removed: ['/p/a'], errors: [] });
+  assert.deepEqual(calls, ['remove /p/a', 'add /p/a2']);
+  assert.equal(reg.current.get('a'), '/p/a2');
+});
+
+test('Registrar direct removal reports failure and stays registered for retry', async () => {
+  const api = fakeApi([]);
+  const remove = api.remove;
+  api.remove = async () => {
+    throw new Error('unregister refused');
+  };
+  const reg = new Registrar(api);
+  await reg.apply(new Map([['a', '/p/a']]));
+  await assert.rejects(reg.remove('a'), /unregister refused/);
+  assert.equal(reg.current.get('a'), '/p/a');
+
+  api.remove = remove;
+  assert.deepEqual(await reg.apply(new Map()), { added: [], removed: ['/p/a'], errors: [] });
+});

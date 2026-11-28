@@ -64,7 +64,6 @@ const SECTION = 'teamPlugins';
 const VIEW_COMMAND = 'workbench.view.extension.teamPlugins';
 const WALKTHROUGH_ID = 'gettingStarted';
 const BUSY_TEXT = 'Another Cursor window is syncing the team plugins: try again in a moment.';
-const UNEXPECTED = { kind: 'error', message: 'unexpected error: see the log' };
 const COPY_RETRY_MS = 2000;
 const COPY_RETRY_MAX = 30;
 const LOCKED_CODES = ['EBUSY', 'EPERM', 'EACCES'];
@@ -91,6 +90,7 @@ let testMode = false; // the extension runs under --extensionTestsPath (scripts/
 const testLog = []; // Test mode: the lines of the log, without their timestamp
 const testCalls = []; // Test mode: the dialogs shown, as recorded by the test `ui`
 let testResponder = () => undefined;
+let testChangedPaths = null;
 
 let output;
 let statusItem;
@@ -342,16 +342,9 @@ async function migrateSettings() {
 // ---- serialised refresh / apply ----------------------------------------------------------------------------------
 
 function enqueue(fn) {
-  const run = async () => {
-    try {
-      return await fn();
-    } catch (err) {
-      log(`error: ${err && err.stack ? err.stack : err}`);
-      return undefined;
-    }
-  };
-  queue = queue.then(run, run);
-  return queue;
+  const operation = queue.then(() => fn());
+  queue = operation.catch((err) => log(`error: ${err && err.stack ? err.stack : err}`));
+  return operation;
 }
 
 function apply() {
@@ -747,7 +740,8 @@ async function doApply() {
   if (registrar) {
     const result = await registrar.apply(desired);
     lastApplyErrors = result.errors.length;
-    const holders = filteredHolders(filteredRoot, [...desired.values()]);
+    const keep = new Set([...desired.values(), ...registrar.current.values()]);
+    const holders = filteredHolders(filteredRoot, [...keep]);
     touchFiltered(holders);
     gcFiltered(filteredRoot, holders, FILTERED_MAX_AGE_MS);
   }
@@ -2284,6 +2278,20 @@ function withRepoLock(d, fn) {
   return locked.value;
 }
 
+// Call inside enqueue: unregister before a synchronous write to a folder Cursor watches. Apply again if it throws.
+async function withPluginUnregistered(name, fn) {
+  if (!registrar || !registrar.current.has(name)) {
+    return fn();
+  }
+  await registrar.remove(name);
+  try {
+    return fn();
+  } catch (err) {
+    await doApply().catch((applyErr) => log(`cannot restore registrations: ${applyErr.message}`));
+    throw err;
+  }
+}
+
 // Adds a plugin or item that was just written (and is in the catalog after an apply) to the user's selection, unless
 // the selection already includes it.
 async function enableNew(id) {
@@ -2581,26 +2589,23 @@ async function moveDraftCommand(node) {
   }
   await flushPartials();
   const draftsDesc = descs.find((d) => d.key === plugin.repoKey);
-  const result = await enqueue(async () => {
-    // a registered folder that is deleted stays "delete pending" on Windows while Cursor watches it: unregister first
-    // (the apply that follows registers again whatever is still wanted, the draft too if the move fails)
-    if (registrar) {
-      await registrar.remove(plugin.name);
-    }
-    return withRepoLock(target, () => {
-      const locked = sync.withLockSync(draftsDesc.lockFile, () =>
-        authoring.movePlugin(plugin.dir, plugin.pluginName, plugin.description, target.dir),
-      );
-      if (locked.kind === 'busy') {
-        ui.showWarningMessage(BUSY_TEXT);
-        return null;
-      }
-      if (!locked.value.error) {
-        partialCopies.delete(plugin.name); // its copy must not carry its files back into the deleted draft
-      }
-      return locked.value;
-    });
-  });
+  const result = await enqueue(() =>
+    withPluginUnregistered(plugin.name, () =>
+      withRepoLock(target, () => {
+        const locked = sync.withLockSync(draftsDesc.lockFile, () =>
+          authoring.movePlugin(plugin.dir, plugin.pluginName, plugin.description, target.dir),
+        );
+        if (locked.kind === 'busy') {
+          ui.showWarningMessage(BUSY_TEXT);
+          return null;
+        }
+        if (!locked.value.error) {
+          partialCopies.delete(plugin.name); // its copy must not carry its files back into the deleted draft
+        }
+        return locked.value;
+      }),
+    ),
+  );
   if (!result || result.error) {
     if (result) {
       ui.showErrorMessage(`Team plugins: ${result.error}`);
@@ -2686,25 +2691,22 @@ async function renameCommand(node) {
   const newName = typed.trim();
   const record = repo.kind !== 'drafts';
   await flushPartials();
-  const result = await enqueue(async () => {
-    // a registered folder that is renamed or deleted gets in the way of Windows and Cursor's watcher: unregister first
-    // (the apply that follows registers again whatever is still wanted)
-    if (!child && registrar) {
-      await registrar.remove(plugin.name);
-    }
-    return withRepoLock(repo, () => {
-      const done = child
-        ? rename.renameItem(
-            { pluginDir: plugin.dir, pluginName: plugin.pluginName, kind: child.kind, name: child.name, file: child.file },
-            newName,
-            { repoDir: repo.dir, record },
-          )
-        : rename.renamePlugin({ dir: plugin.dir, pluginName: plugin.pluginName }, newName, { repoDir: repo.dir, record });
-      if (!child && !done.error) {
-        partialCopies.delete(plugin.name); // its copy must not carry its files back into the old folder
-      }
-      return done;
-    });
+  const result = await enqueue(() => {
+    const renameLocked = () =>
+      withRepoLock(repo, () => {
+        const done = child
+          ? rename.renameItem(
+              { pluginDir: plugin.dir, pluginName: plugin.pluginName, kind: child.kind, name: child.name, file: child.file },
+              newName,
+              { repoDir: repo.dir, record },
+            )
+          : rename.renamePlugin({ dir: plugin.dir, pluginName: plugin.pluginName }, newName, { repoDir: repo.dir, record });
+        if (!child && !done.error) {
+          partialCopies.delete(plugin.name); // its copy must not carry its files back into the old folder
+        }
+        return done;
+      });
+    return child ? renameLocked() : withPluginUnregistered(plugin.name, renameLocked);
   });
   if (!result || result.error) {
     if (result) {
@@ -2990,7 +2992,17 @@ async function checkGitCommand() {
 }
 
 function registerCommands(context) {
-  const reg = (id, fn) => context.subscriptions.push(vscode.commands.registerCommand(id, fn));
+  const reg = (id, fn) =>
+    context.subscriptions.push(
+      vscode.commands.registerCommand(id, async (...args) => {
+        try {
+          return await fn(...args);
+        } catch (err) {
+          ui.showErrorMessage(`Team plugins: ${err?.message || String(err)}`);
+          return undefined;
+        }
+      }),
+    );
 
   reg('teamPlugins.syncNow', () => refresh({ sync: true, userInitiated: true }));
   reg('teamPlugins.openRepo', async (arg) => {
@@ -3087,19 +3099,18 @@ function registerCommands(context) {
     if (choice !== 'Discard') {
       return;
     }
-    let result;
-    await enqueue(async () => {
-      result = await sync.discardLocalChanges({
+    const result = await enqueue(async () => {
+      const discarded = await sync.discardLocalChanges({
         run: makeGit(gitPath()),
         managedRepo: d.dir,
         lockFile: d.lockFile,
         log,
       });
-      if (result.ok) {
+      if (discarded.ok) {
         resetPartialCopies(d.key);
       }
+      return discarded;
     });
-    result = result || { ok: false, message: UNEXPECTED.message };
     log(`discard local changes of ${labelOf(d)}: ${result.message}`);
     if (result.busy) {
       ui.showWarningMessage(BUSY_TEXT);
@@ -3395,11 +3406,17 @@ function readSmallText(file) {
 async function confirmChecks(d) {
   let problems;
   try {
-    const changed = await sync.changedPaths({ run: makeGit(gitPath()), repo: d.dir });
+    const collectChangedPaths = testChangedPaths || sync.changedPaths;
+    const changed = await collectChangedPaths({ run: makeGit(gitPath()), repo: d.dir });
     problems = checks.pushProblems({ catalog: readCatalog(d.dir), repoDir: d.dir, changed, readFile: readSmallText });
   } catch (err) {
     log(`check before pushing ${labelOf(d)}: ${err.message}`);
-    return true;
+    const choice = await ui.showWarningMessage(
+      `The check before pushing failed: ${err.message}`,
+      { modal: true },
+      'Push anyway',
+    );
+    return choice === 'Push anyway';
   }
   if (problems.length === 0) {
     return true;
@@ -3473,22 +3490,21 @@ async function commitAndPushCommand(arg) {
       return;
     }
   }
-  const result =
-    (await enqueue(() =>
-      vscode.window.withProgress(
-        { location: vscode.ProgressLocation.Notification, title: 'Team plugins: committing and pushing…' },
-        () =>
-          contribute.commitAndPush({
-            run: makeGit(gitPath()),
-            repo: d.dir,
-            message,
-            lockFile: d.lockFile,
-            stateFile: d.stateFile,
-            repoUrl: d.url,
-            log,
-          }),
-      ),
-    )) || UNEXPECTED;
+  const result = await enqueue(() =>
+    vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: 'Team plugins: committing and pushing…' },
+      () =>
+        contribute.commitAndPush({
+          run: makeGit(gitPath()),
+          repo: d.dir,
+          message,
+          lockFile: d.lockFile,
+          stateFile: d.stateFile,
+          repoUrl: d.url,
+          log,
+        }),
+    ),
+  );
   reportContribution(result, 'Nothing to commit or push.', d);
   await refresh({ sync: false });
 }
@@ -3522,23 +3538,22 @@ async function pushToBranchCommand(arg) {
     }
     message = typed.trim();
   }
-  const result =
-    (await enqueue(() =>
-      vscode.window.withProgress(
-        { location: vscode.ProgressLocation.Notification, title: 'Team plugins: pushing to a branch…' },
-        () =>
-          contribute.pushToBranch({
-            run,
-            repo: d.dir,
-            message,
-            branch: branch.trim(),
-            lockFile: d.lockFile,
-            stateFile: d.stateFile,
-            repoUrl: d.url,
-            log,
-          }),
-      ),
-    )) || UNEXPECTED;
+  const result = await enqueue(() =>
+    vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: 'Team plugins: pushing to a branch…' },
+      () =>
+        contribute.pushToBranch({
+          run,
+          repo: d.dir,
+          message,
+          branch: branch.trim(),
+          lockFile: d.lockFile,
+          stateFile: d.stateFile,
+          repoUrl: d.url,
+          log,
+        }),
+    ),
+  );
   reportContribution(result, 'Nothing to push.', d, { openPullRequest: wantsPage });
   await refresh({ sync: true, keys: new Set([d.key]) });
 }
@@ -3749,6 +3764,9 @@ function testHook(context) {
     },
     respond: (fn) => {
       testResponder = fn || (() => undefined);
+    },
+    replaceChangedPaths: (fn) => {
+      testChangedPaths = fn;
     },
     idle: (opts) => testIdle(opts),
     tree: () => testTree(),

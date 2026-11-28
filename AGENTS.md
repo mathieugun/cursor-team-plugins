@@ -168,6 +168,12 @@ line endings, as CI checks it out, and uses the newest server's node, else `node
   (sync, commit and push, push to a branch, discard; the lock's mtime is refreshed every minute, so a 30-minute clone
   is never taken for a stale lock) and `withLockSync` (partial-copy syncs, conflict resolution; in every mode, local mode included: windows with the
   same selection share a copy). Within a window they also go through the operation queue (`enqueue`).
+- `enqueue` returns the operation's promise. The queue logs and recovers from failures on a separate promise, and
+  registered commands show the reason through `ui`. Move and Rename apply again if a write throws after unregistering
+  a plugin.
+- `Registrar` keeps a registration when Cursor rejects its removal, retries on the next apply and defers a replacement
+  for the same name until removal succeeds. A tracked partial copy stays protected from cleanup. Direct removal
+  before Move or Rename rejects with Cursor's reason.
 - `acquireLock` never deletes a lock that vanished between `open` and `stat` (it may be another window's fresh one): it
   tries again; only a lock older than 10 minutes is removed.
 - The README is the extension's details page, which opens only `http`, `https` and `mailto` links (`command` only for
