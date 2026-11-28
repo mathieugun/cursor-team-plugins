@@ -75,6 +75,14 @@ extension's commands. Add the authoring prompts afterward.
 
 ## Smaller follow-ups
 
+- **Show hooks and scripts in the tree.** List the hooks Cursor would load under each plugin, with their event names
+  and a way to open the configuration. Give the hook group one checkbox so a teammate can use a plugin's skills and
+  rules with its hooks disabled. Keep that choice across syncs and apply it to both full and partial selections.
+  Show bundled scripts under their skill or plugin as click-to-open rows without checkboxes. Scripts are files a
+  skill or hook can call, so they follow the selection of the skill or plugin that ships them.
+- **Author hooks and scripts from the tree.** On a plugin's right-click menu, offer **Add new hook** to choose an
+  event and add a command to the plugin's hook configuration. Offer **Add new script** on both plugin and skill
+  menus. Create the script in the selected plugin or skill and open it for editing.
 - **MCP server readiness.** Show on an MCP server item what it needs and is missing: an environment variable it
   references (a token), its command not on PATH (`npx`, `uvx`, `docker`). Today such a server fails silently in Cursor.
 - Search and filter in the view.
