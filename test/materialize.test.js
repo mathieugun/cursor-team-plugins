@@ -203,7 +203,7 @@ test('resolveConflict keeps the repository version', (t) => {
   const f = setupCopy(t);
   makeConflict(f);
   const shown = conflictVersions(f.plugin, f.holder, SKILL_A);
-  assert.deepEqual(resolveConflict(f.plugin, f.ids, f.holder, SKILL_A, 'source', shown), {
+  assert.deepEqual(resolveConflict(f.plugin, f.holder, SKILL_A, 'source', shown), {
     action: 'toCopy',
     rel: SKILL_A,
   });
@@ -218,7 +218,7 @@ test('resolveConflict keeps the copy version', (t) => {
   const f = setupCopy(t);
   makeConflict(f);
   const shown = conflictVersions(f.plugin, f.holder, SKILL_A);
-  assert.deepEqual(resolveConflict(f.plugin, f.ids, f.holder, SKILL_A, 'copy', shown), {
+  assert.deepEqual(resolveConflict(f.plugin, f.holder, SKILL_A, 'copy', shown), {
     action: 'toSource',
     rel: SKILL_A,
   });
@@ -235,13 +235,13 @@ test('resolveConflict with the kept side deleted deletes the other', (t) => {
   fs.writeFileSync(f.src('hooks/z.md'), 'team');
   syncCopy(f.plugin, f.ids, f.holder);
   const shown = conflictVersions(f.plugin, f.holder, 'hooks/z.md');
-  assert.deepEqual(resolveConflict(f.plugin, f.ids, f.holder, 'hooks/z.md', 'copy', shown), {
+  assert.deepEqual(resolveConflict(f.plugin, f.holder, 'hooks/z.md', 'copy', shown), {
     action: 'deletedInSource',
     rel: 'hooks/z.md',
   });
   assert.ok(!fs.existsSync(f.src('hooks/z.md')));
-  assert.throws(() => resolveConflict(f.plugin, f.ids, f.holder, '../x', 'copy', shown));
-  assert.throws(() => resolveConflict(f.plugin, f.ids, f.holder, SKILL_A, 'both', shown));
+  assert.throws(() => resolveConflict(f.plugin, f.holder, '../x', 'copy', shown));
+  assert.throws(() => resolveConflict(f.plugin, f.holder, SKILL_A, 'both', shown));
 });
 
 const sha1 = (x) => crypto.createHash('sha1').update(x).digest('hex');
@@ -260,13 +260,13 @@ test('a stale conflict choice changes nothing', (t) => {
   makeConflict(f);
   const shown = conflictVersions(f.plugin, f.holder, SKILL_A);
   // window A takes the repository version
-  assert.deepEqual(resolveConflict(f.plugin, f.ids, f.holder, SKILL_A, 'source', shown), {
+  assert.deepEqual(resolveConflict(f.plugin, f.holder, SKILL_A, 'source', shown), {
     action: 'toCopy',
     rel: SKILL_A,
   });
   fs.writeFileSync(f.src(SKILL_A), 'newer');
   // window B still shows the old dialog and takes the copy version
-  assert.deepEqual(resolveConflict(f.plugin, f.ids, f.holder, SKILL_A, 'copy', shown), {
+  assert.deepEqual(resolveConflict(f.plugin, f.holder, SKILL_A, 'copy', shown), {
     changed: true,
     rel: SKILL_A,
   });
@@ -279,7 +279,7 @@ test('a side edited after the choice was offered changes nothing', (t) => {
   makeConflict(f);
   const shown = conflictVersions(f.plugin, f.holder, SKILL_A);
   fs.writeFileSync(f.cp(SKILL_A), 'agent2');
-  assert.deepEqual(resolveConflict(f.plugin, f.ids, f.holder, SKILL_A, 'source', shown), {
+  assert.deepEqual(resolveConflict(f.plugin, f.holder, SKILL_A, 'source', shown), {
     changed: true,
     rel: SKILL_A,
   });
@@ -291,7 +291,7 @@ test('a side edited after the choice was offered changes nothing', (t) => {
 test('resolveConflict without the versions shown throws', (t) => {
   const f = setupCopy(t);
   makeConflict(f);
-  assert.throws(() => resolveConflict(f.plugin, f.ids, f.holder, SKILL_A, 'source'));
+  assert.throws(() => resolveConflict(f.plugin, f.holder, SKILL_A, 'source'));
 });
 
 test('a copy edit made after a push to a branch is not lost', (t) => {

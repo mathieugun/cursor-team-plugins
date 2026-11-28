@@ -2233,7 +2233,7 @@ async function removeRepositoryCommand(arg) {
         last = i;
       }
     });
-    next = list.filter((item, i) => i !== last);
+    next = list.filter((_item, i) => i !== last);
   } else {
     next = list.filter((item) => !matches(item));
   }
@@ -3218,7 +3218,7 @@ async function resolveConflictCommand(node, keep) {
         return;
       }
       const locked = sync.withLockSync(lockFile, () =>
-        resolveConflict(entry.plugin, entry.ids, entry.holder, node.rel, keep, shown),
+        resolveConflict(entry.plugin, entry.holder, node.rel, keep, shown),
       );
       if (locked.kind === 'busy') {
         ui.showWarningMessage(BUSY_TEXT);
@@ -3613,7 +3613,7 @@ function makeTestUi() {
           detail: options && options.detail,
           buttons: titles,
         },
-        answer: (answer) => (typeof answer === 'string' ? raw.find((b, i) => titles[i] === answer) || answer : answer),
+        answer: (answer) => (typeof answer === 'string' ? raw.find((_b, i) => titles[i] === answer) || answer : answer),
         printable: (value) => (value && typeof value === 'object' ? value.title : value),
       };
     });
@@ -3655,7 +3655,7 @@ function makeTestUi() {
 async function testIdle({ timeoutMs = 30000 } = {}) {
   let quietSince = null;
   let limit;
-  const expired = new Promise((resolve, reject) => {
+  const expired = new Promise((_resolve, reject) => {
     limit = setTimeout(() => reject(new Error(`extension not idle after ${Math.round(timeoutMs / 1000)} s`)), timeoutMs);
   });
   try {

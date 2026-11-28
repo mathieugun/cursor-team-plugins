@@ -24,9 +24,10 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
   On another supported architecture, choose the matching asset. Rename it to `biome.exe` on Windows or `biome` on
   Linux. On Linux, run `chmod +x biome` in the directory containing the binary. Put that directory on `PATH` and
   check the version with `biome --version`. [Biome 2.6.9 release](https://github.com/biomejs/biome/releases/tag/%40biomejs%2Fbiome%402.6.9)
-- Run `biome lint extension.js lib scripts test` from the repository root. This read-only check uses Biome's
-  recommended correctness rules, with undeclared variables and unused bindings treated as errors. Warnings,
-  including unused function parameters, are advisory.
+- Run `biome lint --error-on-warnings extension.js lib scripts test` from the repository root. This read-only check
+  uses Biome's recommended correctness rules, with undeclared variables and unused bindings treated as errors.
+  Warnings, such as unused function parameters, fail the check too: remove the parameter, or prefix it with `_` when
+  its position is needed.
 - `.github/workflows/checks.yml` runs the same lint command on Ubuntu on every branch push and release tag. CI
   verifies the Linux binary's SHA-256 before running it. Lint still runs after a test failure unless the job is
   cancelled.
