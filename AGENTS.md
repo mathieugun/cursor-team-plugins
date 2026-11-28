@@ -1,6 +1,6 @@
 # cursor-team-plugins: developer notes
 
-Cursor (VS Code) extension, version in `package.json` (0.9.0). Plain JavaScript, CommonJS, no npm dependency, no
+Cursor (VS Code) extension, version in `package.json` (0.9.2). Plain JavaScript, CommonJS, no npm dependency, no
 build step. User documentation: `README.md` (for Cursor users: what it does, install, usage; it shows
 only the current version, with no history). Internals, platform notes, detailed limits and the release process:
 `docs/development.md`.
@@ -17,7 +17,8 @@ only the current version, with no history). Internals, platform notes, detailed 
   diagnostics and before a push), `repos` (the list of repositories: `normalizeUrl`, `listRepos`
   (takes the `drafts` folder), `assignNames`, `mergeCatalogs`, `normalizeIds`, `followRenames`, `rememberNames`,
   `originUrl`, `migratedSettings`, `missingRepos`, `unlocatedRepos`, `projectRepoEntry`,
-  `withProjectRepo`, `withoutProjectRepo`), `selection` (selection model, on the merged catalog), `treeModel` (`buildTree`,
+  `withProjectRepo`, `withoutProjectRepo`), `hooks` (plugin hook configuration discovery, event validation and manifest
+  filtering), `selection` (selection model, on the merged catalog), `treeModel` (`buildTree`,
   `buildChangesNode`, `buildConflictsNode`, `repoStatus`, `buildRepoNode`, `buildMissingNodes`, `itemDecoration`), `materialize`
   (`holderName`, `copyRootOf`, `syncCopy`, `markCopySynced`, `resolveConflict`, `conflictVersions`, `hashCache`, `caseInsensitive`: partial plugin copies kept
   in sync both ways), `git`, `sync` (managed clone: `syncManaged`, `localChanges`, `checkConflicts`, `gitVersionOf`, `parseStatusZ`,
@@ -118,8 +119,8 @@ line endings, as CI checks it out, and uses the newest server's node, else `node
 - `vscode.cursor.plugins` has only `addPlugin` and `removePlugin`, both taking `{ path }` (a plain string makes
   `removePlugin` throw); `registerPath` of Cursor's docs does not exist. One call registers one plugin root, named
   after its **folder** (not `plugin.json`'s `name`): filtered copies keep the plugin's folder name
-  (`filtered/<name>-<hash>/<folder>`; the hash is of the plugin name and the selection only, so the path survives
-  file changes and an agent editing the copy keeps writing to a registered folder).
+  (`filtered/<name>-<hash>/<folder>`; the hash uses the plugin name, selection and whether hooks are suppressed.
+  Ordinary file changes keep the path stable so an agent editing the copy keeps writing to a registered folder).
 - Cursor watches registered plugin folders: a `git pull` or an edit inside one needs no re-registration.
 - Registrations are per window and not persisted: register at every activation, which also makes the per-project
   selection per window.
@@ -191,6 +192,10 @@ line endings, as CI checks it out, and uses the newest server's node, else `node
   (two writes in one clock tick share their timestamps); the module's own writes and deletions drop their entry.
 - A path of the copy under a skill or rule left out of the selection never reaches the clone: deleted from the copy when
   unchanged since the last sync, otherwise left there and reported.
+- A plugin's Hooks group is one item (`<repository>:<plugin>/hooks`). The catalog reads the hook configuration
+  Cursor would load, lists its events and opens the original file. Script rows under a plugin's or skill's `scripts/`
+  have no checkbox. Copies with hooks left out use a separate holder, omit the default hook file and generate
+  `hooks: {}` in manifests that declare hooks. The holder stays filtered while a saved exclusion has no catalog item.
 - Two plugins registered with the same folder name both load, and both are named after that folder (Cursor 3.31.15,
   probe with two extension plugins `a/same` and `b/same`): so `mergeCatalogs` gives a plugin whose folder name is taken
   the folder `<folder>-<repository>` (`plugin.folder`), and `desiredRegistrations` always registers it from a copy

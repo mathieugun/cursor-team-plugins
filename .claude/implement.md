@@ -210,6 +210,12 @@ under the temp folder, nothing installed) may be run without asking.
   webpack's `require` is captured (the entry module itself throws "Cannot convert object to primitive value"; ignore
   it). Request 16, Cursor 3.32.4, 2026-11-26.
 
+- Extension plugin hooks (request 28, Cursor 3.32.10, 2026-11-28, direct call to bundled module 72467's `Y_`
+  with Node 24): the loader uses `hooks/hooks.json` by default, accepts a manifest's relative JSON path or a directory
+  containing `hooks.json`, and accepts an inline config. A manifest's `hooks: {}` suppresses default discovery.
+  Native configs use strict JSON, a positive integer `version` and supported event names. An unknown native event
+  rejects the entire config. The loader can also convert nested Claude Code hook groups to Cursor event names.
+
 - How Cursor applies a plugin rule or skill (read in `cursor-agent-host/dist/4846.js`, Cursor 3.32.4, 2026-11-27;
   YAML values run through Cursor's gray-matter): `To` picks `alwaysApply` (boolean `true` only: `"true"`, `yes` are
   strings) > non-empty `globs` (string split on commas outside `{}`, or a list) > non-empty string `description` >

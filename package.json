@@ -1,7 +1,7 @@
 {
   "name": "cursor-team-plugins",
   "displayName": "Team plugins",
-  "description": "Keeps a team's Cursor plugins (rules, skills, commands, agents and MCP servers) in sync with the team's git repositories and registers the ones each user and project selected.",
+  "description": "Keeps a team's Cursor plugins (rules, skills, commands, agents, MCP servers and hooks) in sync with the team's git repositories and registers the ones each user and project selected.",
   "version": "0.9.2",
   "publisher": "mathieugun",
   "author": "Mathieu Gunther",
@@ -86,7 +86,7 @@
           },
           "default": [],
           "scope": "application",
-          "description": "Plugins (`<repository>:<plugin>`) and single items (`<repository>:<plugin>/skills/<folder>`, `/rules/<file>`, `/commands/<file>`, `/agents/<file>`, `/mcp/<server>`) enabled in every project. Edited by the Team Plugins view."
+          "description": "Plugins (`<repository>:<plugin>`) and single items (`<repository>:<plugin>/skills/<folder>`, `/rules/<file>`, `/commands/<file>`, `/agents/<file>`, `/mcp/<server>`, `/hooks`) enabled in every project. Edited by the Team Plugins view."
         },
         "teamPlugins.excluded": {
           "type": "array",
@@ -95,7 +95,7 @@
           },
           "default": [],
           "scope": "application",
-          "description": "Items (skills, rules, commands, agents, MCP servers) left out of plugins enabled in `teamPlugins.enabled`. Edited by the view."
+          "description": "Items (skills, rules, commands, agents, MCP servers, hook groups) left out of plugins enabled in `teamPlugins.enabled`. Edited by the view."
         },
         "teamPlugins.projectPlugins": {
           "type": "array",
@@ -398,7 +398,7 @@
       "view/item/context": [
         {
           "command": "teamPlugins.addToProject",
-          "when": "view == teamPlugins.plugins && viewItem =~ /^(plugin|child)$/"
+          "when": "view == teamPlugins.plugins && viewItem =~ /^(plugin|child|hooks)$/"
         },
         {
           "command": "teamPlugins.removeFromProject",

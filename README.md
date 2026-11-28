@@ -1,6 +1,6 @@
 # Team plugins
 
-**Share your team's Cursor rules, skills, commands, agents and MCP servers from git repositories, always up to date,
+**Share your team's Cursor rules, skills, commands, agents, MCP servers and hooks from git repositories, always up to date,
 in every project.**
 
 Your team has good rules and skills for Cursor's agent: a code-review checklist, the house style, how to write a
@@ -14,8 +14,8 @@ Team plugins keeps them in git repositories, one per team, and brings them into 
   follow several.
 - **Always current.** The repositories are pulled in the background (every hour by default). A skill fixed by a
   teammate reaches you without you doing anything; start a new chat to use it.
-- **Only what you need.** Tick whole plugins or single skills, rules, commands, agents and MCP servers in the **Team
-  Plugins** view, so the agent's context holds only what is useful to you.
+- **Only what you need.** Tick whole plugins or pick individual skills, rules, commands, agents, MCP servers and hook
+  groups in the **Team Plugins** view.
 - **Per-project requirements.** A project can require plugins for everyone who opens it, through its committed
   `.vscode/settings.json`.
 - **Improve skills where you use them.** Ask the agent to fix a team skill in the middle of your work; the change shows
@@ -70,7 +70,7 @@ these steps; Cursor also opens it after the install.
 3. **Add the repository.** Open the **Team Plugins** view in the activity bar and click **Add repository** (the `+` of
    the view's title bar, or add the URL to `teamPlugins.repositories`). The URL is checked at once, then the repository
    is cloned in the background. You can add several repositories (see "Several repositories").
-4. **Pick your plugins.** Tick the plugins or single items (skills, rules, commands, agents, MCP servers) you want.
+4. **Pick your plugins.** Tick the plugins or individual items you want, including hook groups.
    They are available to the agent right away, in new chats.
 
 The walkthrough ticks a step when you do it (check git, create or add a repository, tick a plugin); if you were set up
@@ -109,7 +109,12 @@ team-plugins/
 Skills (`skills/<folder>/SKILL.md`), rules (`rules/*.mdc` or `rules/*.md`), commands (`commands/*.md`, `.mdc`,
 `.markdown` or `.txt`), agents (`agents/*.md`, `.mdc` or `.markdown`) and MCP servers (each server of `mcp.json` or
 `.mcp.json`) can be picked one by one; the `description` of their frontmatter is shown in the view (for an MCP server,
-its command or URL). Hooks and anything else in a plugin always come with its plugin.
+its command or URL).
+
+The **Hooks** group lists the events from `hooks/hooks.json` or the hook configuration declared in the plugin
+manifest. Click the group or an event to open that file. Untick **Hooks** to keep the selected skills and rules
+while disabling every hook from the plugin. Files under a plugin's or skill's `scripts/` folder appear as
+click-to-open rows. Plugin scripts stay available with any selection of the plugin, and skill scripts follow their skill.
 
 An MCP server you leave out is removed from the plugin's copy of `mcp.json`. Edit `mcp.json` in the team repository,
 not in that copy: an edit in the copy is kept but never shared, and is reported in the log.
@@ -216,8 +221,8 @@ Your choice is stored in your user settings and applies to every project:
 
 An item is `<repository>:<plugin>`, `<repository>:<plugin>/skills/<skill folder>`,
 `<repository>:<plugin>/rules/<file name>`, `<repository>:<plugin>/commands/<file name>`,
-`<repository>:<plugin>/agents/<file name>` or `<repository>:<plugin>/mcp/<server name>`: the repository is its
-name (see "The team repository") and the plugin is the `name` from its `plugin.json`.
+`<repository>:<plugin>/agents/<file name>`, `<repository>:<plugin>/mcp/<server name>` or `<repository>:<plugin>/hooks`.
+The repository is its name (see "The team repository") and the plugin is the `name` from its `plugin.json`.
 
 ### Context cost
 
@@ -418,7 +423,7 @@ terminal where git and SSH can ask their questions; then click **Sync now**.
 | `teamPlugins.localRepositories` | `[]` | Your own clones of plugin repositories; each replaces the followed repository of the same name. |
 | `teamPlugins.updateIntervalMinutes` | `60` | Minutes between update checks; `0`: only at startup and with Sync now. |
 | `teamPlugins.enabled` | `[]` | Plugins and single items (`<repository>:<plugin>...`) enabled in every project (edited by the view). |
-| `teamPlugins.excluded` | `[]` | Items (skills, rules, commands, agents, MCP servers) left out of plugins listed in `enabled` (edited by the view). |
+| `teamPlugins.excluded` | `[]` | Items (skills, rules, commands, agents, MCP servers and hook groups) left out of plugins listed in `enabled` (edited by the view). |
 | `teamPlugins.projectPlugins` | `[]` | Plugins or single items a project requires (workspace or folder settings). |
 | `teamPlugins.projectRepositories` | `[]` | Where a project's repositories are, so a teammate can add them (written by Add to this project). |
 
@@ -462,9 +467,8 @@ terminal where git and SSH can ask their questions; then click **Sync now**.
 ## Known limitations
 
 - Keys with a passphrase are not supported for SSH; use a key without one for the team server.
-- Hooks, and commands or agents in subfolders, always come with their plugin; so do the commands, agents or MCP
-  servers of a plugin whose `plugin.json` sets their paths. Plugins from GitHub or URL sources in `marketplace.json` are
-  skipped.
+- Commands or agents in subfolders always come with their plugin, as do commands, agents or MCP servers of a plugin
+  whose `plugin.json` sets their paths. Plugins from GitHub or URL sources in `marketplace.json` are skipped.
 - Conflicts are never merged by the extension: you choose to push your changes to a branch, or discard them.
 - Commit and push includes every local change; there is no per-file choice.
 - Renaming a repository (the `name` of its `marketplace.json`) keeps the choices of the people who already follow it;
