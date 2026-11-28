@@ -31,6 +31,7 @@ const {
   gcFiltered,
 } = require('./lib/materialize');
 const { makeGit } = require('./lib/git');
+const { redactUrls, redactingUi } = require('./lib/remoteErrors');
 const { checkGit, gitCheckMessage, DOWNLOAD_URL } = require('./lib/gitCheck');
 const sync = require('./lib/sync');
 const updates = require('./lib/updates');
@@ -84,7 +85,8 @@ const realUi = {
   // encodeURI(uri.toString(true)), which breaks an encoded &, + or # of a branch name.
   openExternal: (url) => vscode.env.openExternal(url),
 };
-let ui = realUi;
+// redactingUi: a notification never shows the credentials of a URL
+let ui = redactingUi(realUi);
 let testMode = false; // the extension runs under --extensionTestsPath (scripts/live-test.js)
 const testLog = []; // Test mode: the lines of the log, without their timestamp
 const testCalls = []; // Test mode: the dialogs shown, as recorded by the test `ui`
@@ -132,11 +134,12 @@ const conflictsNotified = new Set(); // `${holder}|${rel}` of the partial-copy c
 const loggedWarnings = new Set();
 
 function log(message) {
+  const text = redactUrls(message);
   if (output) {
-    output.appendLine(`[${new Date().toISOString()}] ${message}`);
+    output.appendLine(`[${new Date().toISOString()}] ${text}`);
   }
   if (testMode) {
-    testLog.push(message);
+    testLog.push(text);
     if (testLog.length > 5000) {
       testLog.shift();
     }
@@ -3803,7 +3806,7 @@ function testHook(context) {
 function activate(context) {
   testMode = context.extensionMode === vscode.ExtensionMode.Test;
   if (testMode) {
-    ui = makeTestUi();
+    ui = redactingUi(makeTestUi());
   }
   storage = context.globalStorageUri.fsPath;
   fs.mkdirSync(storage, { recursive: true });

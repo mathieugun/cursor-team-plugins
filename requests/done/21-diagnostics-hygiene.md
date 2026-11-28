@@ -29,3 +29,11 @@ accepted.
   produce no `secret` in anything logged or returned as a message.
 - A small Python check builds an archive with a `../<dest>-other/x` member and one with a device or FIFO member: both are
   refused before anything is extracted.
+
+## Decisions (2026-11-28)
+
+- `redactUrls` keeps the user name of an `ssh://` (or `git+ssh://`, `ssh+git://`) URL and removes only its password;
+  every other scheme loses its whole userinfo. The project settings writer uses the same helper.
+- Applied in the git logger, the lib's returned messages (and the state files), and as a last net in the extension's
+  log and notifications. The view and the settings keep the URL as typed.
+- The archive check is tested by a stdlib `scripts/live_check_test.py`, run by CI on Ubuntu.

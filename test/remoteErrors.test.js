@@ -2,7 +2,15 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { classify, remoteHost, describeRemote, remoteResult } = require('../lib/remoteErrors');
+const {
+  classify,
+  remoteHost,
+  describeRemote,
+  remoteResult,
+  withoutCredentials,
+  redactUrls,
+  redactingUi,
+} = require('../lib/remoteErrors');
 
 const CHANGED_KEY = [
   '@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@',
@@ -87,6 +95,16 @@ test('remoteHost', () => {
     ['/srv/team.git', ''],
     ['file:///C:/r.git', ''],
     ['ssh://[::1]:22/r.git', '[::1]'],
+    // a raw `@` in the password: the user info ends at the last one
+    ['https://user:part@secret@host.test/team.git', 'host.test'],
+    // a no-break space or an angle bracket in the password never ends the user info
+    ['https://sec ret@host.test/team.git', 'host.test'],
+    ['https://user:sec<ret@host.test/team.git', 'host.test'],
+    // no path: the query is not part of the host
+    ['https://host.test?access_token=secret@tag', 'host.test'],
+    // git's transport prefix, extra slashes
+    ['https::https://user:secret@host.test/x', 'host.test'],
+    ['https:///user:secret@host.test/team.git', 'host.test'],
   ];
   for (const [url, host] of cases) {
     assert.equal(remoteHost(url), host, url);
@@ -193,4 +211,112 @@ test('the messages that point at a setting name teamPlugins.repositories', () =>
     'repository https://h/o/r.git not found, or you have no access to it. Check its URL in teamPlugins.repositories.',
   );
   assert.deepEqual(missing.actions, ['repositories', 'showLog']);
+});
+
+test('redactUrls removes the credentials of URLs', () => {
+  const cases = [
+    ['git clone -- https://user:secret@host/o/r.git dir', 'git clone -- https://host/o/r.git dir'],
+    ['HTTP://tok@host/p', 'HTTP://host/p'],
+    ["fatal: unable to access 'https://u:p@h/x/': boom", "fatal: unable to access 'https://h/x/': boom"],
+    ['https://u:p@ss@h/x', 'https://h/x'],
+    ['a https://u:s@h1/x b http://t@h2:8080/y', 'a https://h1/x b http://h2:8080/y'],
+    ['ssh://git:pw@h/x', 'ssh://git@h/x'],
+    ['git+ssh://u:pw@h/x', 'git+ssh://u@h/x'],
+    // curl accepts quotes, angle brackets and a no-break space in a password
+    ["git clone -- https://user:sec'ret@host.test/team.git", 'git clone -- https://host.test/team.git'],
+    ['https://u:a"b<c>@h/x', 'https://h/x'],
+    ['https://user:sec ret@host.test/team.git', 'https://host.test/team.git'],
+    // no path
+    ['https://user:secret@host.test', 'https://host.test'],
+    ["cannot reach 'https://user:secret@host.test': boom", "cannot reach 'https://host.test': boom"],
+    // a URL starts anywhere, after punctuation too
+    ['remote: ...https://user:secret@host.test/team.git', 'remote: ...https://host.test/team.git'],
+    ['remote: see/https://user:secret@host.test/team.git', 'remote: see/https://host.test/team.git'],
+    // free text: more than the user info may go, never less
+    ['docs=https://docs.test,email=alice@example.test', 'docs=https://example.test'],
+    // a password pasted with a space (git refuses the URL, but logs it first)
+    ['git clone -- https://user:sec ret@host.test/team.git dir', 'git clone -- https://host.test/team.git dir'],
+    // extra slashes, git's transport prefix
+    ['https:///user:secret@host.test/team.git', 'https:///host.test/team.git'],
+    ['git clone -- https::https://user:secret@host.test x', 'git clone -- https::https://host.test x'],
+    ['git clone -- https::https:/user:secret@host.test x', 'git clone -- https::https:/host.test x'],
+    ['line one https://host.test\nmail a@b.c', 'line one https://host.test\nmail a@b.c'],
+  ];
+  for (const [text, expected] of cases) {
+    assert.equal(redactUrls(text), expected);
+  }
+  for (const same of [
+    'ssh://git@h/x',
+    'git@host:org/p.git',
+    'C:\\repos\\x.git',
+    'file:///srv/x.git',
+    'https://host/x',
+    'mail me at a@b.c',
+    // a drive letter is no scheme
+    'C://team@work/plugins.git',
+  ]) {
+    assert.equal(redactUrls(same), same);
+  }
+  assert.equal(redactUrls(undefined), '');
+  assert.equal(redactUrls(null), '');
+});
+
+test('withoutCredentials removes the user info of one URL and touches nothing else', () => {
+  const cases = [
+    ['https://user:secret@host.test/team.git', 'https://host.test/team.git'],
+    ['HTTP://tok@host/p', 'HTTP://host/p'],
+    ['https://user:secret@host.test', 'https://host.test'],
+    ['https://u:p@ss@h/x', 'https://h/x'],
+    ['https://user:sec<ret>@host.test/x', 'https://host.test/x'],
+    ['https://user:sec ret@host.test/x', 'https://host.test/x'],
+    ['ssh://git:pw@h/x', 'ssh://git@h/x'],
+    // git's transport prefix, extra slashes
+    ['https::https://user:secret@host.test', 'https::https://host.test'],
+    ['https:///user:secret@host.test/team.git', 'https:///host.test/team.git'],
+    ['ext::ssh://git:pw@h/x', 'ext::ssh://git@h/x'],
+    ['https::https:/user:secret@host.test/team.git', 'https::https:/host.test/team.git'],
+  ];
+  for (const [url, expected] of cases) {
+    assert.equal(withoutCredentials(url), expected);
+  }
+  for (const same of [
+    'ssh://git@host/org/p.git',
+    'git@host:org/p.git',
+    'C://team@work/plugins.git',
+    'D:\\src\\a',
+    // a URL in the path or the query is not the URL's user info
+    'https://host.test/repo/https://build@mirror.test.git',
+    'https://host.test/team.git?redirect=https://build@mirror.test/path',
+    // a file URL has no credentials: this is the path /alice@work/team.git
+    'file:///alice@work/team.git',
+  ]) {
+    assert.equal(withoutCredentials(same), same);
+  }
+  assert.equal(withoutCredentials(undefined), '');
+});
+
+test('redactingUi redacts the text and the detail of notifications, nothing else', () => {
+  const calls = [];
+  const record = (kind) => (...a) => {
+    calls.push([kind, ...a]);
+    return 'answer';
+  };
+  const base = {
+    showInformationMessage: record('info'),
+    showWarningMessage: record('warning'),
+    showErrorMessage: record('error'),
+    showInputBox: record('input'),
+  };
+  const ui = redactingUi(base);
+  const url = 'https://user:secret@host.test/team.git';
+  assert.equal(ui.showErrorMessage(`cannot reach ${url}`, 'Sync now'), 'answer');
+  ui.showWarningMessage('problems', { modal: true, detail: `x: ${url}` }, 'Push anyway');
+  ui.showInformationMessage(url);
+  ui.showInputBox({ value: url });
+  assert.deepEqual(calls, [
+    ['error', 'cannot reach https://host.test/team.git', 'Sync now'],
+    ['warning', 'problems', { modal: true, detail: 'x: https://host.test/team.git' }, 'Push anyway'],
+    ['info', 'https://host.test/team.git'],
+    ['input', { value: url }],
+  ]);
 });

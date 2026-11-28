@@ -369,7 +369,8 @@ terminal where git and SSH can ask their questions; then click **Sync now**.
 ## Troubleshooting
 
 - **Output > Team Plugins** shows every git command and every plugin registration. **Output > Cursor Plugins** is
-  Cursor's own log (look for `Registered extension plugin: <name>`).
+  Cursor's own log (look for `Registered extension plugin: <name>`). A token or password written in a repository URL
+  is hidden in the log and in the messages, so the log can be pasted in a bug report.
 - The status bar item (`Team plugins: <count>`) shows how many plugins this window registered; its tooltip has one line
   per repository (state, last commit, last check) and lists the registered plugins. A warning icon means a paused
   update, a failed sync, a repository that is not loaded or a failed registration; a plug-off icon means a server

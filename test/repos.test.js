@@ -45,6 +45,10 @@ test('baseName', () => {
   assert.equal(baseName('git@h:plugins.git'), 'plugins');
   assert.equal(baseName('C:\\a\\team\\'), 'team');
   assert.equal(baseName(''), 'repo');
+  // a URL without a path: the name is the host, never the credentials
+  assert.equal(baseName('https://user:secret@host.test'), 'host.test');
+  assert.equal(baseName('https://user:secret@host.test/'), 'host.test');
+  assert.equal(baseName('https::https://user:secret@host.test'), 'host.test');
 });
 
 test('repoName', () => {
@@ -131,6 +135,13 @@ test('listRepos', () => {
   // another origin: no legacy clone
   const other = listRepos({ ...WIN, repositories: REPOSITORIES, localRepositories: [], legacyOrigin: 'https://h/org/zzz' });
   assert.ok(other.every((d) => d.key !== 'repo'));
+  // a URL without a path: the key, the clone's folder and the state file never hold its credentials
+  const [bare] = listRepos({ ...WIN, repositories: [{ url: 'https://user:secret@host.test', branch: '' }], localRepositories: [] });
+  assert.match(bare.key, /^host\.test-[0-9a-f]{8}$/);
+  for (const p of [bare.dir, bare.lockFile, bare.stateFile]) {
+    assert.ok(!p.includes('secret'), p);
+  }
+  assert.equal(bare.url, 'https://user:secret@host.test');
 });
 
 test('listRepos: the drafts folder comes first', () => {
@@ -317,6 +328,8 @@ test('projectRepoEntry', () => {
   const ssh = { kind: 'managed', name: 'n', url: 'ssh://git@host/org/p.git', branch: '' };
   assert.equal(projectRepoEntry(ssh, '').url, 'ssh://git@host/org/p.git');
   assert.equal(projectRepoEntry({ ...ssh, url: 'git@host:org/p.git' }, '').url, 'git@host:org/p.git');
+  // an SSH user name is kept, a password is not
+  assert.equal(projectRepoEntry({ ...ssh, url: 'ssh://git:pw@host/org/p.git' }, '').url, 'ssh://git@host/org/p.git');
 });
 
 test('withProjectRepo', () => {

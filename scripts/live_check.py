@@ -40,7 +40,7 @@ import sys
 import tarfile
 import tempfile
 import time
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 ISO = re.compile(r"\[(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?)Z\]")
 HOST_DIR = re.compile(r"output_logging_(\d{8}T\d{6})")
@@ -240,6 +240,46 @@ _WIN_SSH = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "Ope
 SSH = str(_WIN_SSH / "ssh.exe") if (_WIN_SSH / "ssh.exe").is_file() else "ssh"
 SCP = str(_WIN_SSH / "scp.exe") if (_WIN_SSH / "scp.exe").is_file() else "scp"
 
+# as Python 3.13's ntpath.isreserved: the superscript digits are device names too
+_WINDOWS_DEVICES = {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"} | {
+    f"{p}{n}" for p in ("COM", "LPT") for n in "123456789¹²³"
+}
+
+
+def _bad_member(m, dest, root):
+    """Why tarfile must not extract this member, or None. tarfile creates the parent folders from the name as written, so
+    a `..` part is refused even when the resolved path comes back inside dest; on Windows a device name (`NUL`, `COM1`,
+    with any extension) opens the device, not a file."""
+    if not (m.isreg() or m.isdir()):
+        return "not a regular file or a folder"
+    parts = m.name.replace("\\", "/").split("/")
+    if m.name.startswith(("/", "\\")) or PureWindowsPath(m.name).drive or ".." in parts:
+        return "a path that leaves the destination"
+    if os.name == "nt" and any(p.split(".")[0].rstrip(" ").upper() in _WINDOWS_DEVICES for p in parts):
+        return "a Windows device name"
+    if os.name == "nt" and any(":" in p for p in parts):
+        return "a `:` (an NTFS alternate data stream on Windows)"
+    if not (dest / m.name).resolve().is_relative_to(root):
+        return "a path that leaves the destination"
+    return None
+
+
+def safe_extract(archive, dest):
+    """Extracts a tar archive into dest after checking every member: a relative path without `..` that stays inside dest
+    (by path components, not by string prefix), a regular file or a folder, no Windows device name. Raises ValueError
+    before extracting anything otherwise. A member may not overwrite the archive itself (it may lie inside dest)."""
+    root = dest.resolve()
+    itself = Path(archive).resolve()
+    with tarfile.open(archive) as tar:
+        for m in tar.getmembers():
+            why = _bad_member(m, dest, root)
+            if not why and (dest / m.name).resolve() == itself:
+                why = "the archive itself"
+            if why:
+                raise ValueError(f"unexpected entry in the remote archive ({why}): {m.name}")
+        tar.extractall(dest)
+
+
 def fetch_remote(host, ext_id, dest):
     """Copies the remote Cursor server's newest log session and the installed extension into dest."""
     script = (
@@ -254,12 +294,10 @@ def fetch_remote(host, ext_id, dest):
         sys.exit(f"ssh {host} failed ({r.returncode}): {r.stderr.decode(errors='replace').strip()}")
     archive = dest / "remote.tgz"
     archive.write_bytes(r.stdout)
-    with tarfile.open(archive) as tar:
-        for m in tar.getmembers():
-            target = (dest / m.name).resolve()
-            if not str(target).startswith(str(dest.resolve())) or m.issym() or m.islnk():
-                sys.exit(f"unexpected entry in the remote archive: {m.name}")
-        tar.extractall(dest)
+    try:
+        safe_extract(archive, dest)
+    except ValueError as err:
+        sys.exit(str(err))
     return dest / ".cursor-server" / "data" / "logs", dest / ".cursor-server" / "extensions"
 
 
