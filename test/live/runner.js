@@ -115,7 +115,7 @@ exports.run = async () => {
 
     const limitSec = (scenario.timeoutSec || 90) - 10;
     let limit;
-    const expired = new Promise((resolve, reject) => {
+    const expired = new Promise((_resolve, reject) => {
       limit = setTimeout(() => reject(new Error(`scenario still running after ${limitSec} s`)), limitSec * 1000);
     });
     try {

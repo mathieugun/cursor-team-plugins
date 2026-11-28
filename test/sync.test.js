@@ -715,7 +715,7 @@ test('an interrupted url switch is completed by the next sync', async (t) => {
   assert.equal(git(['rev-parse', 'HEAD'], clone), git(['rev-parse', 'HEAD'], other.work));
 });
 
-test('localChanges reports a failing status', async (t) => {
+test('localChanges reports a failing status', async () => {
   const run = (args) =>
     Promise.resolve(
       args.includes('status') ? { code: 128, stdout: '', stderr: 'fatal: boom' } : { code: 0, stdout: '0', stderr: '' },

@@ -63,7 +63,8 @@ only the current version, with no history). Internals, platform notes, detailed 
 
 ## Commands
 
-Run `biome lint extension.js lib scripts test` with standalone Biome 2.6.9 on `PATH` (see `docs/development.md`).
+Run `biome lint --error-on-warnings extension.js lib scripts test` with standalone Biome 2.6.9 on `PATH` (see
+`docs/development.md`): a warning fails it, as in CI.
 With node on `PATH`, run `node --check extension.js`, `node scripts/test.js` and `node scripts/package.js`.
 Without node, use Cursor's runtime (Git Bash, from the repository root):
 

@@ -33,4 +33,4 @@ jobs:
             --output "$biome" https://github.com/biomejs/biome/releases/download/%40biomejs%2Fbiome%402.6.9/biome-linux-x64
           printf '%s  %s\n' 5409e32eb17b47e0d1d9bbf213b749eba1f9c35d8b18fbd2ee55971157918a57 "$biome" | sha256sum --check
           chmod +x "$biome"
-          "$biome" lint extension.js lib scripts test
+          "$biome" lint --error-on-warnings extension.js lib scripts test
