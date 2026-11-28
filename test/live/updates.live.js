@@ -165,6 +165,14 @@ module.exports = {
     assert.equal(JSON.parse(decodeURIComponent(input.original.query)).path, oldRule);
     const original = await vscode.workspace.openTextDocument(input.original);
     assert.equal(original.getText().replace(/\r\n/g, '\n'), originalText.replace(/\r\n/g, '\n'));
+
+    t.step('sync detects an untracked conflict at a path with a leading space');
+    const conflictFile = ' leading.txt';
+    fs.writeFileSync(path.join(clone, conflictFile), 'local\n');
+    fs.writeFileSync(path.join(work, conflictFile), 'team\n');
+    await publish('Add a file whose name starts with a space');
+    assert.equal(hook.states().find((s) => s.key === key).result.kind, 'conflict');
+    assert.equal(fs.readFileSync(path.join(clone, conflictFile), 'utf8'), 'local\n');
     t.noSpinner();
   },
 };

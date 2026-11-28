@@ -434,6 +434,42 @@ test('an untracked local file that the team also adds is a conflict', async (t) 
   assert.equal(f.read('skills/new/SKILL.md'), 'local\n');
 });
 
+test('an untracked conflict preserves a leading space in the first diff path', async (t) => {
+  if (!gitAvailable()) {
+    return t.skip('git is not available');
+  }
+  const f = await setupFiles(t);
+  const file = ' leading.md';
+  writeFile(f.clone, file, 'local\n');
+  pushCommit(f.work, file, 'team\n', 'team adds it');
+  const r = await sync.syncManaged(f.args);
+  assert.equal(r.kind, 'conflict');
+  assert.deepEqual(r.files, [file]);
+  assert.equal(f.read(file), 'local\n');
+});
+
+test('sync stops before rebasing when the upstream path diff fails', async (t) => {
+  if (!gitAvailable()) {
+    return t.skip('git is not available');
+  }
+  const f = await setupFiles(t);
+  const head = git(['rev-parse', 'HEAD'], f.clone);
+  writeFile(f.clone, 'untracked.md', 'local\n');
+  pushCommit(f.work, 'b.md', 'team\n', 'team updates b');
+  const run = (args, ...rest) => {
+    if (args[0] === 'diff' && args.includes('HEAD...@{u}')) {
+      return { code: 128, stdout: '', stderr: 'cannot read upstream tree' };
+    }
+    return f.args.run(args, ...rest);
+  };
+
+  const r = await sync.syncManaged({ ...f.args, run });
+  assert.equal(r.kind, 'error');
+  assert.match(r.message, /git diff failed: cannot read upstream tree/);
+  assert.equal(git(['rev-parse', 'HEAD'], f.clone), head);
+  assert.equal(f.read('untracked.md'), 'local\n');
+});
+
 test('parseStatusZ', () => {
   assert.deepEqual(sync.parseStatusZ('R  new.md\0old.md\0 M a b.md\0?? d/e.md\0 D gone.md\0A  added.md\0'), [
     { path: 'new.md', status: 'renamed', from: 'old.md' },

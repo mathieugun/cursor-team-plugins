@@ -222,10 +222,11 @@ leaves out. The code-level reasons ("why the code is shaped this way") and the t
   first `remote:` URL of the push output that names the branch (GitHub Enterprise, self-hosted GitLab, Bitbucket Cloud
   and Azure DevOps Services print one); the URL is logged. A refused Commit and push offers **Open a pull request**
   (Push to a branch, then the page opens at once).
-- Updates: the team's new commits are rebased under the local changes. Conflicts are found first with
-  `git merge-tree --write-tree` (hence git 2.38). With several windows open, only one fetches per interval (a timed
-  update leaves out each repository that another window synced less than half an interval ago, by its state file).
-  The update interval has a floor of 5 minutes.
+- The team's new commits are rebased under the local changes. Before rebasing, `git merge-tree --write-tree`
+  (Git 2.38 or later) checks for conflicts with tracked changes. Untracked paths are compared with the untrimmed
+  NUL-delimited list of changed upstream paths. If that query fails, the update stops and reports the Git error.
+  With several windows open, only one fetches per interval (a timed update leaves out each repository that another
+  window synced less than half an interval ago, by its state file). The update interval has a floor of 5 minutes.
 - A branch change of an entry switches its managed clone in place (an error if it has local changes). A URL change is
   another repository: a new clone, and the old one stays in the storage. An entry without a branch follows the
   repository's default branch, resolved at each sync, also when the team changes it.
